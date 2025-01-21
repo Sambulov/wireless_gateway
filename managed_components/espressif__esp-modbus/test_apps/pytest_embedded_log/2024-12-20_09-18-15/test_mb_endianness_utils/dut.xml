@@ -1,2 +1,0 @@
-<testsuite errors="0" failures="0" skipped="0" tests="1"><testcase file="./main/test_mb_endianness_utils.c" line="54" name="Test endianness conversion for all extended Modbus types." time="0.452"><system-out>./main/test_mb_endianness_utils.c:54:Test endianness conversion for all extended Modbus types.:PASS
-Test ran in 17ms</system-out></testcase></testsuite>
