@@ -121,13 +121,13 @@ static esp_err_t echo_handler(httpd_req_t *req)
     return ret;
 }
 
-static const httpd_uri_t http = {
-        .uri        = "/index.html",
-        .method     = HTTP_GET,
-        .handler    = echo_handler,
-        .user_ctx   = NULL,
-        .is_websocket = true
-};
+// static const httpd_uri_t http = {
+//         .uri        = "/index.html",
+//         .method     = HTTP_GET,
+//         .handler    = echo_handler,
+//         .user_ctx   = NULL,
+//         .is_websocket = true
+// };
 
 static const httpd_uri_t ws = {
         .uri        = "/ws", //http://<ip>/ws
