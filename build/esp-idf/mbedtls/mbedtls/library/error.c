@@ -1,1 +1,0 @@
-/home/vvmitrofanov/projects/proj/esp-idf/components/mbedtls/mbedtls/library/error.c
