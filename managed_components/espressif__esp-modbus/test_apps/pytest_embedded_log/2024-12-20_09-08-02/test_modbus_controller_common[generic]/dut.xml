@@ -1,0 +1,99 @@
+<testsuite errors="0" failures="0" skipped="0" tests="4"><testcase group="unit_test_controller" name="test_setup_destroy_master_serial"><system-out>I (312) MODBUS_CONTROLLER_COMMON_TEST: TEST: Verify master create-destroy sequence.
+W (322) mb_object.master.stub: Create fake mb_base object.
+W (2322) mb_object.master.stub: Delete fake mb_base object.
+E (2322) mbc_serial.master: mbc_serial_master_create(702): mb object create returns (0x2).
+E (2322) MB_CONTROLLER_MASTER: mbc_master_set_descriptor(179): Master interface is not correctly initialized.
+E (2332) MB_CONTROLLER_MASTER: mbc_master_delete(21): Master interface is not correctly initialized.
+I (2342) MODBUS_CONTROLLER_COMMON_TEST: Test passed successfully.
+MALLOC_CAP_8BIT usage: Free memory delta: 0 Leak threshold: -128 
+MALLOC_CAP_32BIT usage: Free memory delta: 0 Leak threshold: -128</system-out></testcase><testcase group="unit_test_controller" name="test_setup_destroy_slave_serial"><system-out>I (2362) MODBUS_CONTROLLER_COMMON_TEST: TEST: Verify slave create-destroy sequence.
+W (2372) mb_object.master.stub: Create fake mb_base object.
+W (2392) mb_object.master.stub: Delete fake mb_base object.
+E (2392) mbc_serial.slave: mbc_serial_slave_create(264): mbs create returns (0x6).
+E (2392) MB_CONTROLLER_SLAVE: mbc_slave_delete(91): Slave interface is not correctly initialized.
+I (2402) MODBUS_CONTROLLER_COMMON_TEST: Test passed successfully.
+MALLOC_CAP_8BIT usage: Free memory delta: 0 Leak threshold: -128 
+MALLOC_CAP_32BIT usage: Free memory delta: 0 Leak threshold: -128</system-out></testcase><testcase group="unit_test_controller" name="test_master_send_request_serial"><system-out>W (2422) mb_object.master.stub: Create fake mb_base object.
+W (2422) mb_object.master.stub: Enable fake mb_base object.
+W (2432) mb_object.master.stub: Poll function called of fake mb_base object.
+I (2442) MODBUS_CONTROLLER_COMMON_TEST: Test CID #0, MB_input_reg-0, Data
+W (2442) mb_object.master.stub: Disable fake mb_base object.
+W (4452) mb_object.master.stub: Delete fake mb_base object.
+I (4452) MODBUS_CONTROLLER_COMMON_TEST: Test passed successfully.
+W (4452) mb_object.master.stub: Create fake mb_base object.
+W (4452) mb_object.master.stub: Enable fake mb_base object.
+W (4462) mb_object.master.stub: Poll function called of fake mb_base object.
+I (4462) MODBUS_CONTROLLER_COMMON_TEST: Test CID #0, MB_input_reg-0, Data
+W (4472) mb_object.master.stub: Poll function called of fake mb_base object.
+E (4482) MB_CONTROLLER_MASTER: mbc_master_get_parameter(128): Master get parameter failure, error=(0x107) (ESP_ERR_TIMEOUT).
+W (4492) mb_object.master.stub: Poll function called of fake mb_base object.
+W (4492) mb_object.master.stub: Disable fake mb_base object.
+W (6502) mb_object.master.stub: Delete fake mb_base object.
+I (6502) MODBUS_CONTROLLER_COMMON_TEST: Test passed successfully.
+W (6502) mb_object.master.stub: Create fake mb_base object.
+W (6502) mb_object.master.stub: Enable fake mb_base object.
+W (6512) mb_object.master.stub: Poll function called of fake mb_base object.
+I (6512) MODBUS_CONTROLLER_COMMON_TEST: Test CID #1, MB_hold_reg-0, Data
+W (6522) mb_object.master.stub: Poll function called of fake mb_base object.
+W (6532) mb_object.master.stub: Disable fake mb_base object.
+W (8532) mb_object.master.stub: Delete fake mb_base object.
+I (8532) MODBUS_CONTROLLER_COMMON_TEST: Test passed successfully.
+W (8532) mb_object.master.stub: Create fake mb_base object.
+W (8532) mb_object.master.stub: Enable fake mb_base object.
+W (8542) mb_object.master.stub: Poll function called of fake mb_base object.
+I (8542) MODBUS_CONTROLLER_COMMON_TEST: Test CID #1, MB_hold_reg-0, Data
+W (8552) mb_object.master.stub: Poll function called of fake mb_base object.
+E (8562) MB_CONTROLLER_MASTER: mbc_master_get_parameter(128): Master get parameter failure, error=(0x107) (ESP_ERR_TIMEOUT).
+W (8572) mb_object.master.stub: Poll function called of fake mb_base object.
+W (8572) mb_object.master.stub: Disable fake mb_base object.
+W (10582) mb_object.master.stub: Delete fake mb_base object.
+I (10582) MODBUS_CONTROLLER_COMMON_TEST: Test passed successfully.
+W (10582) mb_object.master.stub: Create fake mb_base object.
+W (10582) mb_object.master.stub: Enable fake mb_base object.
+W (10592) mb_object.master.stub: Poll function called of fake mb_base object.
+I (10592) MODBUS_CONTROLLER_COMMON_TEST: Test CID #3, MB_coil_reg-0, bit
+W (10602) mb_object.master.stub: Poll function called of fake mb_base object.
+W (10612) mb_object.master.stub: Disable fake mb_base object.
+W (12612) mb_object.master.stub: Delete fake mb_base object.
+I (12612) MODBUS_CONTROLLER_COMMON_TEST: Test passed successfully.
+W (12612) mb_object.master.stub: Create fake mb_base object.
+W (12612) mb_object.master.stub: Enable fake mb_base object.
+W (12622) mb_object.master.stub: Poll function called of fake mb_base object.
+I (12622) MODBUS_CONTROLLER_COMMON_TEST: Test CID #3, MB_coil_reg-0, bit
+W (12632) mb_object.master.stub: Poll function called of fake mb_base object.
+E (12642) MB_CONTROLLER_MASTER: mbc_master_get_parameter(128): Master get parameter failure, error=(0x107) (ESP_ERR_TIMEOUT).
+W (12652) mb_object.master.stub: Poll function called of fake mb_base object.
+W (12652) mb_object.master.stub: Disable fake mb_base object.
+W (14662) mb_object.master.stub: Delete fake mb_base object.
+I (14662) MODBUS_CONTROLLER_COMMON_TEST: Test passed successfully.
+W (14662) mb_object.master.stub: Create fake mb_base object.
+W (14662) mb_object.master.stub: Enable fake mb_base object.
+W (14672) mb_object.master.stub: Poll function called of fake mb_base object.
+I (14672) MODBUS_CONTROLLER_COMMON_TEST: Test CID #4, MB_discr_reg-0, bit
+W (14682) mb_object.master.stub: Poll function called of fake mb_base object.
+W (14692) mb_object.master.stub: Disable fake mb_base object.
+W (16692) mb_object.master.stub: Delete fake mb_base object.
+I (16692) MODBUS_CONTROLLER_COMMON_TEST: Test passed successfully.
+W (16692) mb_object.master.stub: Create fake mb_base object.
+W (16692) mb_object.master.stub: Enable fake mb_base object.
+W (16702) mb_object.master.stub: Poll function called of fake mb_base object.
+I (16702) MODBUS_CONTROLLER_COMMON_TEST: Test CID #4, MB_discr_reg-0, bit
+W (16712) mb_object.master.stub: Poll function called of fake mb_base object.
+E (16722) MB_CONTROLLER_MASTER: mbc_master_get_parameter(128): Master get parameter failure, error=(0x107) (ESP_ERR_TIMEOUT).
+W (16732) mb_object.master.stub: Poll function called of fake mb_base object.
+W (16732) mb_object.master.stub: Disable fake mb_base object.
+W (18742) mb_object.master.stub: Delete fake mb_base object.
+I (18742) MODBUS_CONTROLLER_COMMON_TEST: Test passed successfully.
+MALLOC_CAP_8BIT usage: Free memory delta: 0 Leak threshold: -128 
+MALLOC_CAP_32BIT usage: Free memory delta: 0 Leak threshold: -128</system-out></testcase><testcase group="unit_test_controller" name="test_setup_destroy_master_tcp"><system-out>I (18752) MODBUS_CONTROLLER_COMMON_TEST: TEST: Verify master create-destroy sequence TCP.
+W (18762) mb_object.master.stub: Create fake mb_base object.
+I (18772) mbc_tcp.master: mb found config for cid #0, uid=1.
+I (18772) mbc_tcp.master: mb found config for cid #1, uid=1.
+I (18782) mbc_tcp.master: mb found config for cid #2, uid=1.
+I (18782) mbc_tcp.master: mb found config for cid #3, uid=1.
+I (18792) mbc_tcp.master: mb found config for cid #4, uid=1.
+I (18792) mbc_tcp.master: mb found config for cid #5, uid=1.
+W (18802) mb_object.master.stub: Delete fake mb_base object.
+I (18802) MODBUS_CONTROLLER_COMMON_TEST: Test passed successfully.
+MALLOC_CAP_8BIT usage: Free memory delta: 0 Leak threshold: -128 
+MALLOC_CAP_32BIT usage: Free memory delta: 0 Leak threshold: -128</system-out></testcase></testsuite>

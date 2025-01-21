@@ -1,0 +1,45 @@
+dependencies:
+  espressif/esp-modbus:
+    component_hash: 1c3be72a0b5384929901a737860463c04e3393913d0e1bf2588ca980cbe675e3
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 2.0.1
+  idf:
+    source:
+      type: idf
+    version: 5.5.0
+  joltwallet/littlefs:
+    component_hash: cc23c607cbc8671bc03b1b1b39ae13d8f5e8e23771e0b1c66599d04ecd0a3527
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=4.3'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.16.2
+  protocol_examples_common:
+    dependencies: []
+    source:
+      path: /home/vvmitrofanov/projects/proj/esp-idf/examples/common_components/protocol_examples_common
+      type: local
+    version: '*'
+  ws_api:
+    dependencies: []
+    source:
+      path: /home/vvmitrofanov/projects/proj/ws_echo_server/ws_api
+      type: local
+    version: '*'
+direct_dependencies:
+- espressif/esp-modbus
+- joltwallet/littlefs
+- protocol_examples_common
+- ws_api
+manifest_hash: 3606c0504d9f2d6f76fdda39eec1817217aed950d5cff35413167c1fb5e77e4f
+target: esp32
+version: 2.0.0

@@ -1,0 +1,170 @@
+Serial port /dev/ttyUSB3
+Connecting.....
+Connecting.....
+esptool.py v4.7.0
+Found 5 serial ports
+Chip is ESP32-D0WD-V3 (revision v3.0)
+Features: WiFi, BT, Dual Core, 240MHz, VRef calibration in efuse, Coding Scheme None
+Crystal is 40MHz
+MAC: 10:97:bd:d5:4f:b0
+Uploading stub...
+Running stub...
+Stub running...
+Changing baud rate to 921600
+Changed.
+Configuring flash size...
+Flash will be erased from 0x00001000 to 0x00007fff...
+Flash will be erased from 0x00008000 to 0x00008fff...
+Flash will be erased from 0x00010000 to 0x0003cfff...
+Compressed 26480 bytes to 16509...
+Writing at 0x00001000... (50 %)Writing at 0x000076bf... (100 %)Wrote 26480 bytes (16509 compressed) at 0x00001000 in 0.7 seconds (effective 287.9 kbit/s)...
+Hash of data verified.
+Compressed 3072 bytes to 103...
+Writing at 0x00008000... (100 %)Wrote 3072 bytes (103 compressed) at 0x00008000 in 0.1 seconds (effective 308.5 kbit/s)...
+Hash of data verified.
+Compressed 183232 bytes to 97998...
+Writing at 0x00010000... (16 %)Writing at 0x0001aeee... (33 %)Writing at 0x0002076d... (50 %)Writing at 0x000262b1... (66 %)Writing at 0x0002c645... (83 %)Writing at 0x00036ee4... (100 %)Wrote 183232 bytes (97998 compressed) at 0x00010000 in 2.4 seconds (effective 610.7 kbit/s)...
+Hash of data verified.
+
+Leaving...
+Hard resetting via RTS pin...
+ets Jul 29 2019 12:21:46
+
+rst:0x1 (POWERON_RESET),boot:0x12 (SPI_FAST_FLASH_BOOT)
+configsip: 0, SPIWP:0xee
+clk_drv:0x00,q_drv:0x00,d_drv:0x00,cs0_drv:0x00,hd_drv:0x00,wp_drv:0x00
+mode:DIO, clock div:2
+load:0x3fff0030,len:7000
+load:0x40078000,len:15520
+load:0x40080400,len:3864
+entry 0x40080650
+[0;32mI (27) boot: ESP-IDF v5.0.7-528-g57ef4c4965 2nd stage bootloader[0m
+[0;32mI (27) boot: compile time 08:32:15[0m
+[0;32mI (27) boot: Multicore bootloader[0m
+[0;32mI (32) boot: chip revision: v3.0[0m
+[0;32mI (36) boot.esp32: SPI Speed      : 40MHz[0m
+[0;32mI (40) boot.esp32: SPI Mode       : DIO[0m
+[0;32mI (45) boot.esp32: SPI Flash Size : 2MB[0m
+[0;32mI (49) boot: Enabling RNG early entropy source...[0m
+[0;32mI (55) boot: Partition Table:[0m
+[0;32mI (58) boot: ## Label            Usage          Type ST Offset   Length[0m
+[0;32mI (66) boot:  0 nvs              WiFi data        01 02 00009000 00006000[0m
+[0;32mI (73) boot:  1 phy_init         RF data          01 01 0000f000 00001000[0m
+[0;32mI (81) boot:  2 factory          factory app      00 00 00010000 00100000[0m
+[0;32mI (88) boot: End of partition table[0m
+[0;32mI (92) esp_image: segment 0: paddr=00010020 vaddr=3f400020 size=07798h ( 30616) map[0m
+[0;32mI (112) esp_image: segment 1: paddr=000177c0 vaddr=3ffb0000 size=01ebch (  7868) load[0m
+[0;32mI (115) esp_image: segment 2: paddr=00019684 vaddr=40080000 size=06994h ( 27028) load[0m
+[0;32mI (131) esp_image: segment 3: paddr=00020020 vaddr=400d0020 size=17a08h ( 96776) map[0m
+[0;32mI (166) esp_image: segment 4: paddr=00037a30 vaddr=40086994 size=0516ch ( 20844) load[0m
+[0;32mI (181) boot: Loaded app from partition at offset 0x10000[0m
+[0;32mI (181) boot: Disabling RNG early entropy source...[0m
+[0;32mI (193) cpu_start: Multicore app[0m
+[0;32mI (193) cpu_start: Pro cpu up.[0m
+[0;32mI (193) cpu_start: Starting app cpu, entry point is 0x4008104c[0m
+[0;32mI (0) cpu_start: App cpu up.[0m
+[0;32mI (211) cpu_start: Pro cpu start user code[0m
+[0;32mI (211) cpu_start: cpu freq: 160000000 Hz[0m
+[0;32mI (211) cpu_start: Application information:[0m
+[0;32mI (216) cpu_start: Project name:     mb_endianness_utils[0m
+[0;32mI (222) cpu_start: App version:      v2.0.0-beta-11-g3117942[0m
+[0;32mI (228) cpu_start: Compile time:     Dec 20 2024 08:32:07[0m
+[0;32mI (234) cpu_start: ELF file SHA256:  68b35873b5ccabda...[0m
+[0;32mI (240) cpu_start: ESP-IDF:          v5.0.7-528-g57ef4c4965[0m
+[0;32mI (246) cpu_start: Min chip rev:     v0.0[0m
+[0;32mI (251) cpu_start: Max chip rev:     v3.99 [0m
+[0;32mI (256) cpu_start: Chip rev:         v3.0[0m
+[0;32mI (261) heap_init: Initializing. RAM available for dynamic allocation:[0m
+[0;32mI (268) heap_init: At 3FFAE6E0 len 00001920 (6 KiB): DRAM[0m
+[0;32mI (274) heap_init: At 3FFB2888 len 0002D778 (181 KiB): DRAM[0m
+[0;32mI (280) heap_init: At 3FFE0440 len 00003AE0 (14 KiB): D/IRAM[0m
+[0;32mI (286) heap_init: At 3FFE4350 len 0001BCB0 (111 KiB): D/IRAM[0m
+[0;32mI (293) heap_init: At 4008BB00 len 00014500 (81 KiB): IRAM[0m
+[0;32mI (300) spi_flash: detected chip: generic[0m
+[0;32mI (304) spi_flash: flash io: dio[0m
+[0;33mW (308) spi_flash: Detected size(4096k) larger than the size in the binary image header(2048k). Using the size in the binary image header.[0m
+[0;32mI (322) app_start: Starting scheduler on CPU0[0m
+[0;32[0;32mI (326) app_start: Starting scheduler on CPU1[0m
+mI (326) main_task: Started on CPU0[0m
+[0;32mI (336) main_task: Calling app_main()[0m
+
+
+Press ENTER to see the list of tests.
+
+
+
+Here's the test menu, pick your combo:
+(1)	"Test endianness conversion for all extended Modbus types." [MB_ENDIANNESS]
+
+Enter test for running.
+ets Jul 29 2019 12:21:46
+
+rst:0x1 (POWERON_RESET),boot:0x12 (SPI_FAST_FLASH_BOOT)
+configsip: 0, SPIWP:0xee
+clk_drv:0x00,q_drv:0x00,d_drv:0x00,cs0_drv:0x00,hd_drv:0x00,wp_drv:0x00
+mode:DIO, clock div:2
+load:0x3fff0030,len:7000
+load:0x40078000,len:15520
+load:0x40080400,len:3864
+entry 0x40080650
+[0;32mI (27) boot: ESP-IDF v5.0.7-528-g57ef4c4965 2nd stage bootloader[0m
+[0;32mI (27) boot: compile time 08:32:15[0m
+[0;32mI (27) boot: Multicore bootloader[0m
+[0;32mI (32) boot: chip revision: v3.0[0m
+[0;32mI (36) boot.esp32: SPI Speed      : 40MHz[0m
+[0;32mI (40) boot.esp32: SPI Mode       : DIO[0m
+[0;32mI (45) boot.esp32: SPI Flash Size : 2MB[0m
+[0;32mI (49) boot: Enabling RNG early entropy source...[0m
+[0;32mI (55) boot: Partition Table:[0m
+[0;32mI (58) boot: ## Label            Usage          Type ST Offset   Length[0m
+[0;32mI (66) boot:  0 nvs              WiFi data        01 02 00009000 00006000[0m
+[0;32mI (73) boot:  1 phy_init         RF data          01 01 0000f000 00001000[0m
+[0;32mI (81) boot:  2 factory          factory app      00 00 00010000 00100000[0m
+[0;32mI (88) boot: End of partition table[0m
+[0;32mI (92) esp_image: segment 0: paddr=00010020 vaddr=3f400020 size=07798h ( 30616) map[0m
+[0;32mI (112) esp_image: segment 1: paddr=000177c0 vaddr=3ffb0000 size=01ebch (  7868) load[0m
+[0;32mI (115) esp_image: segment 2: paddr=00019684 vaddr=40080000 size=06994h ( 27028) load[0m
+[0;32mI (131) esp_image: segment 3: paddr=00020020 vaddr=400d0020 size=17a08h ( 96776) map[0m
+[0;32mI (166) esp_image: segment 4: paddr=00037a30 vaddr=40086994 size=0516ch ( 20844) load[0m
+[0;32mI (181) boot: Loaded app from partition at offset 0x10000[0m
+[0;32mI (181) boot: Disabling RNG early entropy source...[0m
+[0;32mI (193) cpu_start: Multicore app[0m
+[0;32mI (193) cpu_start: Pro cpu up.[0m
+[0;32mI (193) cpu_start: Starting app cpu, entry point is 0x4008104c[0m
+[0;32mI (0) cpu_start: App cpu up.[0m
+[0;32mI (211) cpu_start: Pro cpu start user code[0m
+[0;32mI (211) cpu_start: cpu freq: 160000000 Hz[0m
+[0;32mI (211) cpu_start: Application information:[0m
+[0;32mI (216) cpu_start: Project name:     mb_endianness_utils[0m
+[0;32mI (222) cpu_start: App version:      v2.0.0-beta-11-g3117942[0m
+[0;32mI (228) cpu_start: Compile time:     Dec 20 2024 08:32:07[0m
+[0;32mI (234) cpu_start: ELF file SHA256:  68b35873b5ccabda...[0m
+[0;32mI (240) cpu_start: ESP-IDF:          v5.0.7-528-g57ef4c4965[0m
+[0;32mI (246) cpu_start: Min chip rev:     v0.0[0m
+[0;32mI (251) cpu_start: Max chip rev:     v3.99 [0m
+[0;32mI (256) cpu_start: Chip rev:         v3.0[0m
+[0;32mI (261) heap_init: Initializing. RAM available for dynamic allocation:[0m
+[0;32mI (268) heap_init: At 3FFAE6E0 len 00001920 (6 KiB): DRAM[0m
+[0;32mI (274) heap_init: At 3FFB2888 len 0002D778 (181 KiB): DRAM[0m
+[0;32mI (280) heap_init: At 3FFE0440 len 00003AE0 (14 KiB): D/IRAM[0m
+[0;32mI (286) heap_init: At 3FFE4350 len 0001BCB0 (111 KiB): D/IRAM[0m
+[0;32mI (293) heap_init: At 4008BB00 len 00014500 (81 KiB): IRAM[0m
+[0;32mI (300) spi_flash: detected chip: generic[0m
+[0;32mI (304) spi_flash: flash io: dio[0m
+[0;33mW (308) spi_flash: Detected size(4096k) larger than the size in the binary image header(2048k). Using the size in the binary image header.[0m
+[0;32mI (322) app_start: Starting scheduler on CPU0[0m
+[0;32[0;32mI (326) app_start: Starting scheduler on CPU1[0m
+mI (326) main_task: Started on CPU0[0m
+[0;32mI (336) main_task: Calling app_main()[0m
+
+
+Press ENTER to see the list of tests.
+1
+Running Test endianness conversion for all extended Modbus types....
+./main/test_mb_endianness_utils.c:54:Test endianness conversion for all extended Modbus types.:PASS
+Test ran in 17ms
+
+-----------------------
+1 Tests 0 Failures 0 Ignored 
+OK
+Enter next test, or 'enter' to see menu

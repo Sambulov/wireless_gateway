@@ -1,0 +1,257 @@
+Serial port /dev/ttyUSB3
+Connecting.....
+Connecting....
+esptool.py v4.8.1
+Found 5 serial ports
+Chip is ESP32-D0WD-V3 (revision v3.0)
+Features: WiFi, BT, Dual Core, 240MHz, VRef calibration in efuse, Coding Scheme None
+Crystal is 40MHz
+MAC: 10:97:bd:d5:4f:b0
+Uploading stub...
+Running stub...
+Stub running...
+Changing baud rate to 921600
+Changed.
+Configuring flash size...
+Flash will be erased from 0x00001000 to 0x00007fff...
+Flash will be erased from 0x00008000 to 0x00008fff...
+Flash will be erased from 0x00010000 to 0x00072fff...
+SHA digest in image updated
+Compressed 26720 bytes to 16359...
+Writing at 0x00001000... (100 %)Wrote 26720 bytes (16359 compressed) at 0x00001000 in 0.8 seconds (effective 284.2 kbit/s)...
+Hash of data verified.
+Compressed 3072 bytes to 103...
+Writing at 0x00008000... (100 %)Wrote 3072 bytes (103 compressed) at 0x00008000 in 0.1 seconds (effective 307.2 kbit/s)...
+Hash of data verified.
+Compressed 404176 bytes to 222446...
+Writing at 0x00010000... (7 %)Writing at 0x0001de19... (14 %)Writing at 0x0002884b... (21 %)Writing at 0x0002e5c5... (28 %)Writing at 0x00034806... (35 %)Writing at 0x0003a14e... (42 %)Writing at 0x0004050a... (50 %)Writing at 0x00045d6d... (57 %)Writing at 0x0004b919... (64 %)Writing at 0x000515d3... (71 %)Writing at 0x000572ea... (78 %)Writing at 0x000615ba... (85 %)Writing at 0x00068e41... (92 %)Writing at 0x0006eee9... (100 %)Wrote 404176 bytes (222446 compressed) at 0x00010000 in 4.2 seconds (effective 777.3 kbit/s)...
+Hash of data verified.
+
+Leaving...
+Hard resetting via RTS pin...
+ets Jul 29 2019 12:21:46
+
+rst:0x1 (POWERON_RESET),boot:0x12 (SPI_FAST_FLASH_BOOT)
+configsip: 0, SPIWP:0xee
+clk_drv:0x00,q_drv:0x00,d_drv:0x00,cs0_drv:0x00,hd_drv:0x00,wp_drv:0x00
+mode:DIO, clock div:2
+load:0x3fff0030,len:7172
+load:0x40078000,len:15540
+load:0x40080400,len:4
+ho 8 tail 4 room 4
+load:0x40080404,len:3904
+entry 0x40080640
+[0;32mI (31) boot: ESP-IDF v5.2.3-617-g91baeeb61c 2nd stage bootloader[0m
+[0;32mI (31) boot: compile time Dec 20 2024 08:16:46[0m
+[0;32mI (33) boot: Multicore bootloader[0m
+[0;32mI (37) boot: chip revision: v3.0[0m
+[0;32mI (40) boot.esp32: SPI Speed      : 40MHz[0m
+[0;32mI (45) boot.esp32: SPI Mode       : DIO[0m
+[0;32mI (50) boot.esp32: SPI Flash Size : 2MB[0m
+[0;32mI (54) boot: Enabling RNG early entropy source...[0m
+[0;32mI (60) boot: Partition Table:[0m
+[0;32mI (63) boot: ## Label            Usage          Type ST Offset   Length[0m
+[0;32mI (71) boot:  0 nvs              WiFi data        01 02 00009000 00006000[0m
+[0;32mI (78) boot:  1 phy_init         RF data          01 01 0000f000 00001000[0m
+[0;32mI (85) boot:  2 factory          factory app      00 00 00010000 00100000[0m
+[0;32mI (93) boot: End of partition table[0m
+[0;32mI (97) esp_image: segment 0: paddr=00010020 vaddr=3f400020 size=13f24h ( 81700) map[0m
+[0;32mI (134) esp_image: segment 1: paddr=00023f4c vaddr=3ffb0000 size=0246ch (  9324) load[0m
+[0;32mI (137) esp_image: segment 2: paddr=000263c0 vaddr=40080000 size=09c58h ( 40024) load[0m
+[0;32mI (155) esp_image: segment 3: paddr=00030020 vaddr=400d0020 size=3e6ach (255660) map[0m
+[0;32mI (243) esp_image: segment 4: paddr=0006e6d4 vaddr=40089c58 size=043d4h ( 17364) load[0m
+[0;32mI (257) boot: Loaded app from partition at offset 0x10000[0m
+[0;32mI (257) boot: Disabling RNG early entropy source...[0m
+[0;32mI (269) cpu_start: Multicore app[0m
+[0;32mI (278) cpu_start: Pro cpu start user code[0m
+[0;32mI (278) cpu_start: cpu freq: 160000000 Hz[0m
+[0;32mI (278) cpu_start: Application information:[0m
+[0;32mI (281) cpu_start: Project name:     test_comm_adapter[0m
+[0;32mI (287) cpu_start: App version:      v2.0.0-beta-11-g3117942[0m
+[0;32mI (293) cpu_start: Compile time:     Dec 20 2024 08:16:34[0m
+[0;32mI (299) cpu_start: ELF file SHA256:  3a6dbcbc2...[0m
+[0;32mI (304) cpu_start: ESP-IDF:          v5.2.3-617-g91baeeb61c[0m
+[0;32mI (311) cpu_start: Min chip rev:     v0.0[0m
+[0;32mI (315) cpu_start: Max chip rev:     v3.99 [0m
+[0;32mI (320) cpu_start: Chip rev:         v3.0[0m
+[0;32mI (325) heap_init: Initializing. RAM available for dynamic allocation:[0m
+[0;32mI (332) heap_init: At 3FFAE6E0 len 00001920 (6 KiB): DRAM[0m
+[0;32mI (338) heap_init: At 3FFB3AE8 len 0002C518 (177 KiB): DRAM[0m
+[0;32mI (344) heap_init: At 3FFE0440 len 00003AE0 (14 KiB): D/IRAM[0m
+[0;32mI (351) heap_init: At 3FFE4350 len 0001BCB0 (111 KiB): D/IRAM[0m
+[0;32mI (357) heap_init: At 4008E02C len 00011FD4 (71 KiB): IRAM[0m
+[0;32mI (365) spi_flash: detected chip: generic[0m
+[0;32mI (368) spi_flash: flash io: dio[0m
+[0;33mW (372) spi_flash: Detected size(4096k) larger than the size in the binary image header(2048k). Using the size in the binary image header.[0m
+[0;32mI (386) main_task: Started on CPU0[0m
+[0;32mI (396) main_task: Calling app_main()[0m
+Unity test run 1 of 1
+TEST(modbus_adapter_tcp, test_modbus_adapter_tcp)[0;32mI (416) mb_port.test_adapter: Parsing of config for mbm_tcp#0x3ffc1b70[0m
+[0;32mI (416) mbc_tcp.master: mb controller connection done.[0m
+[0;32mI (416) mbc_tcp.master: mb found config for cid #0, uid=1.[0m
+[0;32mI (416) mbc_tcp.master: mb found config for cid #1, uid=1.[0m
+[0;32mI (426) mbc_tcp.master: mb found config for cid #2, uid=1.[0m
+[0;32mI (436) mbc_tcp.master: mb found config for cid #3, uid=200.[0m
+[0;32mI (436) mbc_tcp.master: mb found config for cid #4, uid=1.[0m
+[0;32mI (446) TEST_COMMON: 0x3ffc1b70, modbus master stack is initialized[0m
+[0;32mI (456) TEST_COMMON: 0x3ffc1b70, modbus master start...[0m
+[0;32mI (466) SLAVE: OBJ 0x3ffb6b6c, WRITE (103513 us), SL: 1, REG:0, TYPE:1, INST_ADDR:0x3ffb2b40(0x1111), SIZE:1[0m
+[0;32mI (466) TEST_COMMON: 0x3ffc1b70, CHAR #0 MB_hold_reg-0 (Data) value = (0x1111), write successful.[0m
+[0;32mI (486) TEST_COMMON: 0x3ffc1b70, CHAR #1 MB_hold_reg-1 (Data) value = (0x2222), write successful.[0m
+[0;32mI (486) TEST_COMMON: 0x3ffc1b70, CHAR #2 MB_hold_reg-2 (Data) value = (0x3333), write successful.[0m
+[0;32mI (506) SLAVE: OBJ 0x3ffbcf88, WRITE (142854 us), SL: 200, REG:3, TYPE:1, INST_ADDR:0x3ffb2b46(0x4444), SIZE:1[0m
+[0;32mI (516) TEST_COMMON: 0x3ffc1b70, CHAR #3 MB_hold_reg-3 (Data) value = (0x4444), write successful.[0m
+[0;32mI (516) SLAVE: OBJ 0x3ffb6b6c, WRITE (122957 us), SL: 1, REG:1, TYPE:1, INST_ADDR:0x3ffb2b42(0x2222), SIZE:1[0m
+[0;32mI (526) TEST_COMMON: 0x3ffc1b70, CHAR #0 MB_hold_reg-0 (Data) value = (0x1111) parameter read successful.[0m
+[0;32mI (546) TEST_COMMON: CHAR #0, value is ok.[0m
+[0;32mI (546) TEST_COMMON: 0x3ffc1b70, CHAR #1 MB_hold_reg-1 (Data) value = (0x2222) parameter read successful.[0m
+[0;32mI (566) TEST_COMMON: CHAR #1, value is ok.[0m
+[0;32mI (566) TEST_COMMON: 0x3ffc1b70, CHAR #2 MB_hold_reg-2 (Data) value = (0x3333) parameter read successful.[0m
+[0;32mI (566) TEST_COMMON: CHAR #2, value is ok.[0m
+[0;32mI (586) SLAVE: OBJ 0x3ffbcf88, READ (222882 us), SL: 200, REG:3, TYPE:2, INST_ADDR:0x3ffb2b46(0x4444), SIZE:1[0m
+[0;32mI (596) SLAVE: OBJ 0x3ffb6b6c, WRITE (129068 us), SL: 1, REG:2, TYPE:1, INST_ADDR:0x3ffb2b44(0x3333), SIZE:1[0m
+[0;32mI (596) TEST_COMMON: 0x3ffc1b70, CHAR #3 MB_hold_reg-3 (Data) value = (0x4444) parameter read successful.[0m
+[0;32mI (616) TEST_COMMON: CHAR #3, value is ok.[0m
+[0;32mI (616) TEST_COMMON: 0x3ffc1b70, CHAR #4 CYCLE_COUNTER (Data) value = (0x0000), write successful.[0m
+[0;32mI (656) SLAVE: OBJ 0x3ffb6b6c, READ (158960 us), SL: 1, REG:0, TYPE:2, INST_ADDR:0x3ffb2b40(0x1111), SIZE:1[0m
+[0;32mI (686) TEST_COMMON: 0x3ffc1b70, CHAR #0 MB_hold_reg-0 (Data) value = (0x1111), write successful.[0m
+[0;32mI (686) TEST_COMMON: CHAR #0, value is ok.[0m
+[0;32mI (686) TEST_COMMON: 0x3ffc1b70, CHAR #1 MB_hold_reg-1 (Data) value = (0x2222), write successful.[0m
+[0;32mI (706) TEST_COMMON: CHAR #1, value is ok.[0m
+[0;32mI (706) SLAVE: OBJ 0x3ffb6b6c, READ (186876 us), SL: 1, REG:1, TYPE:2, INST_ADDR:0x3ffb2b42(0x2222), SIZE:1[0m
+[0;32mI (706) TEST_COMMON: 0x3ffc1b70, CHAR #2 MB_hold_reg-2 (Data) value = (0x3333), write successful.[0m
+[0;32mI (726) TEST_COMMON: CHAR #2, value is ok.[0m
+[0;32mI (736) TEST_COMMON: 0x3ffc1b70, CHAR #3 MB_hold_reg-3 (Data) value = (0x4444), write successful.[0m
+[0;32mI (736) TEST_COMMON: CHAR #3, value is ok.[0m
+[0;32mI (736) TEST_COMMON: 0x3ffc1b70, CHAR #4 CYCLE_COUNTER (Data) value = (0x0001), write successful.[0m
+[0;32mI (746) SLAVE: OBJ 0x3ffbcf88, WRITE (367465 us), SL: 200, REG:3, TYPE:1, INST_ADDR:0x3ffb2b46(0x4444), SIZE:1[0m
+[0;32mI (776) SLAVE: OBJ 0x3ffb6b6c, READ (203034 us), SL: 1, REG:2, TYPE:2, INST_ADDR:0x3ffb2b44(0x3333), SIZE:1[0m
+[0;32mI (816) TEST_COMMON: 0x3ffc1b70, CHAR #0 MB_hold_reg-0 (Data) value = (0x1111) parameter read successful.[0m
+[0;32mI (816) TEST_COMMON: CHAR #0, value is ok.[0m
+[0;32mI (816) TEST_COMMON: 0x3ffc1b70, CHAR #1 MB_hold_reg-1 (Data) value = (0x2222) parameter read successful.[0m
+[0;32mI (836) TEST_COMMON: CHAR #1, value is ok.[0m
+[0;32mI (846) TEST_COMMON: 0x3ffc1b70, CHAR #2 MB_hold_reg-2 (Data) value = (0x3333) parameter read successful.[0m
+[0;32mI (846) TEST_COMMON: CHAR #2, value is ok.[0m
+[0;32mI (836) SLAVE: OBJ 0x3ffb6b6c, WRITE (253065 us), SL: 1, REG:4, TYPE:1, INST_ADDR:0x3ffb2b48(0x1), SIZE:1[0m
+[0;32mI (866) TEST_COMMON: 0x3ffc1b70, CHAR #3 MB_hold_reg-3 (Data) value = (0x4444) parameter read successful.[0m
+[0;32mI (876) TEST_COMMON: CHAR #3, value is ok.[0m
+[0;32mI (876) TEST_COMMON: 0x3ffc1b70, CHAR #4 CYCLE_COUNTER (Data) value = (0x0002), write successful.[0m
+[0;32mI (896) SLAVE: OBJ 0x3ffbcf88, READ (487919 us), SL: 200, REG:3, TYPE:2, INST_ADDR:0x3ffb2b46(0x4444), SIZE:1[0m
+[0;32mI (926) SLAVE: OBJ 0x3ffb6b6c, WRITE (312865 us), SL: 1, REG:0, TYPE:1, INST_ADDR:0x3ffb2b40(0x1111), SIZE:1[0m
+[0;32mI (956) TEST_COMMON: 0x3ffc1b70, CHAR #0 MB_hold_reg-0 (Data) value = (0x1111), write successful.[0m
+[0;32mI (956) TEST_COMMON: CHAR #0, value is ok.[0m
+[0;32mI (956) TEST_COMMON: 0x3ffc1b70, CHAR #1 MB_hold_reg-1 (Data) value = (0x2222), write successful.[0m
+[0;32mI (976) TEST_COMMON: CHAR #1, value is ok.[0m
+[0;32mI (976) SLAVE: OBJ 0x3ffb6b6c, WRITE (326227 us), SL: 1, REG:1, TYPE:1, INST_ADDR:0x3ffb2b42(0x2222), SIZE:1[0m
+[0;32mI (976) TEST_COMMON: 0x3ffc1b70, CHAR #2 MB_hold_reg-2 (Data) value = (0x3333), write successful.[0m
+[0;32mI (996) TEST_COMMON: CHAR #2, value is ok.[0m
+[0;32mI (1006) TEST_COMMON: 0x3ffc1b70, CHAR #3 MB_hold_reg-3 (Data) value = (0x4444), write successful.[0m
+[0;32mI (1006) TEST_COMMON: CHAR #3, value is ok.[0m
+[0;32mI (1016) TEST_COMMON: 0x3ffc1b70, CHAR #4 CYCLE_COUNTER (Data) value = (0x0003), write successful.[0m
+[0;32mI (1036) SLAVE: OBJ 0x3ffb6b6c, WRITE (343018 us), SL: 1, REG:2, TYPE:1, INST_ADDR:0x3ffb2b44(0x3333), SIZE:1[0m
+[0;32mI (1046) SLAVE: OBJ 0x3ffbcf88, WRITE (636239 us), SL: 200, REG:3, TYPE:1, INST_ADDR:0x3ffb2b46(0x4444), SIZE:1[0m
+[0;32mI (1076) TEST_COMMON: 0x3ffc1b70, CHAR #0 MB_hold_reg-0 (Data) value = (0x1111) parameter read successful.[0m
+[0;32mI (1076) TEST_COMMON: CHAR #0, value is ok.[0m
+[0;32mI (1086) TEST_COMMON: 0x3ffc1b70, CHAR #1 MB_hold_reg-1 (Data) value = (0x2222) parameter read successful.[0m
+[0;32mI (1086) TEST_COMMON: CHAR #1, value is ok.[0m
+[0;32mI (1106) TEST_COMMON: 0x3ffc1b70, CHAR #2 MB_hold_reg-2 (Data) value = (0x3333) parameter read successful.[0m
+[0;32mI (1106) TEST_COMMON: CHAR #2, value is ok.[0m
+[0;32mI (1106) SLAVE: OBJ 0x3ffb6b6c, WRITE (381827 us), SL: 1, REG:4, TYPE:1, INST_ADDR:0x3ffb2b48(0x3), SIZE:1[0m
+[0;32mI (1126) TEST_COMMON: 0x3ffc1b70, CHAR #3 MB_hold_reg-3 (Data) value = (0x4444) parameter read successful.[0m
+[0;32mI (1136) TEST_COMMON: CHAR #3, value is ok.[0m
+[0;32mI (1136) TEST_COMMON: 0x3ffc1b70, CHAR #4 CYCLE_COUNTER (Data) value = (0x0004), write successful.[0m
+[0;32mI (1126) SLAVE: OBJ 0x3ffbcf88, READ (748409 us), SL: 200, REG:3, TYPE:2, INST_ADDR:0x3ffb2b46(0x4444), SIZE:1[0m
+[0;32mI (1186) SLAVE: OBJ 0x3ffb6b6c, READ (452864 us), SL: 1, REG:0, TYPE:2, INST_ADDR:0x3ffb2b40(0x1111), SIZE:1[0m
+[0;32mI (1216) TEST_COMMON: 0x3ffc1b70, CHAR #0 MB_hold_reg-0 (Data) value = (0x1111), write successful.[0m
+[0;32mI (1216) TEST_COMMON: CHAR #0, value is ok.[0m
+[0;32mI (1216) TEST_COMMON: 0x3ffc1b70, CHAR #1 MB_hold_reg-1 (Data) value = (0x2222), write successful.[0m
+[0;32mI (1236) TEST_COMMON: CHAR #1, value is ok.[0m
+[0;32mI (1236) SLAVE: OBJ 0x3ffb6b6c, READ (457931 us), SL: 1, REG:1, TYPE:2, INST_ADDR:0x3ffb2b42(0x2222), SIZE:1[0m
+[0;32mI (1236) TEST_COMMON: 0x3ffc1b70, CHAR #2 MB_hold_reg-2 (Data) value = (0x3333), write successful.[0m
+[0;32mI (1256) TEST_COMMON: CHAR #2, value is ok.[0m
+[0;32mI (1266) TEST_COMMON: 0x3ffc1b70, CHAR #3 MB_hold_reg-3 (Data) value = (0x4444), write successful.[0m
+[0;32mI (1266) TEST_COMMON: CHAR #3, value is ok.[0m
+[0;32mI (1266) TEST_COMMON: 0x3ffc1b70, CHAR #4 CYCLE_COUNTER (Data) value = (0x0005), write successful.[0m
+[0;32mI (1296) SLAVE: OBJ 0x3ffb6b6c, READ (473066 us), SL: 1, REG:2, TYPE:2, INST_ADDR:0x3ffb2b44(0x3333), SIZE:1[0m
+[0;32mI (1306) SLAVE: OBJ 0x3ffbcf88, WRITE (896795 us), SL: 200, REG:3, TYPE:1, INST_ADDR:0x3ffb2b46(0x4444), SIZE:1[0m
+[0;32mI (1346) SLAVE: OBJ 0x3ffb6b6c, WRITE (516858 us), SL: 1, REG:4, TYPE:1, INST_ADDR:0x3ffb2b48(0x5), SIZE:1[0m
+[0;32mI (1346) TEST_COMMON: 0x3ffc1b70, CHAR #0 MB_hold_reg-0 (Data) value = (0x1111) parameter read successful.[0m
+[0;32mI (1366) TEST_COMMON: CHAR #0, value is ok.[0m
+[0;32mI (1366) TEST_COMMON: 0x3ffc1b70, CHAR #1 MB_hold_reg-1 (Data) value = (0x2222) parameter read successful.[0m
+[0;32mI (1366) TEST_COMMON: CHAR #1, value is ok.[0m
+[0;32mI (1386) TEST_COMMON: 0x3ffc1b70, CHAR #2 MB_hold_reg-2 (Data) value = (0x3333) parameter read successful.[0m
+[0;32mI (1386) TEST_COMMON: CHAR #2, value is ok.[0m
+[0;32mI (1396) TEST_COMMON: 0x3ffc1b70, CHAR #3 MB_hold_reg-3 (Data) value = (0x4444) parameter read successful.[0m
+[0;32mI (1396) TEST_COMMON: CHAR #3, value is ok.[0m
+[0;32mI (1416) TEST_COMMON: 0x3ffc1b70, CHAR #4 CYCLE_COUNTER (Data) value = (0x0006), write successful.[0m
+[0;32mI (1416) SLAVE: OBJ 0x3ffb6b6c, WRITE (592869 us), SL: 1, REG:0, TYPE:1, INST_ADDR:0x3ffb2b40(0x1111), SIZE:1[0m
+[0;32mI (1446) SLAVE: OBJ 0x3ffbcf88, READ (1028703 us), SL: 200, REG:3, TYPE:2, INST_ADDR:0x3ffb2b46(0x4444), SIZE:1[0m
+[0;32mI (1486) TEST_COMMON: 0x3ffc1b70, CHAR #0 MB_hold_reg-0 (Data) value = (0x1111), write successful.[0m
+[0;32mI (1486) TEST_COMMON: CHAR #0, value is ok.[0m
+[0;32mI (1486) SLAVE: OBJ 0x3ffb6b6c, WRITE (597136 us), SL: 1, REG:1, TYPE:1, INST_ADDR:0x3ffb2b42(0x2222), SIZE:1[0m
+[0;32mI (1496) TEST_COMMON: 0x3ffc1b70, CHAR #1 MB_hold_reg-1 (Data) value = (0x2222), write successful.[0m
+[0;32mI (1516) TEST_COMMON: CHAR #1, value is ok.[0m
+[0;32mI (1516) TEST_COMMON: 0x3ffc1b70, CHAR #2 MB_hold_reg-2 (Data) value = (0x3333), write successful.[0m
+[0;32mI (1536) TEST_COMMON: CHAR #2, value is ok.[0m
+[0;32mI (1546) TEST_COMMON: 0x3ffc1b70, CHAR #3 MB_hold_reg-3 (Data) value = (0x4444), write successful.[0m
+[0;32mI (1546) TEST_COMMON: CHAR #3, value is ok.[0m
+[0;32mI (1556) TEST_COMMON: 0x3ffc1b70, CHAR #4 CYCLE_COUNTER (Data) value = (0x0007), write successful.[0m
+[0;32mI (1566) SLAVE: OBJ 0x3ffb6b6c, WRITE (613044 us), SL: 1, REG:2, TYPE:1, INST_ADDR:0x3ffb2b44(0x3333), SIZE:1[0m
+[0;32mI (1576) SLAVE: OBJ 0x3ffbcf88, WRITE (1172942 us), SL: 200, REG:3, TYPE:1, INST_ADDR:0x3ffb2b46(0x4444), SIZE:1[0m
+[0;32mI (1616) SLAVE: OBJ 0x3ffb6b6c, WRITE (650786 us), SL: 1, REG:4, TYPE:1, INST_ADDR:0x3ffb2b48(0x7), SIZE:1[0m
+[0;32mI (1616) TEST_COMMON: 0x3ffc1b70, CHAR #0 MB_hold_reg-0 (Data) value = (0x1111) parameter read successful.[0m
+[0;32mI (1636) TEST_COMMON: CHAR #0, value is ok.[0m
+[0;32mI (1636) TEST_COMMON: 0x3ffc1b70, CHAR #1 MB_hold_reg-1 (Data) value = (0x2222) parameter read successful.[0m
+[0;32mI (1636) TEST_COMMON: CHAR #1, value is ok.[0m
+[0;32mI (1656) TEST_COMMON: 0x3ffc1b70, CHAR #2 MB_hold_reg-2 (Data) value = (0x3333) parameter read successful.[0m
+[0;32mI (1656) TEST_COMMON: CHAR #2, value is ok.[0m
+[0;32mI (1666) TEST_COMMON: 0x3ffc1b70, CHAR #3 MB_hold_reg-3 (Data) value = (0x4444) parameter read successful.[0m
+[0;32mI (1666) TEST_COMMON: CHAR #3, value is ok.[0m
+[0;32mI (1686) TEST_COMMON: 0x3ffc1b70, CHAR #4 CYCLE_COUNTER (Data) value = (0x0008), write successful.[0m
+[0;32mI (1686) SLAVE: OBJ 0x3ffb6b6c, READ (712863 us), SL: 1, REG:0, TYPE:2, INST_ADDR:0x3ffb2b40(0x1111), SIZE:1[0m
+[0;32mI (1716) SLAVE: OBJ 0x3ffbcf88, READ (1298709 us), SL: 200, REG:3, TYPE:2, INST_ADDR:0x3ffb2b46(0x4444), SIZE:1[0m
+[0;32mI (1756) TEST_COMMON: 0x3ffc1b70, CHAR #0 MB_hold_reg-0 (Data) value = (0x1111), write successful.[0m
+[0;32mI (1756) TEST_COMMON: CHAR #0, value is ok.[0m
+[0;32mI (1766) SLAVE: OBJ 0x3ffb6b6c, READ (718087 us), SL: 1, REG:1, TYPE:2, INST_ADDR:0x3ffb2b42(0x2222), SIZE:1[0m
+[0;32mI (1776) TEST_COMMON: 0x3ffc1b70, CHAR #1 MB_hold_reg-1 (Data) value = (0x2222), write successful.[0m
+[0;32mI (1776) TEST_COMMON: CHAR #1, value is ok.[0m
+[0;32mI (1826) SLAVE: OBJ 0x3ffb6b6c, READ (742941 us), SL: 1, REG:2, TYPE:2, INST_ADDR:0x3ffb2b44(0x3333), SIZE:1[0m
+[0;32mI (1836) TEST_COMMON: 0x3ffc1b70, CHAR #2 MB_hold_reg-2 (Data) value = (0x3333), write successful.[0m
+[0;32mI (1836) TEST_COMMON: CHAR #2, value is ok.[0m
+[0;32mI (1846) SLAVE: OBJ 0x3ffbcf88, WRITE (1477251 us), SL: 200, REG:3, TYPE:1, INST_ADDR:0x3ffb2b46(0x4444), SIZE:1[0m
+[0;32mI (1846) TEST_COMMON: 0x3ffc1b70, CHAR #3 MB_hold_reg-3 (Data) value = (0x4444), write successful.[0m
+[0;32mI (1866) TEST_COMMON: CHAR #3, value is ok.[0m
+[0;32mI (1886) SLAVE: OBJ 0x3ffb6b6c, WRITE (777036 us), SL: 1, REG:4, TYPE:1, INST_ADDR:0x3ffb2b48(0x9), SIZE:1[0m
+[0;32mI (1896) TEST_COMMON: 0x3ffc1b70, CHAR #4 CYCLE_COUNTER (Data) value = (0x0009), write successful.[0m
+[0;32mI (1946) SLAVE: OBJ 0x3ffb6b6c, WRITE (852862 us), SL: 1, REG:0, TYPE:1, INST_ADDR:0x3ffb2b40(0x1111), SIZE:1[0m
+[0;32mI (1956) TEST_COMMON: 0x3ffc1b70, CHAR #0 MB_hold_reg-0 (Data) value = (0x1111) parameter read successful.[0m
+[0;32mI (1956) TEST_COMMON: CHAR #0, value is ok.[0m
+[0;32mI (2006) SLAVE: OBJ 0x3ffb6b6c, WRITE (857357 us), SL: 1, REG:1, TYPE:1, INST_ADDR:0x3ffb2b42(0x2222), SIZE:1[0m
+[0;32mI (2016) TEST_COMMON: 0x3ffc1b70, CHAR #1 MB_hold_reg-1 (Data) value = (0x2222) parameter read successful.[0m
+[0;32mI (2016) TEST_COMMON: CHAR #1, value is ok.[0m
+[0;32mI (2066) SLAVE: OBJ 0x3ffb6b6c, WRITE (873043 us), SL: 1, REG:2, TYPE:1, INST_ADDR:0x3ffb2b44(0x3333), SIZE:1[0m
+[0;32mI (2076) TEST_COMMON: 0x3ffc1b70, CHAR #2 MB_hold_reg-2 (Data) value = (0x3333) parameter read successful.[0m
+[0;32mI (2076) TEST_COMMON: CHAR #2, value is ok.[0m
+[0;32mI (2086) SLAVE: OBJ 0x3ffbcf88, READ (1718101 us), SL: 200, REG:3, TYPE:2, INST_ADDR:0x3ffb2b46(0x4444), SIZE:1[0m
+[0;32mI (2086) TEST_COMMON: 0x3ffc1b70, CHAR #3 MB_hold_reg-3 (Data) value = (0x4444) parameter read successful.[0m
+[0;32mI (2106) TEST_COMMON: CHAR #3, value is ok.[0m
+[0;32mI (2186) TEST_COMMON: Destroy slave, inst: 0x3ffb6b6c.[0m
+[0;32mI (2206) TEST_COMMON: Destroy slave, inst: 0x3ffbcf88.[0m
+[0;33mW (4106) mb_port.test_adapter: 0x3ffc1b70:EV_ERROR_RESPOND_TIMEOUT[0m
+[0;31mE (4116) MB_CONTROLLER_MASTER: mbc_master_set_parameter(90): Master set parameter failure, error=(0x107) (ESP_ERR_TIMEOUT).[0m
+[0;31mE (4116) TEST_COMMON: 0x3ffc1b70, CHAR #4 (CYCLE_COUNTER) write fail, err = 0x107 (ESP_ERR_TIMEOUT).[0m
+[0;32mI (4196) TEST_COMMON: Destroy master, inst: 0x3ffc1b70.[0m
+[0;32mI (4216) TEST_COMMON: Test task 0x3ffc6358, done successfully.[0m
+[0;32mI (4226) TEST_COMMON: Test task 0x3ffc19a8, done successfully.[0m
+[0;32mI (4236) TEST_COMMON: Test task 0x3ffbcdc0, done successfully.[0m
+MALLOC_CAP_8BIT usage: Free memory delta: 0 Leak threshold: -128 
+MALLOC_CAP_32BIT usage: Free memory delta: 0 Leak threshold: -128 
+[0;32mI (4246) MODBUS_TCP_TEST: TEST_modbus_adapter_tcp_TEAR_DOWN, done successfully.[0m
+ PASS
+
+-----------------------
+1 Tests 0 Failures 0 Ignored 
+OK
+
+Tests finished, rc=0
+[0;32mI (4266) main_task: Returned from app_main()[0m

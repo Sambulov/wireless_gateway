@@ -1,0 +1,310 @@
+Serial port /dev/ttyUSB3
+Connecting....
+Connecting......
+esptool.py v4.7.0
+Found 5 serial ports
+Chip is ESP32-D0WD-V3 (revision v3.0)
+Features: WiFi, BT, Dual Core, 240MHz, VRef calibration in efuse, Coding Scheme None
+Crystal is 40MHz
+MAC: 10:97:bd:d5:4f:b0
+Uploading stub...
+Running stub...
+Stub running...
+Changing baud rate to 921600
+Changed.
+Configuring flash size...
+Flash will be erased from 0x00001000 to 0x00007fff...
+Flash will be erased from 0x00008000 to 0x00008fff...
+Flash will be erased from 0x00010000 to 0x0004cfff...
+Compressed 26480 bytes to 16511...
+Writing at 0x00001000... (50 %)Writing at 0x000076bf... (100 %)Wrote 26480 bytes (16511 compressed) at 0x00001000 in 0.8 seconds (effective 281.8 kbit/s)...
+Hash of data verified.
+Compressed 3072 bytes to 103...
+Writing at 0x00008000... (100 %)Wrote 3072 bytes (103 compressed) at 0x00008000 in 0.1 seconds (effective 308.4 kbit/s)...
+Hash of data verified.
+Compressed 246848 bytes to 130470...
+Writing at 0x00010000... (12 %)Writing at 0x0001cbe6... (25 %)Writing at 0x00024674... (37 %)Writing at 0x0002a5c4... (50 %)Writing at 0x00030300... (62 %)Writing at 0x00038d40... (75 %)Writing at 0x00040e67... (87 %)Writing at 0x000467c1... (100 %)Wrote 246848 bytes (130470 compressed) at 0x00010000 in 2.9 seconds (effective 678.1 kbit/s)...
+Hash of data verified.
+
+Leaving...
+Hard resetting via RTS pin...
+ets Jul 29 2019 12:21:46
+
+rst:0x1 (POWERON_RESET),boot:0x12 (SPI_FAST_FLASH_BOOT)
+configsip: 0, SPIWP:0xee
+clk_drv:0x00,q_drv:0x00,d_drv:0x00,cs0_drv:0x00,hd_drv:0x00,wp_drv:0x00
+mode:DIO, clock div:2
+load:0x3fff0030,len:7000
+load:0x40078000,len:15520
+load:0x40080400,len:3864
+entry 0x40080650
+[0;32mI (27) boot: ESP-IDF v5.0.7-528-g57ef4c4965 2nd stage bootloader[0m
+[0;32mI (27) boot: compile time 08:29:58[0m
+[0;32mI (27) boot: Multicore bootloader[0m
+[0;32mI (32) boot: chip revision: v3.0[0m
+[0;32mI (36) boot.esp32: SPI Speed      : 40MHz[0m
+[0;32mI (40) boot.esp32: SPI Mode       : DIO[0m
+[0;32mI (45) boot.esp32: SPI Flash Size : 2MB[0m
+[0;32mI (49) boot: Enabling RNG early entropy source...[0m
+[0;32mI (55) boot: Partition Table:[0m
+[0;32mI (58) boot: ## Label            Usage          Type ST Offset   Length[0m
+[0;32mI (66) boot:  0 nvs              WiFi data        01 02 00009000 00006000[0m
+[0;32mI (73) boot:  1 phy_init         RF data          01 01 0000f000 00001000[0m
+[0;32mI (81) boot:  2 factory          factory app      00 00 00010000 00100000[0m
+[0;32mI (88) boot: End of partition table[0m
+[0;32mI (92) esp_image: segment 0: paddr=00010020 vaddr=3f400020 size=0d5ach ( 54700) map[0m
+[0;32mI (121) esp_image: segment 1: paddr=0001d5d4 vaddr=3ffb0000 size=02050h (  8272) load[0m
+[0;32mI (124) esp_image: segment 2: paddr=0001f62c vaddr=40080000 size=009ech (  2540) load[0m
+[0;32mI (128) esp_image: segment 3: paddr=00020020 vaddr=400d0020 size=1ebf4h (125940) map[0m
+[0;32mI (180) esp_image: segment 4: paddr=0003ec1c vaddr=400809ec size=0d7fch ( 55292) load[0m
+[0;32mI (210) boot: Loaded app from partition at offset 0x10000[0m
+[0;32mI (210) boot: Disabling RNG early entropy source...[0m
+[0;32mI (222) cpu_start: Multicore app[0m
+[0;32mI (222) cpu_start: Pro cpu up.[0m
+[0;32mI (223) cpu_start: Starting app cpu, entry point is 0x40081228[0m
+[0;32mI (0) cpu_start: App cpu up.[0m
+[0;32mI (242) cpu_start: Pro cpu start user code[0m
+[0;32mI (242) cpu_start: cpu freq: 160000000 Hz[0m
+[0;32mI (243) cpu_start: Application information:[0m
+[0;32mI (247) cpu_start: Project name:     test_mb_controller_mapping_unit[0m
+[0;32mI (254) cpu_start: App version:      v2.0.0-beta-11-g3117942[0m
+[0;32mI (261) cpu_start: Compile time:     Dec 20 2024 08:29:41[0m
+[0;32mI (267) cpu_start: ELF file SHA256:  418fc2af20590a2d...[0m
+[0;32mI (273) cpu_start: ESP-IDF:          v5.0.7-528-g57ef4c4965[0m
+[0;32mI (279) cpu_start: Min chip rev:     v0.0[0m
+[0;32mI (284) cpu_start: Max chip rev:     v3.99 [0m
+[0;32mI (288) cpu_start: Chip rev:         v3.0[0m
+[0;32mI (293) heap_init: Initializing. RAM available for dynamic allocation:[0m
+[0;32mI (301) heap_init: At 3FFAE6E0 len 00001920 (6 KiB): DRAM[0m
+[0;32mI (306) heap_init: At 3FFBAC78 len 00025388 (148 KiB): DRAM[0m
+[0;32mI (313) heap_init: At 3FFE0440 len 00003AE0 (14 KiB): D/IRAM[0m
+[0;32mI (319) heap_init: At 3FFE4350 len 0001BCB0 (111 KiB): D/IRAM[0m
+[0;32mI (326) heap_init: At 4008E1E8 len 00011E18 (71 KiB): IRAM[0m
+[0;32mI (333) spi_flash: detected chip: generic[0m
+[0;32mI (336) spi_flash: flash io: dio[0m
+[0;33mW (340) spi_flash: Detected size(4096k) larger than the size in the binary image header(2048k). Using the size in the binary image header.[0m
+[0;32mI (354) app_start: Starting scheduler on CPU0[0m
+[0;32[0;32mI (358) app_start: Starting scheduler on CPU1[0m
+mI (358) main_task: Started on CPU0[0m
+[0;32mI (368) main_task: Calling app_main()[0m
+Unity test run 1 of 1
+TEST(unit_test_controller, test_master_send_read_request)[0;32mI (378) MB_CONTROLLER_TEST: TEST: Check the modbus master controller handles read requests correctly.[0m
+[0;33mW (388) mb_object.master.stub: Create fake mb_base object.[0m
+[0;33mW (388) mb_object.master.stub: Enable fake mb_base object.[0m
+[0;32mI (398) MB_CONTROLLER_TEST: Test CID #0, MB_input_reg-0, Data[0m
+[0;32mI (398) MB_CONTROLLER_TEST: 04 00 00 00 02 [0m
+[0;33mW (408) mb_object.master.stub: Poll function called of fake mb_base object.[0m
+[0;33mW (418) mb_object.master.stub: Disable fake mb_base object.[0m
+[0;33mW (2418) mb_object.master.stub: Delete fake mb_base object.[0m
+[0;32mI (2418) MB_CONTROLLER_TEST: Test passed successfully.[0m
+[0;33mW (2418) mb_object.master.stub: Create fake mb_base object.[0m
+[0;33mW (2418) mb_object.master.stub: Enable fake mb_base object.[0m
+[0;32mI (2428) MB_CONTROLLER_TEST: Test CID #0, MB_input_reg-0, Data[0m
+[0;33mW (2438) mb_object.master.stub: Poll function called of fake mb_base object.[0m
+[0;31mE (2438) MB_CONTROLLER_MASTER: mbc_master_get_parameter(128): Master get parameter failure, error=(0x107) (ESP_ERR_TIMEOUT).[0m
+[0;33mW (2448) mb_object.master.stub: Poll function called of fake mb_base object.[0m
+[0;32mI (2458) MB_CONTROLLER_TEST: 04 00 00 00 02 [0m
+[0;33mW (2468) mb_object.master.stub: Poll function called of fake mb_base object.[0m
+[0;33mW (2478) mb_object.master.stub: Disable fake mb_base object.[0m
+[0;33mW (4478) mb_object.master.stub: Delete fake mb_base object.[0m
+[0;32mI (4478) MB_CONTROLLER_TEST: Test passed successfully.[0m
+[0;33mW (4478) mb_object.master.stub: Create fake mb_base object.[0m
+[0;33mW (4478) mb_object.master.stub: Enable fake mb_base object.[0m
+[0;32mI (4488) MB_CONTROLLER_TEST: Test CID #0, MB_input_reg-0, Data[0m
+[0;33mW (4498) mb_object.master.stub: Poll function called of fake mb_base object.[0m
+[0;31mE (4498) MB_CONTROLLER_MASTER: mbc_master_get_parameter(128): Master get parameter failure, error=(0x108) (ESP_ERR_INVALID_RESPONSE).[0m
+[0;33mW (4508) mb_object.master.stub: Poll function called of fake mb_base object.[0m
+[0;32mI (4518) MB_CONTROLLER_TEST: 04 00 00 00 02 [0m
+[0;33mW (4528) mb_object.master.stub: Poll function called of fake mb_base object.[0m
+[0;33mW (4538) mb_object.master.stub: Disable fake mb_base object.[0m
+[0;33mW (6538) mb_object.master.stub: Delete fake mb_base object.[0m
+[0;32mI (6538) MB_CONTROLLER_TEST: Test passed successfully.[0m
+[0;33mW (6538) mb_object.master.stub: Create fake mb_base object.[0m
+[0;33mW (6538) mb_object.master.stub: Enable fake mb_base object.[0m
+[0;32mI (6548) MB_CONTROLLER_TEST: Test CID #1, MB_hold_reg-0, Data[0m
+[0;33mW (6558) mb_object.master.stub: Poll function called of fake mb_base object.[0m
+[0;32mI (6558) MB_CONTROLLER_TEST: 03 00 01 00 02 [0m
+[0;33mW (6568) mb_object.master.stub: Poll function called of fake mb_base object.[0m
+[0;33mW (6578) mb_object.master.stub: Disable fake mb_base object.[0m
+[0;33mW (8578) mb_object.master.stub: Delete fake mb_base object.[0m
+[0;32mI (8578) MB_CONTROLLER_TEST: Test passed successfully.[0m
+[0;33mW (8578) mb_object.master.stub: Create fake mb_base object.[0m
+[0;33mW (8578) mb_object.master.stub: Enable fake mb_base object.[0m
+[0;32mI (8588) MB_CONTROLLER_TEST: Test CID #1, MB_hold_reg-0, Data[0m
+[0;33mW (8598) mb_object.master.stub: Poll function called of fake mb_base object.[0m
+[0;31mE (8598) MB_CONTROLLER_MASTER: mbc_master_get_parameter(128): Master get parameter failure, error=(0x108) (ESP_ERR_INVALID_RESPONSE).[0m
+[0;33mW (8608) mb_object.master.stub: Poll function called of fake mb_base object.[0m
+[0;32mI (8618) MB_CONTROLLER_TEST: 03 00 01 00 02 [0m
+[0;33mW (8628) mb_object.master.stub: Poll function called of fake mb_base object.[0m
+[0;33mW (8638) mb_object.master.stub: Disable fake mb_base object.[0m
+[0;33mW (10638) mb_object.master.stub: Delete fake mb_base object.[0m
+[0;32mI (10638) MB_CONTROLLER_TEST: Test passed successfully.[0m
+[0;33mW (10638) mb_object.master.stub: Create fake mb_base object.[0m
+[0;33mW (10638) mb_object.master.stub: Enable fake mb_base object.[0m
+[0;32mI (10648) MB_CONTROLLER_TEST: Test CID #3, MB_coil_reg-0, Bit[0m
+[0;33mW (10658) mb_object.master.stub: Poll function called of fake mb_base object.[0m
+[0;32mI (10658) MB_CONTROLLER_TEST: 01 00 03 00 0a [0m
+[0;33mW (10668) mb_object.master.stub: Poll function called of fake mb_base object.[0m
+[0;33mW (10678) mb_object.master.stub: Disable fake mb_base object.[0m
+[0;33mW (12678) mb_object.master.stub: Delete fake mb_base object.[0m
+[0;32mI (12678) MB_CONTROLLER_TEST: Test passed successfully.[0m
+[0;33mW (12678) mb_object.master.stub: Create fake mb_base object.[0m
+[0;33mW (12678) mb_object.master.stub: Enable fake mb_base object.[0m
+[0;32mI (12688) MB_CONTROLLER_TEST: Test CID #3, MB_coil_reg-0, Bit[0m
+[0;33mW (12698) mb_object.master.stub: Poll function called of fake mb_base object.[0m
+[0;31mE (12698) MB_CONTROLLER_MASTER: mbc_master_get_parameter(128): Master get parameter failure, error=(0x107) (ESP_ERR_TIMEOUT).[0m
+[0;33mW (12708) mb_object.master.stub: Poll function called of fake mb_base object.[0m
+[0;32mI (12718) MB_CONTROLLER_TEST: 01 00 03 00 0a [0m
+[0;33mW (12728) mb_object.master.stub: Poll function called of fake mb_base object.[0m
+[0;33mW (12738) mb_object.master.stub: Disable fake mb_base object.[0m
+[0;33mW (14738) mb_object.master.stub: Delete fake mb_base object.[0m
+[0;32mI (14738) MB_CONTROLLER_TEST: Test passed successfully.[0m
+[0;33mW (14738) mb_object.master.stub: Create fake mb_base object.[0m
+[0;33mW (14738) mb_object.master.stub: Enable fake mb_base object.[0m
+[0;32mI (14748) MB_CONTROLLER_TEST: Test CID #4, MB_discr_reg-0, Bit[0m
+[0;33mW (14758) mb_object.master.stub: Poll function called of fake mb_base object.[0m
+[0;32mI (14758) MB_CONTROLLER_TEST: 02 00 04 00 0a [0m
+[0;33mW (14768) mb_object.master.stub: Poll function called of fake mb_base object.[0m
+[0;33mW (14778) mb_object.master.stub: Disable fake mb_base object.[0m
+[0;33mW (16778) mb_object.master.stub: Delete fake mb_base object.[0m
+[0;32mI (16778) MB_CONTROLLER_TEST: Test passed successfully.[0m
+[0;33mW (16778) mb_object.master.stub: Create fake mb_base object.[0m
+[0;33mW (16778) mb_object.master.stub: Enable fake mb_base object.[0m
+[0;32mI (16788) MB_CONTROLLER_TEST: Test CID #4, MB_discr_reg-0, Bit[0m
+[0;33mW (16798) mb_object.master.stub: Poll function called of fake mb_base object.[0m
+[0;31mE (16798) MB_CONTROLLER_MASTER: mbc_master_get_parameter(128): Master get parameter failure, error=(0x107) (ESP_ERR_TIMEOUT).[0m
+[0;33mW (16808) mb_object.master.stub: Poll function called of fake mb_base object.[0m
+[0;32mI (16818) MB_CONTROLLER_TEST: 02 00 04 00 0a [0m
+[0;33mW (16828) mb_object.master.stub: Poll function called of fake mb_base object.[0m
+[0;33mW (16838) mb_object.master.stub: Disable fake mb_base object.[0m
+[0;33mW (18838) mb_object.master.stub: Delete fake mb_base object.[0m
+[0;32mI (18838) MB_CONTROLLER_TEST: Test passed successfully.[0m
+MALLOC_CAP_8BIT usage: Free memory delta: 0 Leak threshold: -128 
+MALLOC_CAP_32BIT usage: Free memory delta: 0 Leak threshold: -128 
+ PASS
+TEST(unit_test_controller, test_master_send_write_request)[0;32mI (18848) MB_CONTROLLER_TEST: TEST: Check the modbus master controller handles write requests correctly.[0m
+[0;33mW (18858) mb_object.master.stub: Create fake mb_base object.[0m
+[0;33mW (18868) mb_object.master.stub: Enable fake mb_base object.[0m
+[0;32mI (18878) MB_CONTROLLER_TEST: Test CID #1, MB_hold_reg-0, Data[0m
+[0;32mI (18878) MB_CONTROLLER_TEST: 10 00 01 00 02 04 22 11 44 33 [0m
+[0;33mW (18888) mb_object.master.stub: Poll function called of fake mb_base object.[0m
+[0;33mW (18898) mb_object.master.stub: Disable fake mb_base object.[0m
+[0;33mW (20898) mb_object.master.stub: Delete fake mb_base object.[0m
+[0;32mI (20898) MB_CONTROLLER_TEST: Test passed successfully.[0m
+[0;33mW (20898) mb_object.master.stub: Create fake mb_base object.[0m
+[0;33mW (20898) mb_object.master.stub: Enable fake mb_base object.[0m
+[0;32mI (20908) MB_CONTROLLER_TEST: Test CID #1, MB_hold_reg-0, Data[0m
+[0;33mW (20918) mb_object.master.stub: Poll function called of fake mb_base object.[0m
+[0;31mE (20918) MB_CONTROLLER_MASTER: mbc_master_set_parameter(90): Master set parameter failure, error=(0x108) (ESP_ERR_INVALID_RESPONSE).[0m
+[0;33mW (20928) mb_object.master.stub: Poll function called of fake mb_base object.[0m
+[0;32mI (20938) MB_CONTROLLER_TEST: 10 00 01 00 02 04 22 11 44 33 [0m
+[0;33mW (20948) mb_object.master.stub: Poll function called of fake mb_base object.[0m
+[0;33mW (20958) mb_object.master.stub: Disable fake mb_base object.[0m
+[0;33mW (22958) mb_object.master.stub: Delete fake mb_base object.[0m
+[0;32mI (22958) MB_CONTROLLER_TEST: Test passed successfully.[0m
+[0;33mW (22958) mb_object.master.stub: Create fake mb_base object.[0m
+[0;33mW (22958) mb_object.master.stub: Enable fake mb_base object.[0m
+[0;32mI (22968) MB_CONTROLLER_TEST: Test CID #3, MB_coil_reg-0, Bit[0m
+[0;33mW (22978) mb_object.master.stub: Poll function called of fake mb_base object.[0m
+[0;32mI (22978) MB_CONTROLLER_TEST: 0f 00 03 00 0a 02 11 22 [0m
+[0;33mW (22988) mb_object.master.stub: Poll function called of fake mb_base object.[0m
+[0;33mW (22998) mb_object.master.stub: Disable fake mb_base object.[0m
+[0;33mW (24998) mb_object.master.stub: Delete fake mb_base object.[0m
+[0;32mI (24998) MB_CONTROLLER_TEST: Test passed successfully.[0m
+[0;33mW (24998) mb_object.master.stub: Create fake mb_base object.[0m
+[0;33mW (24998) mb_object.master.stub: Enable fake mb_base object.[0m
+[0;32mI (25008) MB_CONTROLLER_TEST: Test CID #3, MB_coil_reg-0, Bit[0m
+[0;33mW (25018) mb_object.master.stub: Poll function called of fake mb_base object.[0m
+[0;31mE (25018) MB_CONTROLLER_MASTER: mbc_master_set_parameter(90): Master set parameter failure, error=(0x107) (ESP_ERR_TIMEOUT).[0m
+[0;33mW (25028) mb_object.master.stub: Poll function called of fake mb_base object.[0m
+[0;32mI (25038) MB_CONTROLLER_TEST: 0f 00 03 00 0a 02 11 22 [0m
+[0;33mW (25048) mb_object.master.stub: Poll function called of fake mb_base object.[0m
+[0;33mW (25058) mb_object.master.stub: Disable fake mb_base object.[0m
+[0;33mW (27058) mb_object.master.stub: Delete fake mb_base object.[0m
+[0;32mI (27058) MB_CONTROLLER_TEST: Test passed successfully.[0m
+MALLOC_CAP_8BIT usage: Free memory delta: 0 Leak threshold: -128 
+MALLOC_CAP_32BIT usage: Free memory delta: 0 Leak threshold: -128 
+ PASS
+TEST(unit_test_controller, test_master_register_callbacks)[0;32mI (27068) MB_CONTROLLER_TEST: TEST: Check the modbus master controller handles mapping callback functions correctly.[0m
+[0;33mW (27078) mb_object.master.stub: Create fake mb_base object.[0m
+[0;33mW (27088) mb_object.master.stub: Enable fake mb_base object.[0m
+[0;32mI (27098) MB_CONTROLLER_TEST, INPUT_BUFF: 11 22 33 44 [0m
+[0;32mI (27098) MB_CONTROLLER_TEST, OUTPUT_BUFF: 22 11 44 33 [0m
+[0;33mW (27108) mb_object.master.stub: Poll function called of fake mb_base object.[0m
+[0;33mW (27118) mb_object.master.stub: Disable fake mb_base object.[0m
+[0;33mW (29118) mb_object.master.stub: Delete fake mb_base object.[0m
+[0;32mI (29118) MB_CONTROLLER_TEST: Test passed successfully.[0m
+[0;33mW (29118) mb_object.master.stub: Create fake mb_base object.[0m
+[0;33mW (29118) mb_object.master.stub: Enable fake mb_base object.[0m
+[0;32mI (29128) MB_CONTROLLER_TEST, INPUT_BUFF: 11 22 33 44 [0m
+[0;32mI (29128) MB_CONTROLLER_TEST, OUTPUT_BUFF: 22 11 44 33 [0m
+[0;33mW (29138) mb_object.master.stub: Poll function called of fake mb_base object.[0m
+[0;33mW (29148) mb_object.master.stub: Disable fake mb_base object.[0m
+[0;33mW (31148) mb_object.master.stub: Delete fake mb_base object.[0m
+[0;32mI (31148) MB_CONTROLLER_TEST: Test passed successfully.[0m
+[0;33mW (31148) mb_object.master.stub: Create fake mb_base object.[0m
+[0;33mW (31148) mb_object.master.stub: Enable fake mb_base object.[0m
+[0;32mI (31158) MB_CONTROLLER_TEST, INPUT_BUFF: ff ff [0m
+[0;32mI (31158) MB_CONTROLLER_TEST, OUTPUT_BUFF: ff 03 [0m
+[0;33mW (31168) mb_object.master.stub: Poll function called of fake mb_base object.[0m
+[0;33mW (31178) mb_object.master.stub: Disable fake mb_base object.[0m
+[0;33mW (33178) mb_object.master.stub: Delete fake mb_base object.[0m
+[0;32mI (33178) MB_CONTROLLER_TEST: Test passed successfully.[0m
+[0;33mW (33178) mb_object.master.stub: Create fake mb_base object.[0m
+[0;33mW (33178) mb_object.master.stub: Enable fake mb_base object.[0m
+[0;32mI (33188) MB_CONTROLLER_TEST, INPUT_BUFF: ff ff [0m
+[0;32mI (33188) MB_CONTROLLER_TEST, OUTPUT_BUFF: ff 03 [0m
+[0;33mW (33198) mb_object.master.stub: Poll function called of fake mb_base object.[0m
+[0;33mW (33208) mb_object.master.stub: Disable fake mb_base object.[0m
+[0;33mW (35208) mb_object.master.stub: Delete fake mb_base object.[0m
+[0;32mI (35208) MB_CONTROLLER_TEST: Test passed successfully.[0m
+MALLOC_CAP_8BIT usage: Free memory delta: 0 Leak threshold: -128 
+MALLOC_CAP_32BIT usage: Free memory delta: 0 Leak threshold: -128 
+ PASS
+TEST(unit_test_controller, test_slave_check_area_descriptor)[0;32mI (35218) MB_CONTROLLER_TEST: TEST: Check the modbus master controller defines the area descriptors correctly.[0m
+[0;33mW (35228) mb_object.master.stub: Create fake mb_base object.[0m
+[0;32mI (35238) MB_CONTROLLER_TEST: Test CID #5, MB_input_area, Data[0m
+[0;32mI (35248) MB_CONTROLLER_TEST: Area (type, reg_start, address, size): 1, 2, 0x3ffb29ca, 20, is defined.[0m
+[0;32mI (35258) MB_CONTROLLER_TEST: Area overlapped (type, reg_start, address, size): 1, 10, 0x3ffb29ca, 2.[0m
+[0;31mE (35268) MB_CONTROLLER_SLAVE: mbc_slave_set_descriptor(241): mb incorrect descriptor or already defined.[0m
+[0;32mI (35278) MB_CONTROLLER_TEST: Area redefine (type, reg_start, address, size): 1, 2, 0x3ffb29c8, 20.[0m
+[0;31mE (35288) MB_CONTROLLER_SLAVE: mbc_slave_set_descriptor(241): mb incorrect descriptor or already defined.[0m
+[0;33mW (35318) mb_object.master.stub: Delete fake mb_base object.[0m
+[0;32mI (35318) MB_CONTROLLER_TEST: Test passed successfully.[0m
+[0;33mW (35318) mb_object.master.stub: Create fake mb_base object.[0m
+[0;32mI (35318) MB_CONTROLLER_TEST: Test CID #6, MB_holding_area, Data[0m
+[0;32mI (35328) MB_CONTROLLER_TEST: Area (type, reg_start, address, size): 0, 2, 0x3ffb29b2, 20, is defined.[0m
+[0;32mI (35338) MB_CONTROLLER_TEST: Area overlapped (type, reg_start, address, size): 0, 10, 0x3ffb29b2, 2.[0m
+[0;31mE (35348) MB_CONTROLLER_SLAVE: mbc_slave_set_descriptor(241): mb incorrect descriptor or already defined.[0m
+[0;32mI (35358) MB_CONTROLLER_TEST: Area redefine (type, reg_start, address, size): 0, 2, 0x3ffb29b0, 20.[0m
+[0;31mE (35368) MB_CONTROLLER_SLAVE: mbc_slave_set_descriptor(241): mb incorrect descriptor or already defined.[0m
+[0;33mW (35398) mb_object.master.stub: Delete fake mb_base object.[0m
+[0;32mI (35398) MB_CONTROLLER_TEST: Test passed successfully.[0m
+[0;33mW (35398) mb_object.master.stub: Create fake mb_base object.[0m
+[0;32mI (35398) MB_CONTROLLER_TEST: Test CID #7, MB_coil_area, Bit[0m
+[0;32mI (35408) MB_CONTROLLER_TEST: Area (type, reg_start, address, size): 2, 2, 0x3ffb299a, 2, is defined.[0m
+[0;32mI (35418) MB_CONTROLLER_TEST: Area overlapped (type, reg_start, address, size): 2, 10, 0x3ffb299a, 2.[0m
+[0;31mE (35428) MB_CONTROLLER_SLAVE: mbc_slave_set_descriptor(241): mb incorrect descriptor or already defined.[0m
+[0;32mI (35438) MB_CONTROLLER_TEST: Area redefine (type, reg_start, address, size): 2, 2, 0x3ffb2998, 2.[0m
+[0;31mE (35448) MB_CONTROLLER_SLAVE: mbc_slave_set_descriptor(241): mb incorrect descriptor or already defined.[0m
+[0;33mW (35478) mb_object.master.stub: Delete fake mb_base object.[0m
+[0;32mI (35478) MB_CONTROLLER_TEST: Test passed successfully.[0m
+[0;33mW (35478) mb_object.master.stub: Create fake mb_base object.[0m
+[0;32mI (35478) MB_CONTROLLER_TEST: Test CID #8, MB_discr_area, Bit[0m
+[0;32mI (35488) MB_CONTROLLER_TEST: Area (type, reg_start, address, size): 2, 2, 0x3ffb2982, 2, is defined.[0m
+[0;32mI (35498) MB_CONTROLLER_TEST: Area overlapped (type, reg_start, address, size): 2, 10, 0x3ffb2982, 2.[0m
+[0;31mE (35508) MB_CONTROLLER_SLAVE: mbc_slave_set_descriptor(241): mb incorrect descriptor or already defined.[0m
+[0;32mI (35518) MB_CONTROLLER_TEST: Area redefine (type, reg_start, address, size): 2, 2, 0x3ffb2980, 2.[0m
+[0;31mE (35528) MB_CONTROLLER_SLAVE: mbc_slave_set_descriptor(241): mb incorrect descriptor or already defined.[0m
+[0;33mW (35558) mb_object.master.stub: Delete fake mb_base object.[0m
+[0;32mI (35558) MB_CONTROLLER_TEST: Test passed successfully.[0m
+MALLOC_CAP_8BIT usage: Free memory delta: 0 Leak threshold: -128 
+MALLOC_CAP_32BIT usage: Free memory delta: 0 Leak threshold: -128 
+ PASS
+
+-----------------------
+4 Tests 0 Failures 0 Ignored 
+OK
+
+Tests finished, rc=0
+[0;32mI (35588) main_task: Returned from app_main()[0m

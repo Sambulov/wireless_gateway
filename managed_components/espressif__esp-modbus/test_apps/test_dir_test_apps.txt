@@ -1,0 +1,10 @@
+total 32K
+drwxr-xr-x 2 root root 4.0K Dec 20 09:35 __pycache__
+drwxrwxrwx 6 root root 4.0K Dec 20 09:35 adapter_tests
+-rw-rw-rw- 1 root root 3.1K Dec  6 17:25 conftest.py
+drwxrwxrwx 7 root root 4.0K Dec 20 09:35 physical_tests
+drwxr-xr-x 3 root root 4.0K Dec 20 09:35 pytest_embedded_log
+-rw-r--r-- 1 root root  641 Dec 20 09:38 results_v5.2.3_test_apps.xml
+drwxrwxrwx 4 root root 4.0K Dec  6 17:25 test_common
+-rw-r--r-- 1 root root    0 Dec 20 09:38 test_dir_test_apps.txt
+drwxrwxrwx 6 root root 4.0K Dec  6 17:25 unit_tests

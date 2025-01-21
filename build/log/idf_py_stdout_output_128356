@@ -1,0 +1,37 @@
+Command: ninja all
+[1/12] Building C object esp-idf/ws_api/CMakeFiles/__idf_ws_api.dir/ws_api.c.obj
+[2/12] Linking C static library esp-idf/ws_api/libws_api.a
+[3/12] Building C object esp-idf/main/CMakeFiles/__idf_main.dir/ws_echo_server.c.obj
+[4/12] Linking C static library esp-idf/main/libmain.a
+[5/12] Performing build step for 'bootloader'
+[0/1] Re-running CMake...
+-- Minimal build - OFF
+-- Building ESP-IDF components for target esp32
+-- Project sdkconfig file /home/vvmitrofanov/projects/proj/ws_echo_server/sdkconfig
+-- Compiler supported targets: xtensa-esp-elf
+-- Adding linker script /home/vvmitrofanov/projects/proj/esp-idf/components/soc/esp32/ld/esp32.peripherals.ld
+-- Bootloader project name: "bootloader" version: 1
+-- Adding linker script /home/vvmitrofanov/projects/proj/esp-idf/components/esp_rom/esp32/ld/esp32.rom.ld
+-- Adding linker script /home/vvmitrofanov/projects/proj/esp-idf/components/esp_rom/esp32/ld/esp32.rom.api.ld
+-- Adding linker script /home/vvmitrofanov/projects/proj/esp-idf/components/esp_rom/esp32/ld/esp32.rom.libgcc.ld
+-- Adding linker script /home/vvmitrofanov/projects/proj/esp-idf/components/esp_rom/esp32/ld/esp32.rom.libc-funcs.ld
+-- Adding linker script /home/vvmitrofanov/projects/proj/esp-idf/components/bootloader/subproject/main/ld/esp32/bootloader.ld
+-- Adding linker script /home/vvmitrofanov/projects/proj/esp-idf/components/bootloader/subproject/main/ld/esp32/bootloader.rom.ld
+-- Components: bootloader bootloader_support efuse esp_app_format esp_bootloader_format esp_common esp_hw_support esp_rom esp_security esp_system esptool_py freertos hal log main micro-ecc newlib partition_table soc spi_flash xtensa
+-- Component paths: /home/vvmitrofanov/projects/proj/esp-idf/components/bootloader /home/vvmitrofanov/projects/proj/esp-idf/components/bootloader_support /home/vvmitrofanov/projects/proj/esp-idf/components/efuse /home/vvmitrofanov/projects/proj/esp-idf/components/esp_app_format /home/vvmitrofanov/projects/proj/esp-idf/components/esp_bootloader_format /home/vvmitrofanov/projects/proj/esp-idf/components/esp_common /home/vvmitrofanov/projects/proj/esp-idf/components/esp_hw_support /home/vvmitrofanov/projects/proj/esp-idf/components/esp_rom /home/vvmitrofanov/projects/proj/esp-idf/components/esp_security /home/vvmitrofanov/projects/proj/esp-idf/components/esp_system /home/vvmitrofanov/projects/proj/esp-idf/components/esptool_py /home/vvmitrofanov/projects/proj/esp-idf/components/freertos /home/vvmitrofanov/projects/proj/esp-idf/components/hal /home/vvmitrofanov/projects/proj/esp-idf/components/log /home/vvmitrofanov/projects/proj/esp-idf/components/bootloader/subproject/main /home/vvmitrofanov/projects/proj/esp-idf/components/bootloader/subproject/components/micro-ecc /home/vvmitrofanov/projects/proj/esp-idf/components/newlib /home/vvmitrofanov/projects/proj/esp-idf/components/partition_table /home/vvmitrofanov/projects/proj/esp-idf/components/soc /home/vvmitrofanov/projects/proj/esp-idf/components/spi_flash /home/vvmitrofanov/projects/proj/esp-idf/components/xtensa
+-- Configuring done
+-- Generating done
+-- Build files have been written to: /home/vvmitrofanov/projects/proj/ws_echo_server/build/bootloader
+[1/1] cd /home/vvmitrofanov/projects/proj/ws_echo_server/build/bootloader/esp-idf/esptool_py && /home/vvmitrofanov/.espressif/python_env/idf5.5_py3.10_env/bin/python /home/vvmitrofanov/projects/proj/esp-idf/components/partition_table/check_sizes.py --offset 0x8000 bootloader 0x1000 /home/vvmitrofanov/projects/proj/ws_echo_server/build/bootloader/bootloader.bin
+Bootloader binary size 0x6600 bytes. 0xa00 bytes (9%) free.
+[6/10] Generating ld/sections.ld
+[7/10] Building C object CMakeFiles/ws_echo_server.elf.dir/project_elf_src_esp32.c.obj
+[8/10] Linking CXX executable ws_echo_server.elf
+[9/10] Generating binary image from built executable
+esptool.py v4.9.dev3
+Creating esp32 image...
+Merged 2 ELF sections
+Successfully created esp32 image.
+Generated /home/vvmitrofanov/projects/proj/ws_echo_server/build/ws_echo_server.bin
+[10/10] cd /home/vvmitrofanov/projects/proj/ws_echo_server/build/esp-idf/esptool_py && /home/vvmitrofanov/.espressif/python_env/idf5.5_py3.10_env/bin/python /home/vvmitrofanov/projects/proj/esp-idf/components/partition_table/check_sizes.py --offset 0x8000 partition --type app /home/vvmitrofanov/projects/proj/ws_echo_server/build/partition_table/partition-table.bin /home/vvmitrofanov/projects/proj/ws_echo_server/build/ws_echo_server.bin
+ws_echo_server.bin binary size 0xc4d60 bytes. Smallest app partition is 0x100000 bytes. 0x3b2a0 bytes (23%) free.

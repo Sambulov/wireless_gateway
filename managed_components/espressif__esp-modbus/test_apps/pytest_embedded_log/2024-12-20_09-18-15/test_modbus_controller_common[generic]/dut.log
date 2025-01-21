@@ -1,0 +1,196 @@
+Serial port /dev/ttyUSB3
+Connecting....
+Connecting....
+esptool.py v4.7.0
+Found 5 serial ports
+Chip is ESP32-D0WD-V3 (revision v3.0)
+Features: WiFi, BT, Dual Core, 240MHz, VRef calibration in efuse, Coding Scheme None
+Crystal is 40MHz
+MAC: 10:97:bd:d5:4f:b0
+Uploading stub...
+Running stub...
+Stub running...
+Changing baud rate to 921600
+Changed.
+Configuring flash size...
+Flash will be erased from 0x00001000 to 0x00007fff...
+Flash will be erased from 0x00008000 to 0x00008fff...
+Flash will be erased from 0x00010000 to 0x00048fff...
+Compressed 26480 bytes to 16508...
+Writing at 0x00001000... (50 %)Writing at 0x000076bf... (100 %)Wrote 26480 bytes (16508 compressed) at 0x00001000 in 0.8 seconds (effective 281.7 kbit/s)...
+Hash of data verified.
+Compressed 3072 bytes to 103...
+Writing at 0x00008000... (100 %)Wrote 3072 bytes (103 compressed) at 0x00008000 in 0.1 seconds (effective 308.2 kbit/s)...
+Hash of data verified.
+Compressed 233168 bytes to 122280...
+Writing at 0x00010000... (12 %)Writing at 0x0001c917... (25 %)Writing at 0x00023bed... (37 %)Writing at 0x00029d58... (50 %)Writing at 0x0002fae8... (62 %)Writing at 0x00038992... (75 %)Writing at 0x000406ac... (87 %)Writing at 0x0004625d... (100 %)Wrote 233168 bytes (122280 compressed) at 0x00010000 in 2.6 seconds (effective 706.6 kbit/s)...
+Hash of data verified.
+
+Leaving...
+Hard resetting via RTS pin...
+ets Jul 29 2019 12:21:46
+
+rst:0x1 (POWERON_RESET),boot:0x12 (SPI_FAST_FLASH_BOOT)
+configsip: 0, SPIWP:0xee
+clk_drv:0x00,q_drv:0x00,d_drv:0x00,cs0_drv:0x00,hd_drv:0x00,wp_drv:0x00
+mode:DIO, clock div:2
+load:0x3fff0030,len:7000
+load:0x40078000,len:15520
+load:0x40080400,len:3864
+entry 0x40080650
+[0;32mI (27) boot: ESP-IDF v5.0.7-528-g57ef4c4965 2nd stage bootloader[0m
+[0;32mI (27) boot: compile time 08:27:37[0m
+[0;32mI (27) boot: Multicore bootloader[0m
+[0;32mI (32) boot: chip revision: v3.0[0m
+[0;32mI (36) boot.esp32: SPI Speed      : 40MHz[0m
+[0;32mI (40) boot.esp32: SPI Mode       : DIO[0m
+[0;32mI (45) boot.esp32: SPI Flash Size : 2MB[0m
+[0;32mI (49) boot: Enabling RNG early entropy source...[0m
+[0;32mI (55) boot: Partition Table:[0m
+[0;32mI (58) boot: ## Label            Usage          Type ST Offset   Length[0m
+[0;32mI (66) boot:  0 nvs              WiFi data        01 02 00009000 00006000[0m
+[0;32mI (73) boot:  1 phy_init         RF data          01 01 0000f000 00001000[0m
+[0;32mI (81) boot:  2 factory          factory app      00 00 00010000 00100000[0m
+[0;32mI (88) boot: End of partition table[0m
+[0;32mI (92) esp_image: segment 0: paddr=00010020 vaddr=3f400020 size=0c834h ( 51252) map[0m
+[0;32mI (119) esp_image: segment 1: paddr=0001c85c vaddr=3ffb0000 size=0203ch (  8252) load[0m
+[0;32mI (123) esp_image: segment 2: paddr=0001e8a0 vaddr=40080000 size=01778h (  6008) load[0m
+[0;32mI (128) esp_image: segment 3: paddr=00020020 vaddr=400d0020 size=1e210h (123408) map[0m
+[0;32mI (178) esp_image: segment 4: paddr=0003e238 vaddr=40081778 size=0ac68h ( 44136) load[0m
+[0;32mI (203) boot: Loaded app from partition at offset 0x10000[0m
+[0;32mI (203) boot: Disabling RNG early entropy source...[0m
+[0;32mI (214) cpu_start: Multicore app[0m
+[0;32mI (215) cpu_start: Pro cpu up.[0m
+[0;32mI (215) cpu_start: Starting app cpu, entry point is 0x400810dc[0m
+[0;32mI (0) cpu_start: App cpu up.[0m
+[0;32mI (235) cpu_start: Pro cpu start user code[0m
+[0;32mI (235) cpu_start: cpu freq: 160000000 Hz[0m
+[0;32mI (235) cpu_start: Application information:[0m
+[0;32mI (240) cpu_start: Project name:     test_mb_controller_common_unit[0m
+[0;32mI (247) cpu_start: App version:      v2.0.0-beta-11-g3117942[0m
+[0;32mI (253) cpu_start: Compile time:     Dec 20 2024 08:27:26[0m
+[0;32mI (259) cpu_start: ELF file SHA256:  814a81ee2d4caa40...[0m
+[0;32mI (265) cpu_start: ESP-IDF:          v5.0.7-528-g57ef4c4965[0m
+[0;32mI (271) cpu_start: Min chip rev:     v0.0[0m
+[0;32mI (276) cpu_start: Max chip rev:     v3.99 [0m
+[0;32mI (281) cpu_start: Chip rev:         v3.0[0m
+[0;32mI (286) heap_init: Initializing. RAM available for dynamic allocation:[0m
+[0;32mI (293) heap_init: At 3FFAE6E0 len 00001920 (6 KiB): DRAM[0m
+[0;32mI (299) heap_init: At 3FFBADE8 len 00025218 (148 KiB): DRAM[0m
+[0;32mI (305) heap_init: At 3FFE0440 len 00003AE0 (14 KiB): D/IRAM[0m
+[0;32mI (311) heap_init: At 3FFE4350 len 0001BCB0 (111 KiB): D/IRAM[0m
+[0;32mI (318) heap_init: At 4008C3E0 len 00013C20 (79 KiB): IRAM[0m
+[0;32mI (325) spi_flash: detected chip: generic[0m
+[0;32mI (329) spi_flash: flash io: dio[0m
+[0;33mW (333) spi_flash: Detected size(4096k) larger than the size in the binary image header(2048k). Using the size in the binary image header.[0m
+[0;32mI (347) app_start: Starting scheduler on CPU0[0m
+[0;32[0;32mI (351) app_start: Starting scheduler on CPU1[0m
+mI (351) main_task: Started on CPU0[0m
+[0;32mI (361) main_task: Calling app_main()[0m
+Unity test run 1 of 1
+TEST(unit_test_controller, test_setup_destroy_master_serial)[0;32mI (371) MODBUS_CONTROLLER_COMMON_TEST: TEST: Verify master create-destroy sequence.[0m
+[0;33mW (371) mb_object.master.stub: Create fake mb_base object.[0m
+[0;33mW (2381) mb_object.master.stub: Delete fake mb_base object.[0m
+[0;31mE (2381) mbc_serial.master: mbc_serial_master_create(702): mb object create returns (0x2).[0m
+[0;31mE (2381) MB_CONTROLLER_MASTER: mbc_master_set_descriptor(179): Master interface is not correctly initialized.[0m
+[0;31mE (2391) MB_CONTROLLER_MASTER: mbc_master_delete(21): Master interface is not correctly initialized.[0m
+[0;32mI (2401) MODBUS_CONTROLLER_COMMON_TEST: Test passed successfully.[0m
+MALLOC_CAP_8BIT usage: Free memory delta: 0 Leak threshold: -128 
+MALLOC_CAP_32BIT usage: Free memory delta: 0 Leak threshold: -128 
+ PASS
+TEST(unit_test_controller, test_setup_destroy_slave_serial)[0;32mI (2421) MODBUS_CONTROLLER_COMMON_TEST: TEST: Verify slave create-destroy sequence.[0m
+[0;33mW (2431) mb_object.master.stub: Create fake mb_base object.[0m
+[0;33mW (2461) mb_object.master.stub: Delete fake mb_base object.[0m
+[0;31mE (2461) mbc_serial.slave: mbc_serial_slave_create(264): mbs create returns (0x6).[0m
+[0;31mE (2461) MB_CONTROLLER_SLAVE: mbc_slave_delete(91): Slave interface is not correctly initialized.[0m
+[0;32mI (2471) MODBUS_CONTROLLER_COMMON_TEST: Test passed successfully.[0m
+MALLOC_CAP_8BIT usage: Free memory delta: 0 Leak threshold: -128 
+MALLOC_CAP_32BIT usage: Free memory delta: 0 Leak threshold: -128 
+ PASS
+TEST(unit_test_controller, test_master_send_request_serial)[0;33mW (2491) mb_object.master.stub: Create fake mb_base object.[0m
+[0;33mW (2501) mb_object.master.stub: Enable fake mb_base object.[0m
+[0;32mI (2501) MODBUS_CONTROLLER_COMMON_TEST: Test CID #0, MB_input_reg-0, Data[0m
+[0;33mW (2511) mb_object.master.stub: Poll function called of fake mb_base object.[0m
+[0;33mW (2521) mb_object.master.stub: Disable fake mb_base object.[0m
+[0;33mW (4531) mb_object.master.stub: Delete fake mb_base object.[0m
+[0;32mI (4531) MODBUS_CONTROLLER_COMMON_TEST: Test passed successfully.[0m
+[0;33mW (4531) mb_object.master.stub: Create fake mb_base object.[0m
+[0;33mW (4531) mb_object.master.stub: Enable fake mb_base object.[0m
+[0;32mI (4541) MODBUS_CONTROLLER_COMMON_TEST: Test CID #0, MB_input_reg-0, Data[0m
+[0;33mW (4551) mb_object.master.stub: Poll function called of fake mb_base object.[0m
+[0;31mE (4551) MB_CONTROLLER_MASTER: mbc_master_get_parameter(128): Master get parameter failure, error=(0x107) (ESP_ERR_TIMEOUT).[0m
+[0;33mW (4561) mb_object.master.stub: Poll function called of fake mb_base object.[0m
+[0;33mW (4571) mb_object.master.stub: Disable fake mb_base object.[0m
+[0;33mW (6581) mb_object.master.stub: Delete fake mb_base object.[0m
+[0;32mI (6581) MODBUS_CONTROLLER_COMMON_TEST: Test passed successfully.[0m
+[0;33mW (6581) mb_object.master.stub: Create fake mb_base object.[0m
+[0;33mW (6581) mb_object.master.stub: Enable fake mb_base object.[0m
+[0;32mI (6591) MODBUS_CONTROLLER_COMMON_TEST: Test CID #1, MB_hold_reg-0, Data[0m
+[0;33mW (6601) mb_object.master.stub: Poll function called of fake mb_base object.[0m
+[0;33mW (6601) mb_object.master.stub: Disable fake mb_base object.[0m
+[0;33mW (8611) mb_object.master.stub: Delete fake mb_base object.[0m
+[0;32mI (8611) MODBUS_CONTROLLER_COMMON_TEST: Test passed successfully.[0m
+[0;33mW (8611) mb_object.master.stub: Create fake mb_base object.[0m
+[0;33mW (8611) mb_object.master.stub: Enable fake mb_base object.[0m
+[0;32mI (8621) MODBUS_CONTROLLER_COMMON_TEST: Test CID #1, MB_hold_reg-0, Data[0m
+[0;33mW (8631) mb_object.master.stub: Poll function called of fake mb_base object.[0m
+[0;31mE (8631) MB_CONTROLLER_MASTER: mbc_master_get_parameter(128): Master get parameter failure, error=(0x107) (ESP_ERR_TIMEOUT).[0m
+[0;33mW (8641) mb_object.master.stub: Poll function called of fake mb_base object.[0m
+[0;33mW (8651) mb_object.master.stub: Disable fake mb_base object.[0m
+[0;33mW (10661) mb_object.master.stub: Delete fake mb_base object.[0m
+[0;32mI (10661) MODBUS_CONTROLLER_COMMON_TEST: Test passed successfully.[0m
+[0;33mW (10661) mb_object.master.stub: Create fake mb_base object.[0m
+[0;33mW (10661) mb_object.master.stub: Enable fake mb_base object.[0m
+[0;32mI (10671) MODBUS_CONTROLLER_COMMON_TEST: Test CID #3, MB_coil_reg-0, bit[0m
+[0;33mW (10681) mb_object.master.stub: Poll function called of fake mb_base object.[0m
+[0;33mW (10691) mb_object.master.stub: Disable fake mb_base object.[0m
+[0;33mW (12691) mb_object.master.stub: Delete fake mb_base object.[0m
+[0;32mI (12691) MODBUS_CONTROLLER_COMMON_TEST: Test passed successfully.[0m
+[0;33mW (12691) mb_object.master.stub: Create fake mb_base object.[0m
+[0;33mW (12691) mb_object.master.stub: Enable fake mb_base object.[0m
+[0;32mI (12701) MODBUS_CONTROLLER_COMMON_TEST: Test CID #3, MB_coil_reg-0, bit[0m
+[0;33mW (12711) mb_object.master.stub: Poll function called of fake mb_base object.[0m
+[0;31mE (12721) MB_CONTROLLER_MASTER: mbc_master_get_parameter(128): Master get parameter failure, error=(0x107) (ESP_ERR_TIMEOUT).[0m
+[0;33mW (12731) mb_object.master.stub: Poll function called of fake mb_base object.[0m
+[0;33mW (12731) mb_object.master.stub: Disable fake mb_base object.[0m
+[0;33mW (14741) mb_object.master.stub: Delete fake mb_base object.[0m
+[0;32mI (14741) MODBUS_CONTROLLER_COMMON_TEST: Test passed successfully.[0m
+[0;33mW (14741) mb_object.master.stub: Create fake mb_base object.[0m
+[0;33mW (14741) mb_object.master.stub: Enable fake mb_base object.[0m
+[0;32mI (14751) MODBUS_CONTROLLER_COMMON_TEST: Test CID #4, MB_discr_reg-0, bit[0m
+[0;33mW (14761) mb_object.master.stub: Poll function called of fake mb_base object.[0m
+[0;33mW (14771) mb_object.master.stub: Disable fake mb_base object.[0m
+[0;33mW (16771) mb_object.master.stub: Delete fake mb_base object.[0m
+[0;32mI (16771) MODBUS_CONTROLLER_COMMON_TEST: Test passed successfully.[0m
+[0;33mW (16771) mb_object.master.stub: Create fake mb_base object.[0m
+[0;33mW (16771) mb_object.master.stub: Enable fake mb_base object.[0m
+[0;32mI (16781) MODBUS_CONTROLLER_COMMON_TEST: Test CID #4, MB_discr_reg-0, bit[0m
+[0;33mW (16791) mb_object.master.stub: Poll function called of fake mb_base object.[0m
+[0;31mE (16801) MB_CONTROLLER_MASTER: mbc_master_get_parameter(128): Master get parameter failure, error=(0x107) (ESP_ERR_TIMEOUT).[0m
+[0;33mW (16811) mb_object.master.stub: Poll function called of fake mb_base object.[0m
+[0;33mW (16811) mb_object.master.stub: Disable fake mb_base object.[0m
+[0;33mW (18821) mb_object.master.stub: Delete fake mb_base object.[0m
+[0;32mI (18821) MODBUS_CONTROLLER_COMMON_TEST: Test passed successfully.[0m
+MALLOC_CAP_8BIT usage: Free memory delta: 0 Leak threshold: -128 
+MALLOC_CAP_32BIT usage: Free memory delta: 0 Leak threshold: -128 
+ PASS
+TEST(unit_test_controller, test_setup_destroy_master_tcp)[0;32mI (18831) MODBUS_CONTROLLER_COMMON_TEST: TEST: Verify master create-destroy sequence TCP.[0m
+[0;33mW (18841) mb_object.master.stub: Create fake mb_base object.[0m
+[0;32mI (18851) mbc_tcp.master: mb found config for cid #0, uid=1.[0m
+[0;32mI (18861) mbc_tcp.master: mb found config for cid #1, uid=1.[0m
+[0;32mI (18861) mbc_tcp.master: mb found config for cid #2, uid=1.[0m
+[0;32mI (18871) mbc_tcp.master: mb found config for cid #3, uid=1.[0m
+[0;32mI (18881) mbc_tcp.master: mb found config for cid #4, uid=1.[0m
+[0;32mI (18881) mbc_tcp.master: mb found config for cid #5, uid=1.[0m
+[0;33mW (18891) mb_object.master.stub: Delete fake mb_base object.[0m
+[0;32mI (18891) MODBUS_CONTROLLER_COMMON_TEST: Test passed successfully.[0m
+MALLOC_CAP_8BIT usage: Free memory delta: 0 Leak threshold: -128 
+MALLOC_CAP_32BIT usage: Free memory delta: 0 Leak threshold: -128 
+ PASS
+
+-----------------------
+4 Tests 0 Failures 0 Ignored 
+OK
+
+Tests finished, rc=0
+[0;32mI (18931) main_task: Returned from app_main()[0m

@@ -1,0 +1,206 @@
+<testsuite errors="0" failures="0" skipped="0" tests="4"><testcase group="unit_test_controller" name="test_master_send_read_request"><system-out>I (378) MB_CONTROLLER_TEST: TEST: Check the modbus master controller handles read requests correctly.
+W (388) mb_object.master.stub: Create fake mb_base object.
+W (388) mb_object.master.stub: Enable fake mb_base object.
+I (398) MB_CONTROLLER_TEST: Test CID #0, MB_input_reg-0, Data
+I (398) MB_CONTROLLER_TEST: 04 00 00 00 02 
+W (408) mb_object.master.stub: Poll function called of fake mb_base object.
+W (418) mb_object.master.stub: Disable fake mb_base object.
+W (2418) mb_object.master.stub: Delete fake mb_base object.
+I (2418) MB_CONTROLLER_TEST: Test passed successfully.
+W (2418) mb_object.master.stub: Create fake mb_base object.
+W (2418) mb_object.master.stub: Enable fake mb_base object.
+I (2428) MB_CONTROLLER_TEST: Test CID #0, MB_input_reg-0, Data
+W (2438) mb_object.master.stub: Poll function called of fake mb_base object.
+E (2438) MB_CONTROLLER_MASTER: mbc_master_get_parameter(128): Master get parameter failure, error=(0x107) (ESP_ERR_TIMEOUT).
+W (2448) mb_object.master.stub: Poll function called of fake mb_base object.
+I (2458) MB_CONTROLLER_TEST: 04 00 00 00 02 
+W (2468) mb_object.master.stub: Poll function called of fake mb_base object.
+W (2478) mb_object.master.stub: Disable fake mb_base object.
+W (4478) mb_object.master.stub: Delete fake mb_base object.
+I (4478) MB_CONTROLLER_TEST: Test passed successfully.
+W (4478) mb_object.master.stub: Create fake mb_base object.
+W (4478) mb_object.master.stub: Enable fake mb_base object.
+I (4488) MB_CONTROLLER_TEST: Test CID #0, MB_input_reg-0, Data
+W (4498) mb_object.master.stub: Poll function called of fake mb_base object.
+E (4498) MB_CONTROLLER_MASTER: mbc_master_get_parameter(128): Master get parameter failure, error=(0x108) (ESP_ERR_INVALID_RESPONSE).
+W (4508) mb_object.master.stub: Poll function called of fake mb_base object.
+I (4518) MB_CONTROLLER_TEST: 04 00 00 00 02 
+W (4528) mb_object.master.stub: Poll function called of fake mb_base object.
+W (4538) mb_object.master.stub: Disable fake mb_base object.
+W (6538) mb_object.master.stub: Delete fake mb_base object.
+I (6538) MB_CONTROLLER_TEST: Test passed successfully.
+W (6538) mb_object.master.stub: Create fake mb_base object.
+W (6538) mb_object.master.stub: Enable fake mb_base object.
+I (6548) MB_CONTROLLER_TEST: Test CID #1, MB_hold_reg-0, Data
+W (6558) mb_object.master.stub: Poll function called of fake mb_base object.
+I (6558) MB_CONTROLLER_TEST: 03 00 01 00 02 
+W (6568) mb_object.master.stub: Poll function called of fake mb_base object.
+W (6578) mb_object.master.stub: Disable fake mb_base object.
+W (8578) mb_object.master.stub: Delete fake mb_base object.
+I (8578) MB_CONTROLLER_TEST: Test passed successfully.
+W (8578) mb_object.master.stub: Create fake mb_base object.
+W (8578) mb_object.master.stub: Enable fake mb_base object.
+I (8588) MB_CONTROLLER_TEST: Test CID #1, MB_hold_reg-0, Data
+W (8598) mb_object.master.stub: Poll function called of fake mb_base object.
+E (8598) MB_CONTROLLER_MASTER: mbc_master_get_parameter(128): Master get parameter failure, error=(0x108) (ESP_ERR_INVALID_RESPONSE).
+W (8608) mb_object.master.stub: Poll function called of fake mb_base object.
+I (8618) MB_CONTROLLER_TEST: 03 00 01 00 02 
+W (8628) mb_object.master.stub: Poll function called of fake mb_base object.
+W (8638) mb_object.master.stub: Disable fake mb_base object.
+W (10638) mb_object.master.stub: Delete fake mb_base object.
+I (10638) MB_CONTROLLER_TEST: Test passed successfully.
+W (10638) mb_object.master.stub: Create fake mb_base object.
+W (10638) mb_object.master.stub: Enable fake mb_base object.
+I (10648) MB_CONTROLLER_TEST: Test CID #3, MB_coil_reg-0, Bit
+W (10658) mb_object.master.stub: Poll function called of fake mb_base object.
+I (10658) MB_CONTROLLER_TEST: 01 00 03 00 0a 
+W (10668) mb_object.master.stub: Poll function called of fake mb_base object.
+W (10678) mb_object.master.stub: Disable fake mb_base object.
+W (12678) mb_object.master.stub: Delete fake mb_base object.
+I (12678) MB_CONTROLLER_TEST: Test passed successfully.
+W (12678) mb_object.master.stub: Create fake mb_base object.
+W (12678) mb_object.master.stub: Enable fake mb_base object.
+I (12688) MB_CONTROLLER_TEST: Test CID #3, MB_coil_reg-0, Bit
+W (12698) mb_object.master.stub: Poll function called of fake mb_base object.
+E (12698) MB_CONTROLLER_MASTER: mbc_master_get_parameter(128): Master get parameter failure, error=(0x107) (ESP_ERR_TIMEOUT).
+W (12708) mb_object.master.stub: Poll function called of fake mb_base object.
+I (12718) MB_CONTROLLER_TEST: 01 00 03 00 0a 
+W (12728) mb_object.master.stub: Poll function called of fake mb_base object.
+W (12738) mb_object.master.stub: Disable fake mb_base object.
+W (14738) mb_object.master.stub: Delete fake mb_base object.
+I (14738) MB_CONTROLLER_TEST: Test passed successfully.
+W (14738) mb_object.master.stub: Create fake mb_base object.
+W (14738) mb_object.master.stub: Enable fake mb_base object.
+I (14748) MB_CONTROLLER_TEST: Test CID #4, MB_discr_reg-0, Bit
+W (14758) mb_object.master.stub: Poll function called of fake mb_base object.
+I (14758) MB_CONTROLLER_TEST: 02 00 04 00 0a 
+W (14768) mb_object.master.stub: Poll function called of fake mb_base object.
+W (14778) mb_object.master.stub: Disable fake mb_base object.
+W (16778) mb_object.master.stub: Delete fake mb_base object.
+I (16778) MB_CONTROLLER_TEST: Test passed successfully.
+W (16778) mb_object.master.stub: Create fake mb_base object.
+W (16778) mb_object.master.stub: Enable fake mb_base object.
+I (16788) MB_CONTROLLER_TEST: Test CID #4, MB_discr_reg-0, Bit
+W (16798) mb_object.master.stub: Poll function called of fake mb_base object.
+E (16798) MB_CONTROLLER_MASTER: mbc_master_get_parameter(128): Master get parameter failure, error=(0x107) (ESP_ERR_TIMEOUT).
+W (16808) mb_object.master.stub: Poll function called of fake mb_base object.
+I (16818) MB_CONTROLLER_TEST: 02 00 04 00 0a 
+W (16828) mb_object.master.stub: Poll function called of fake mb_base object.
+W (16838) mb_object.master.stub: Disable fake mb_base object.
+W (18838) mb_object.master.stub: Delete fake mb_base object.
+I (18838) MB_CONTROLLER_TEST: Test passed successfully.
+MALLOC_CAP_8BIT usage: Free memory delta: 0 Leak threshold: -128 
+MALLOC_CAP_32BIT usage: Free memory delta: 0 Leak threshold: -128</system-out></testcase><testcase group="unit_test_controller" name="test_master_send_write_request"><system-out>I (18848) MB_CONTROLLER_TEST: TEST: Check the modbus master controller handles write requests correctly.
+W (18858) mb_object.master.stub: Create fake mb_base object.
+W (18868) mb_object.master.stub: Enable fake mb_base object.
+I (18878) MB_CONTROLLER_TEST: Test CID #1, MB_hold_reg-0, Data
+I (18878) MB_CONTROLLER_TEST: 10 00 01 00 02 04 22 11 44 33 
+W (18888) mb_object.master.stub: Poll function called of fake mb_base object.
+W (18898) mb_object.master.stub: Disable fake mb_base object.
+W (20898) mb_object.master.stub: Delete fake mb_base object.
+I (20898) MB_CONTROLLER_TEST: Test passed successfully.
+W (20898) mb_object.master.stub: Create fake mb_base object.
+W (20898) mb_object.master.stub: Enable fake mb_base object.
+I (20908) MB_CONTROLLER_TEST: Test CID #1, MB_hold_reg-0, Data
+W (20918) mb_object.master.stub: Poll function called of fake mb_base object.
+E (20918) MB_CONTROLLER_MASTER: mbc_master_set_parameter(90): Master set parameter failure, error=(0x108) (ESP_ERR_INVALID_RESPONSE).
+W (20928) mb_object.master.stub: Poll function called of fake mb_base object.
+I (20938) MB_CONTROLLER_TEST: 10 00 01 00 02 04 22 11 44 33 
+W (20948) mb_object.master.stub: Poll function called of fake mb_base object.
+W (20958) mb_object.master.stub: Disable fake mb_base object.
+W (22958) mb_object.master.stub: Delete fake mb_base object.
+I (22958) MB_CONTROLLER_TEST: Test passed successfully.
+W (22958) mb_object.master.stub: Create fake mb_base object.
+W (22958) mb_object.master.stub: Enable fake mb_base object.
+I (22968) MB_CONTROLLER_TEST: Test CID #3, MB_coil_reg-0, Bit
+W (22978) mb_object.master.stub: Poll function called of fake mb_base object.
+I (22978) MB_CONTROLLER_TEST: 0f 00 03 00 0a 02 11 22 
+W (22988) mb_object.master.stub: Poll function called of fake mb_base object.
+W (22998) mb_object.master.stub: Disable fake mb_base object.
+W (24998) mb_object.master.stub: Delete fake mb_base object.
+I (24998) MB_CONTROLLER_TEST: Test passed successfully.
+W (24998) mb_object.master.stub: Create fake mb_base object.
+W (24998) mb_object.master.stub: Enable fake mb_base object.
+I (25008) MB_CONTROLLER_TEST: Test CID #3, MB_coil_reg-0, Bit
+W (25018) mb_object.master.stub: Poll function called of fake mb_base object.
+E (25018) MB_CONTROLLER_MASTER: mbc_master_set_parameter(90): Master set parameter failure, error=(0x107) (ESP_ERR_TIMEOUT).
+W (25028) mb_object.master.stub: Poll function called of fake mb_base object.
+I (25038) MB_CONTROLLER_TEST: 0f 00 03 00 0a 02 11 22 
+W (25048) mb_object.master.stub: Poll function called of fake mb_base object.
+W (25058) mb_object.master.stub: Disable fake mb_base object.
+W (27058) mb_object.master.stub: Delete fake mb_base object.
+I (27058) MB_CONTROLLER_TEST: Test passed successfully.
+MALLOC_CAP_8BIT usage: Free memory delta: 0 Leak threshold: -128 
+MALLOC_CAP_32BIT usage: Free memory delta: 0 Leak threshold: -128</system-out></testcase><testcase group="unit_test_controller" name="test_master_register_callbacks"><system-out>I (27068) MB_CONTROLLER_TEST: TEST: Check the modbus master controller handles mapping callback functions correctly.
+W (27078) mb_object.master.stub: Create fake mb_base object.
+W (27088) mb_object.master.stub: Enable fake mb_base object.
+I (27098) MB_CONTROLLER_TEST, INPUT_BUFF: 11 22 33 44 
+I (27098) MB_CONTROLLER_TEST, OUTPUT_BUFF: 22 11 44 33 
+W (27108) mb_object.master.stub: Poll function called of fake mb_base object.
+W (27118) mb_object.master.stub: Disable fake mb_base object.
+W (29118) mb_object.master.stub: Delete fake mb_base object.
+I (29118) MB_CONTROLLER_TEST: Test passed successfully.
+W (29118) mb_object.master.stub: Create fake mb_base object.
+W (29118) mb_object.master.stub: Enable fake mb_base object.
+I (29128) MB_CONTROLLER_TEST, INPUT_BUFF: 11 22 33 44 
+I (29128) MB_CONTROLLER_TEST, OUTPUT_BUFF: 22 11 44 33 
+W (29138) mb_object.master.stub: Poll function called of fake mb_base object.
+W (29148) mb_object.master.stub: Disable fake mb_base object.
+W (31148) mb_object.master.stub: Delete fake mb_base object.
+I (31148) MB_CONTROLLER_TEST: Test passed successfully.
+W (31148) mb_object.master.stub: Create fake mb_base object.
+W (31148) mb_object.master.stub: Enable fake mb_base object.
+I (31158) MB_CONTROLLER_TEST, INPUT_BUFF: ff ff 
+I (31158) MB_CONTROLLER_TEST, OUTPUT_BUFF: ff 03 
+W (31168) mb_object.master.stub: Poll function called of fake mb_base object.
+W (31178) mb_object.master.stub: Disable fake mb_base object.
+W (33178) mb_object.master.stub: Delete fake mb_base object.
+I (33178) MB_CONTROLLER_TEST: Test passed successfully.
+W (33178) mb_object.master.stub: Create fake mb_base object.
+W (33178) mb_object.master.stub: Enable fake mb_base object.
+I (33188) MB_CONTROLLER_TEST, INPUT_BUFF: ff ff 
+I (33188) MB_CONTROLLER_TEST, OUTPUT_BUFF: ff 03 
+W (33198) mb_object.master.stub: Poll function called of fake mb_base object.
+W (33208) mb_object.master.stub: Disable fake mb_base object.
+W (35208) mb_object.master.stub: Delete fake mb_base object.
+I (35208) MB_CONTROLLER_TEST: Test passed successfully.
+MALLOC_CAP_8BIT usage: Free memory delta: 0 Leak threshold: -128 
+MALLOC_CAP_32BIT usage: Free memory delta: 0 Leak threshold: -128</system-out></testcase><testcase group="unit_test_controller" name="test_slave_check_area_descriptor"><system-out>I (35218) MB_CONTROLLER_TEST: TEST: Check the modbus master controller defines the area descriptors correctly.
+W (35228) mb_object.master.stub: Create fake mb_base object.
+I (35238) MB_CONTROLLER_TEST: Test CID #5, MB_input_area, Data
+I (35248) MB_CONTROLLER_TEST: Area (type, reg_start, address, size): 1, 2, 0x3ffb29ca, 20, is defined.
+I (35258) MB_CONTROLLER_TEST: Area overlapped (type, reg_start, address, size): 1, 10, 0x3ffb29ca, 2.
+E (35268) MB_CONTROLLER_SLAVE: mbc_slave_set_descriptor(241): mb incorrect descriptor or already defined.
+I (35278) MB_CONTROLLER_TEST: Area redefine (type, reg_start, address, size): 1, 2, 0x3ffb29c8, 20.
+E (35288) MB_CONTROLLER_SLAVE: mbc_slave_set_descriptor(241): mb incorrect descriptor or already defined.
+W (35318) mb_object.master.stub: Delete fake mb_base object.
+I (35318) MB_CONTROLLER_TEST: Test passed successfully.
+W (35318) mb_object.master.stub: Create fake mb_base object.
+I (35318) MB_CONTROLLER_TEST: Test CID #6, MB_holding_area, Data
+I (35328) MB_CONTROLLER_TEST: Area (type, reg_start, address, size): 0, 2, 0x3ffb29b2, 20, is defined.
+I (35338) MB_CONTROLLER_TEST: Area overlapped (type, reg_start, address, size): 0, 10, 0x3ffb29b2, 2.
+E (35348) MB_CONTROLLER_SLAVE: mbc_slave_set_descriptor(241): mb incorrect descriptor or already defined.
+I (35358) MB_CONTROLLER_TEST: Area redefine (type, reg_start, address, size): 0, 2, 0x3ffb29b0, 20.
+E (35368) MB_CONTROLLER_SLAVE: mbc_slave_set_descriptor(241): mb incorrect descriptor or already defined.
+W (35398) mb_object.master.stub: Delete fake mb_base object.
+I (35398) MB_CONTROLLER_TEST: Test passed successfully.
+W (35398) mb_object.master.stub: Create fake mb_base object.
+I (35398) MB_CONTROLLER_TEST: Test CID #7, MB_coil_area, Bit
+I (35408) MB_CONTROLLER_TEST: Area (type, reg_start, address, size): 2, 2, 0x3ffb299a, 2, is defined.
+I (35418) MB_CONTROLLER_TEST: Area overlapped (type, reg_start, address, size): 2, 10, 0x3ffb299a, 2.
+E (35428) MB_CONTROLLER_SLAVE: mbc_slave_set_descriptor(241): mb incorrect descriptor or already defined.
+I (35438) MB_CONTROLLER_TEST: Area redefine (type, reg_start, address, size): 2, 2, 0x3ffb2998, 2.
+E (35448) MB_CONTROLLER_SLAVE: mbc_slave_set_descriptor(241): mb incorrect descriptor or already defined.
+W (35478) mb_object.master.stub: Delete fake mb_base object.
+I (35478) MB_CONTROLLER_TEST: Test passed successfully.
+W (35478) mb_object.master.stub: Create fake mb_base object.
+I (35478) MB_CONTROLLER_TEST: Test CID #8, MB_discr_area, Bit
+I (35488) MB_CONTROLLER_TEST: Area (type, reg_start, address, size): 2, 2, 0x3ffb2982, 2, is defined.
+I (35498) MB_CONTROLLER_TEST: Area overlapped (type, reg_start, address, size): 2, 10, 0x3ffb2982, 2.
+E (35508) MB_CONTROLLER_SLAVE: mbc_slave_set_descriptor(241): mb incorrect descriptor or already defined.
+I (35518) MB_CONTROLLER_TEST: Area redefine (type, reg_start, address, size): 2, 2, 0x3ffb2980, 2.
+E (35528) MB_CONTROLLER_SLAVE: mbc_slave_set_descriptor(241): mb incorrect descriptor or already defined.
+W (35558) mb_object.master.stub: Delete fake mb_base object.
+I (35558) MB_CONTROLLER_TEST: Test passed successfully.
+MALLOC_CAP_8BIT usage: Free memory delta: 0 Leak threshold: -128 
+MALLOC_CAP_32BIT usage: Free memory delta: 0 Leak threshold: -128</system-out></testcase></testsuite>

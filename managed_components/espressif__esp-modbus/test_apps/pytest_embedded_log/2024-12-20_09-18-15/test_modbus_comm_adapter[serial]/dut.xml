@@ -1,0 +1,318 @@
+<testsuite errors="0" failures="0" skipped="0" tests="2"><testcase group="modbus_adapter_serial" name="test_modbus_adapter_rtu"><system-out>I (401) TEST_COMMON: 0x3ffc0b9c, modbus master stack is initialized
+I (401) TEST_COMMON: 0x3ffc0b9c, modbus master start...
+I (411) SLAVE: OBJ 0x3ffaff70, WRITE (82990 us), SL: 0, REG:0, TYPE:1, INST_ADDR:0x3ffb2880(0x1111), SIZE:1
+I (431) TEST_COMMON: 0x3ffc0b9c, CHAR #0 MB_hold_reg-0 (Data) value = (0x1111), write successful.
+I (451) TEST_COMMON: 0x3ffc0b9c, CHAR #1 MB_hold_reg-1 (Data) value = (0x2222), write successful.
+I (461) SLAVE: OBJ 0x3ffaff70, WRITE (102738 us), SL: 0, REG:1, TYPE:1, INST_ADDR:0x3ffb2882(0x2222), SIZE:1
+I (471) TEST_COMMON: 0x3ffc0b9c, CHAR #2 MB_hold_reg-2 (Data) value = (0x3333), write successful.
+I (471) SLAVE: OBJ 0x3ffbbfb8, WRITE (143245 us), SL: 0, REG:3, TYPE:1, INST_ADDR:0x3ffb2886(0x4444), SIZE:1
+I (491) TEST_COMMON: 0x3ffc0b9c, CHAR #3 MB_hold_reg-3 (Data) value = (0x4444), write successful.
+I (511) TEST_COMMON: 0x3ffc0b9c, CHAR #0 MB_hold_reg-0 (Data) value = (0x1111) parameter read successful.
+I (511) TEST_COMMON: CHAR #0, value is ok.
+I (511) SLAVE: OBJ 0x3ffaff70, WRITE (122694 us), SL: 0, REG:2, TYPE:1, INST_ADDR:0x3ffb2884(0x3333), SIZE:1
+I (531) TEST_COMMON: 0x3ffc0b9c, CHAR #1 MB_hold_reg-1 (Data) value = (0x2222) parameter read successful.
+I (531) TEST_COMMON: CHAR #1, value is ok.
+I (571) TEST_COMMON: 0x3ffc0b9c, CHAR #2 MB_hold_reg-2 (Data) value = (0x3333) parameter read successful.
+I (571) TEST_COMMON: CHAR #2, value is ok.
+I (571) SLAVE: OBJ 0x3ffaff70, READ (163387 us), SL: 0, REG:0, TYPE:2, INST_ADDR:0x3ffb2880(0x1111), SIZE:1
+I (591) TEST_COMMON: 0x3ffc0b9c, CHAR #3 MB_hold_reg-3 (Data) value = (0x4444) parameter read successful.
+I (591) TEST_COMMON: CHAR #3, value is ok.
+I (611) SLAVE: OBJ 0x3ffbbfb8, READ (246469 us), SL: 0, REG:3, TYPE:2, INST_ADDR:0x3ffb2886(0x4444), SIZE:1
+I (621) TEST_COMMON: 0x3ffc0b9c, CHAR #4 CYCLE_COUNTER (Data) value = (0x0000), write successful.
+I (641) SLAVE: OBJ 0x3ffaff70, READ (186558 us), SL: 0, REG:1, TYPE:2, INST_ADDR:0x3ffb2882(0x2222), SIZE:1
+I (691) SLAVE: OBJ 0x3ffaff70, READ (222384 us), SL: 0, REG:2, TYPE:2, INST_ADDR:0x3ffb2884(0x3333), SIZE:1
+I (701) TEST_COMMON: 0x3ffc0b9c, CHAR #0 MB_hold_reg-0 (Data) value = (0x1111), write successful.
+I (701) TEST_COMMON: CHAR #0, value is ok.
+I (721) TEST_COMMON: 0x3ffc0b9c, CHAR #1 MB_hold_reg-1 (Data) value = (0x2222), write successful.
+I (721) TEST_COMMON: CHAR #1, value is ok.
+I (741) TEST_COMMON: 0x3ffc0b9c, CHAR #2 MB_hold_reg-2 (Data) value = (0x3333), write successful.
+I (741) TEST_COMMON: CHAR #2, value is ok.
+I (741) SLAVE: OBJ 0x3ffaff70, WRITE (272011 us), SL: 0, REG:4, TYPE:1, INST_ADDR:0x3ffb2888(0x0), SIZE:1
+I (761) TEST_COMMON: 0x3ffc0b9c, CHAR #3 MB_hold_reg-3 (Data) value = (0x4444), write successful.
+I (761) TEST_COMMON: CHAR #3, value is ok.
+I (751) SLAVE: OBJ 0x3ffbbfb8, WRITE (415775 us), SL: 0, REG:3, TYPE:1, INST_ADDR:0x3ffb2886(0x4444), SIZE:1
+I (781) TEST_COMMON: 0x3ffc0b9c, CHAR #4 CYCLE_COUNTER (Data) value = (0x0001), write successful.
+I (821) SLAVE: OBJ 0x3ffaff70, WRITE (352362 us), SL: 0, REG:0, TYPE:1, INST_ADDR:0x3ffb2880(0x1111), SIZE:1
+I (861) TEST_COMMON: 0x3ffc0b9c, CHAR #0 MB_hold_reg-0 (Data) value = (0x1111) parameter read successful.
+I (861) TEST_COMMON: CHAR #0, value is ok.
+I (871) SLAVE: OBJ 0x3ffaff70, WRITE (377277 us), SL: 0, REG:1, TYPE:1, INST_ADDR:0x3ffb2882(0x2222), SIZE:1
+I (881) TEST_COMMON: 0x3ffc0b9c, CHAR #1 MB_hold_reg-1 (Data) value = (0x2222) parameter read successful.
+I (881) TEST_COMMON: CHAR #1, value is ok.
+I (921) TEST_COMMON: 0x3ffc0b9c, CHAR #2 MB_hold_reg-2 (Data) value = (0x3333) parameter read successful.
+I (921) TEST_COMMON: CHAR #2, value is ok.
+I (921) SLAVE: OBJ 0x3ffaff70, WRITE (395827 us), SL: 0, REG:2, TYPE:1, INST_ADDR:0x3ffb2884(0x3333), SIZE:1
+I (941) TEST_COMMON: 0x3ffc0b9c, CHAR #3 MB_hold_reg-3 (Data) value = (0x4444) parameter read successful.
+I (941) TEST_COMMON: CHAR #3, value is ok.
+I (961) SLAVE: OBJ 0x3ffbbfb8, READ (596453 us), SL: 0, REG:3, TYPE:2, INST_ADDR:0x3ffb2886(0x4444), SIZE:1
+I (971) TEST_COMMON: 0x3ffc0b9c, CHAR #4 CYCLE_COUNTER (Data) value = (0x0002), write successful.
+I (991) SLAVE: OBJ 0x3ffaff70, WRITE (440383 us), SL: 0, REG:4, TYPE:1, INST_ADDR:0x3ffb2888(0x2), SIZE:1
+I (1041) SLAVE: OBJ 0x3ffaff70, READ (512315 us), SL: 0, REG:0, TYPE:2, INST_ADDR:0x3ffb2880(0x1111), SIZE:1
+I (1051) TEST_COMMON: 0x3ffc0b9c, CHAR #0 MB_hold_reg-0 (Data) value = (0x1111), write successful.
+I (1051) TEST_COMMON: CHAR #0, value is ok.
+I (1071) TEST_COMMON: 0x3ffc0b9c, CHAR #1 MB_hold_reg-1 (Data) value = (0x2222), write successful.
+I (1071) TEST_COMMON: CHAR #1, value is ok.
+I (1091) TEST_COMMON: 0x3ffc0b9c, CHAR #2 MB_hold_reg-2 (Data) value = (0x3333), write successful.
+I (1091) TEST_COMMON: CHAR #2, value is ok.
+I (1091) SLAVE: OBJ 0x3ffaff70, READ (536524 us), SL: 0, REG:1, TYPE:2, INST_ADDR:0x3ffb2882(0x2222), SIZE:1
+I (1111) TEST_COMMON: 0x3ffc0b9c, CHAR #3 MB_hold_reg-3 (Data) value = (0x4444), write successful.
+I (1111) TEST_COMMON: CHAR #3, value is ok.
+I (1101) SLAVE: OBJ 0x3ffbbfb8, WRITE (765954 us), SL: 0, REG:3, TYPE:1, INST_ADDR:0x3ffb2886(0x4444), SIZE:1
+I (1131) TEST_COMMON: 0x3ffc0b9c, CHAR #4 CYCLE_COUNTER (Data) value = (0x0003), write successful.
+I (1171) SLAVE: OBJ 0x3ffaff70, READ (572346 us), SL: 0, REG:2, TYPE:2, INST_ADDR:0x3ffb2884(0x3333), SIZE:1
+I (1211) TEST_COMMON: 0x3ffc0b9c, CHAR #0 MB_hold_reg-0 (Data) value = (0x1111) parameter read successful.
+I (1211) TEST_COMMON: CHAR #0, value is ok.
+I (1221) SLAVE: OBJ 0x3ffaff70, WRITE (622082 us), SL: 0, REG:4, TYPE:1, INST_ADDR:0x3ffb2888(0x3), SIZE:1
+I (1231) TEST_COMMON: 0x3ffc0b9c, CHAR #1 MB_hold_reg-1 (Data) value = (0x2222) parameter read successful.
+I (1231) TEST_COMMON: CHAR #1, value is ok.
+I (1271) TEST_COMMON: 0x3ffc0b9c, CHAR #2 MB_hold_reg-2 (Data) value = (0x3333) parameter read successful.
+I (1271) TEST_COMMON: CHAR #2, value is ok.
+I (1281) SLAVE: OBJ 0x3ffaff70, WRITE (702362 us), SL: 0, REG:0, TYPE:1, INST_ADDR:0x3ffb2880(0x1111), SIZE:1
+I (1281) TEST_COMMON: 0x3ffc0b9c, CHAR #3 MB_hold_reg-3 (Data) value = (0x4444) parameter read successful.
+I (1301) TEST_COMMON: CHAR #3, value is ok.
+I (1311) SLAVE: OBJ 0x3ffbbfb8, READ (946628 us), SL: 0, REG:3, TYPE:2, INST_ADDR:0x3ffb2886(0x4444), SIZE:1
+I (1321) TEST_COMMON: 0x3ffc0b9c, CHAR #4 CYCLE_COUNTER (Data) value = (0x0004), write successful.
+I (1361) SLAVE: OBJ 0x3ffaff70, WRITE (727539 us), SL: 0, REG:1, TYPE:1, INST_ADDR:0x3ffb2882(0x2222), SIZE:1
+I (1401) TEST_COMMON: 0x3ffc0b9c, CHAR #0 MB_hold_reg-0 (Data) value = (0x1111), write successful.
+I (1401) TEST_COMMON: CHAR #0, value is ok.
+I (1411) SLAVE: OBJ 0x3ffaff70, WRITE (746006 us), SL: 0, REG:2, TYPE:1, INST_ADDR:0x3ffb2884(0x3333), SIZE:1
+I (1421) TEST_COMMON: 0x3ffc0b9c, CHAR #1 MB_hold_reg-1 (Data) value = (0x2222), write successful.
+I (1421) TEST_COMMON: CHAR #1, value is ok.
+I (1461) TEST_COMMON: 0x3ffc0b9c, CHAR #2 MB_hold_reg-2 (Data) value = (0x3333), write successful.
+I (1461) TEST_COMMON: CHAR #2, value is ok.
+I (1461) SLAVE: OBJ 0x3ffaff70, WRITE (790996 us), SL: 0, REG:4, TYPE:1, INST_ADDR:0x3ffb2888(0x4), SIZE:1
+I (1481) TEST_COMMON: 0x3ffc0b9c, CHAR #3 MB_hold_reg-3 (Data) value = (0x4444), write successful.
+I (1481) TEST_COMMON: CHAR #3, value is ok.
+I (1501) TEST_COMMON: 0x3ffc0b9c, CHAR #4 CYCLE_COUNTER (Data) value = (0x0005), write successful.
+I (1511) SLAVE: OBJ 0x3ffbbfb8, WRITE (1135956 us), SL: 0, REG:3, TYPE:1, INST_ADDR:0x3ffb2886(0x4444), SIZE:1
+I (1531) SLAVE: OBJ 0x3ffaff70, READ (862315 us), SL: 0, REG:0, TYPE:2, INST_ADDR:0x3ffb2880(0x1111), SIZE:1
+I (1581) TEST_COMMON: 0x3ffc0b9c, CHAR #0 MB_hold_reg-0 (Data) value = (0x1111) parameter read successful.
+I (1581) TEST_COMMON: CHAR #0, value is ok.
+I (1591) SLAVE: OBJ 0x3ffaff70, READ (886699 us), SL: 0, REG:1, TYPE:2, INST_ADDR:0x3ffb2882(0x2222), SIZE:1
+I (1601) TEST_COMMON: 0x3ffc0b9c, CHAR #1 MB_hold_reg-1 (Data) value = (0x2222) parameter read successful.
+I (1601) TEST_COMMON: CHAR #1, value is ok.
+I (1641) TEST_COMMON: 0x3ffc0b9c, CHAR #2 MB_hold_reg-2 (Data) value = (0x3333) parameter read successful.
+I (1641) TEST_COMMON: CHAR #2, value is ok.
+I (1651) SLAVE: OBJ 0x3ffaff70, READ (922347 us), SL: 0, REG:2, TYPE:2, INST_ADDR:0x3ffb2884(0x3333), SIZE:1
+I (1661) TEST_COMMON: 0x3ffc0b9c, CHAR #3 MB_hold_reg-3 (Data) value = (0x4444) parameter read successful.
+I (1661) TEST_COMMON: CHAR #3, value is ok.
+I (1681) SLAVE: OBJ 0x3ffbbfb8, READ (1316643 us), SL: 0, REG:3, TYPE:2, INST_ADDR:0x3ffb2886(0x4444), SIZE:1
+I (1701) TEST_COMMON: 0x3ffc0b9c, CHAR #4 CYCLE_COUNTER (Data) value = (0x0006), write successful.
+I (1711) SLAVE: OBJ 0x3ffaff70, WRITE (976575 us), SL: 0, REG:4, TYPE:1, INST_ADDR:0x3ffb2888(0x6), SIZE:1
+I (1761) SLAVE: OBJ 0x3ffaff70, WRITE (1052362 us), SL: 0, REG:0, TYPE:1, INST_ADDR:0x3ffb2880(0x1111), SIZE:1
+I (1781) TEST_COMMON: 0x3ffc0b9c, CHAR #0 MB_hold_reg-0 (Data) value = (0x1111), write successful.
+I (1781) TEST_COMMON: CHAR #0, value is ok.
+I (1801) TEST_COMMON: 0x3ffc0b9c, CHAR #1 MB_hold_reg-1 (Data) value = (0x2222), write successful.
+I (1801) TEST_COMMON: CHAR #1, value is ok.
+I (1811) SLAVE: OBJ 0x3ffaff70, WRITE (1075989 us), SL: 0, REG:1, TYPE:1, INST_ADDR:0x3ffb2882(0x2222), SIZE:1
+I (1821) TEST_COMMON: 0x3ffc0b9c, CHAR #2 MB_hold_reg-2 (Data) value = (0x3333), write successful.
+I (1821) TEST_COMMON: CHAR #2, value is ok.
+I (1861) TEST_COMMON: 0x3ffc0b9c, CHAR #3 MB_hold_reg-3 (Data) value = (0x4444), write successful.
+I (1861) TEST_COMMON: CHAR #3, value is ok.
+I (1861) SLAVE: OBJ 0x3ffaff70, WRITE (1112398 us), SL: 0, REG:2, TYPE:1, INST_ADDR:0x3ffb2884(0x3333), SIZE:1
+I (1881) TEST_COMMON: 0x3ffc0b9c, CHAR #4 CYCLE_COUNTER (Data) value = (0x0007), write successful.
+I (1901) SLAVE: OBJ 0x3ffbbfb8, WRITE (1512398 us), SL: 0, REG:3, TYPE:1, INST_ADDR:0x3ffb2886(0x4444), SIZE:1
+I (1931) SLAVE: OBJ 0x3ffaff70, WRITE (1160825 us), SL: 0, REG:4, TYPE:1, INST_ADDR:0x3ffb2888(0x7), SIZE:1
+I (1961) TEST_COMMON: 0x3ffc0b9c, CHAR #0 MB_hold_reg-0 (Data) value = (0x1111) parameter read successful.
+I (1961) TEST_COMMON: CHAR #0, value is ok.
+I (1981) TEST_COMMON: 0x3ffc0b9c, CHAR #1 MB_hold_reg-1 (Data) value = (0x2222) parameter read successful.
+I (1981) TEST_COMMON: CHAR #1, value is ok.
+I (1991) SLAVE: OBJ 0x3ffaff70, READ (1232316 us), SL: 0, REG:0, TYPE:2, INST_ADDR:0x3ffb2880(0x1111), SIZE:1
+I (1991) TEST_COMMON: 0x3ffc0b9c, CHAR #2 MB_hold_reg-2 (Data) value = (0x3333) parameter read successful.
+I (2011) TEST_COMMON: CHAR #2, value is ok.
+I (2021) SLAVE: OBJ 0x3ffbbfb8, READ (1682498 us), SL: 0, REG:3, TYPE:2, INST_ADDR:0x3ffb2886(0x4444), SIZE:1
+I (2031) TEST_COMMON: 0x3ffc0b9c, CHAR #3 MB_hold_reg-3 (Data) value = (0x4444) parameter read successful.
+I (2031) TEST_COMMON: CHAR #3, value is ok.
+I (2041) SLAVE: OBJ 0x3ffaff70, READ (1256712 us), SL: 0, REG:1, TYPE:2, INST_ADDR:0x3ffb2882(0x2222), SIZE:1
+I (2051) TEST_COMMON: 0x3ffc0b9c, CHAR #4 CYCLE_COUNTER (Data) value = (0x0008), write successful.
+I (2101) SLAVE: OBJ 0x3ffaff70, READ (1292334 us), SL: 0, REG:2, TYPE:2, INST_ADDR:0x3ffb2884(0x3333), SIZE:1
+I (2131) TEST_COMMON: 0x3ffc0b9c, CHAR #0 MB_hold_reg-0 (Data) value = (0x1111), write successful.
+I (2131) TEST_COMMON: CHAR #0, value is ok.
+I (2151) TEST_COMMON: 0x3ffc0b9c, CHAR #1 MB_hold_reg-1 (Data) value = (0x2222), write successful.
+I (2151) TEST_COMMON: CHAR #1, value is ok.
+I (2151) SLAVE: OBJ 0x3ffaff70, WRITE (1352389 us), SL: 0, REG:4, TYPE:1, INST_ADDR:0x3ffb2888(0x8), SIZE:1
+I (2171) TEST_COMMON: 0x3ffc0b9c, CHAR #2 MB_hold_reg-2 (Data) value = (0x3333), write successful.
+I (2171) TEST_COMMON: CHAR #2, value is ok.
+I (2191) TEST_COMMON: 0x3ffc0b9c, CHAR #3 MB_hold_reg-3 (Data) value = (0x4444), write successful.
+I (2191) TEST_COMMON: CHAR #3, value is ok.
+I (2211) TEST_COMMON: 0x3ffc0b9c, CHAR #4 CYCLE_COUNTER (Data) value = (0x0009), write successful.
+I (2221) SLAVE: OBJ 0x3ffaff70, WRITE (1432350 us), SL: 0, REG:0, TYPE:1, INST_ADDR:0x3ffb2880(0x1111), SIZE:1
+I (2241) SLAVE: OBJ 0x3ffbbfb8, WRITE (1850863 us), SL: 0, REG:3, TYPE:1, INST_ADDR:0x3ffb2886(0x4444), SIZE:1
+I (2271) SLAVE: OBJ 0x3ffaff70, WRITE (1455886 us), SL: 0, REG:1, TYPE:1, INST_ADDR:0x3ffb2882(0x2222), SIZE:1
+I (2291) TEST_COMMON: 0x3ffc0b9c, CHAR #0 MB_hold_reg-0 (Data) value = (0x1111) parameter read successful.
+I (2291) TEST_COMMON: CHAR #0, value is ok.
+I (2321) TEST_COMMON: 0x3ffc0b9c, CHAR #1 MB_hold_reg-1 (Data) value = (0x2222) parameter read successful.
+I (2321) TEST_COMMON: CHAR #1, value is ok.
+I (2331) SLAVE: OBJ 0x3ffaff70, WRITE (1476001 us), SL: 0, REG:2, TYPE:1, INST_ADDR:0x3ffb2884(0x3333), SIZE:1
+I (2341) TEST_COMMON: 0x3ffc0b9c, CHAR #2 MB_hold_reg-2 (Data) value = (0x3333) parameter read successful.
+I (2341) TEST_COMMON: CHAR #2, value is ok.
+I (2371) SLAVE: OBJ 0x3ffbbfb8, READ (2032317 us), SL: 0, REG:3, TYPE:2, INST_ADDR:0x3ffb2886(0x4444), SIZE:1
+I (2381) TEST_COMMON: 0x3ffc0b9c, CHAR #3 MB_hold_reg-3 (Data) value = (0x4444) parameter read successful.
+I (2381) TEST_COMMON: CHAR #3, value is ok.
+I (2391) SLAVE: OBJ 0x3ffaff70, WRITE (1536034 us), SL: 0, REG:4, TYPE:1, INST_ADDR:0x3ffb2888(0x9), SIZE:1
+I (2401) TEST_COMMON: 0x3ffc0b9c, CHAR #4 CYCLE_COUNTER (Data) value = (0x000a), write successful.
+I (2461) TEST_COMMON: Destroy master, inst: 0x3ffc0b9c.
+I (2481) TEST_COMMON: Test task 0x3ffc5380, done successfully.
+I (2491) TEST_COMMON: Destroy slave, inst: 0x3ffbbfb8.
+I (2511) TEST_COMMON: Destroy slave, inst: 0x3ffaff70.
+I (2511) TEST_COMMON: Test task 0x3ffc09d0, done successfully.
+I (2531) TEST_COMMON: Test task 0x3ffbbdec, done successfully.
+MALLOC_CAP_8BIT usage: Free memory delta: 0 Leak threshold: -128 
+MALLOC_CAP_32BIT usage: Free memory delta: 0 Leak threshold: -128 
+I (2541) MODBUS_SERIAL_TEST: TEST_modbus_adapter_serial_TEAR_DOWN, done successfully.</system-out></testcase><testcase group="modbus_adapter_serial" name="test_modbus_adapter_ascii"><system-out>I (2571) TEST_COMMON: 0x3ffc0fac, modbus master stack is initialized
+I (2571) TEST_COMMON: 0x3ffc0fac, modbus master start...
+I (2581) SLAVE: OBJ 0x3ffaff70, WRITE (2252772 us), SL: 0, REG:0, TYPE:1, INST_ADDR:0x3ffb2880(0x1111), SIZE:1
+I (2601) TEST_COMMON: 0x3ffc0fac, CHAR #0 MB_hold_reg-0 (Data) value = (0x1111), write successful.
+I (2621) TEST_COMMON: 0x3ffc0fac, CHAR #1 MB_hold_reg-1 (Data) value = (0x2222), write successful.
+I (2631) SLAVE: OBJ 0x3ffaff70, WRITE (2272646 us), SL: 0, REG:1, TYPE:1, INST_ADDR:0x3ffb2882(0x2222), SIZE:1
+I (2641) TEST_COMMON: 0x3ffc0fac, CHAR #2 MB_hold_reg-2 (Data) value = (0x3333), write successful.
+I (2641) SLAVE: OBJ 0x3ffbc1c0, WRITE (2313528 us), SL: 0, REG:3, TYPE:1, INST_ADDR:0x3ffb2886(0x4444), SIZE:1
+I (2661) TEST_COMMON: 0x3ffc0fac, CHAR #3 MB_hold_reg-3 (Data) value = (0x4444), write successful.
+I (2681) TEST_COMMON: 0x3ffc0fac, CHAR #0 MB_hold_reg-0 (Data) value = (0x1111), write successful.
+I (2681) TEST_COMMON: CHAR #0, value is ok.
+I (2681) SLAVE: OBJ 0x3ffaff70, WRITE (2292630 us), SL: 0, REG:2, TYPE:1, INST_ADDR:0x3ffb2884(0x3333), SIZE:1
+I (2701) TEST_COMMON: 0x3ffc0fac, CHAR #1 MB_hold_reg-1 (Data) value = (0x2222), write successful.
+I (2701) TEST_COMMON: CHAR #1, value is ok.
+I (2721) TEST_COMMON: 0x3ffc0fac, CHAR #2 MB_hold_reg-2 (Data) value = (0x3333), write successful.
+I (2721) TEST_COMMON: CHAR #2, value is ok.
+I (2741) TEST_COMMON: 0x3ffc0fac, CHAR #3 MB_hold_reg-3 (Data) value = (0x4444), write successful.
+I (2741) TEST_COMMON: CHAR #3, value is ok.
+I (2741) SLAVE: OBJ 0x3ffaff70, WRITE (2333905 us), SL: 0, REG:0, TYPE:1, INST_ADDR:0x3ffb2880(0x1111), SIZE:1
+I (2761) TEST_COMMON: 0x3ffc0fac, CHAR #4 CYCLE_COUNTER (Data) value = (0x0000), write successful.
+I (2791) SLAVE: OBJ 0x3ffbc1c0, WRITE (2397748 us), SL: 0, REG:3, TYPE:1, INST_ADDR:0x3ffb2886(0x4444), SIZE:1
+I (2811) SLAVE: OBJ 0x3ffaff70, WRITE (2355896 us), SL: 0, REG:1, TYPE:1, INST_ADDR:0x3ffb2882(0x2222), SIZE:1
+I (2841) TEST_COMMON: 0x3ffc0fac, CHAR #0 MB_hold_reg-0 (Data) value = (0x1111) parameter read successful.
+I (2841) TEST_COMMON: CHAR #0, value is ok.
+I (2861) TEST_COMMON: 0x3ffc0fac, CHAR #1 MB_hold_reg-1 (Data) value = (0x2222) parameter read successful.
+I (2861) TEST_COMMON: CHAR #1, value is ok.
+I (2861) SLAVE: OBJ 0x3ffaff70, WRITE (2381086 us), SL: 0, REG:2, TYPE:1, INST_ADDR:0x3ffb2884(0x3333), SIZE:1
+I (2881) TEST_COMMON: 0x3ffc0fac, CHAR #2 MB_hold_reg-2 (Data) value = (0x3333) parameter read successful.
+I (2881) TEST_COMMON: CHAR #2, value is ok.
+I (2901) SLAVE: OBJ 0x3ffbc1c0, READ (2572196 us), SL: 0, REG:3, TYPE:2, INST_ADDR:0x3ffb2886(0x4444), SIZE:1
+I (2921) TEST_COMMON: 0x3ffc0fac, CHAR #3 MB_hold_reg-3 (Data) value = (0x4444) parameter read successful.
+I (2921) TEST_COMMON: CHAR #3, value is ok.
+I (2921) SLAVE: OBJ 0x3ffaff70, WRITE (2415913 us), SL: 0, REG:4, TYPE:1, INST_ADDR:0x3ffb2888(0x1), SIZE:1
+I (2941) TEST_COMMON: 0x3ffc0fac, CHAR #4 CYCLE_COUNTER (Data) value = (0x0001), write successful.
+I (2991) SLAVE: OBJ 0x3ffaff70, READ (2492309 us), SL: 0, REG:0, TYPE:2, INST_ADDR:0x3ffb2880(0x1111), SIZE:1
+I (3021) TEST_COMMON: 0x3ffc0fac, CHAR #0 MB_hold_reg-0 (Data) value = (0x1111), write successful.
+I (3021) TEST_COMMON: CHAR #0, value is ok.
+I (3041) TEST_COMMON: 0x3ffc0fac, CHAR #1 MB_hold_reg-1 (Data) value = (0x2222), write successful.
+I (3041) TEST_COMMON: CHAR #1, value is ok.
+I (3041) SLAVE: OBJ 0x3ffaff70, READ (2516592 us), SL: 0, REG:1, TYPE:2, INST_ADDR:0x3ffb2882(0x2222), SIZE:1
+I (3061) TEST_COMMON: 0x3ffc0fac, CHAR #2 MB_hold_reg-2 (Data) value = (0x3333), write successful.
+I (3061) TEST_COMMON: CHAR #2, value is ok.
+I (3081) TEST_COMMON: 0x3ffc0fac, CHAR #3 MB_hold_reg-3 (Data) value = (0x4444), write successful.
+I (3081) TEST_COMMON: CHAR #3, value is ok.
+I (3101) TEST_COMMON: 0x3ffc0fac, CHAR #4 CYCLE_COUNTER (Data) value = (0x0002), write successful.
+I (3111) SLAVE: OBJ 0x3ffbc1c0, WRITE (2740972 us), SL: 0, REG:3, TYPE:1, INST_ADDR:0x3ffb2886(0x4444), SIZE:1
+I (3111) SLAVE: OBJ 0x3ffaff70, READ (2536600 us), SL: 0, REG:2, TYPE:2, INST_ADDR:0x3ffb2884(0x3333), SIZE:1
+I (3181) TEST_COMMON: 0x3ffc0fac, CHAR #0 MB_hold_reg-0 (Data) value = (0x1111) parameter read successful.
+I (3181) TEST_COMMON: CHAR #0, value is ok.
+I (3181) SLAVE: OBJ 0x3ffaff70, WRITE (2596582 us), SL: 0, REG:4, TYPE:1, INST_ADDR:0x3ffb2888(0x2), SIZE:1
+I (3201) TEST_COMMON: 0x3ffc0fac, CHAR #1 MB_hold_reg-1 (Data) value = (0x2222) parameter read successful.
+I (3201) TEST_COMMON: CHAR #1, value is ok.
+I (3241) TEST_COMMON: 0x3ffc0fac, CHAR #2 MB_hold_reg-2 (Data) value = (0x3333) parameter read successful.
+I (3241) TEST_COMMON: CHAR #2, value is ok.
+I (3241) SLAVE: OBJ 0x3ffaff70, WRITE (2672303 us), SL: 0, REG:0, TYPE:1, INST_ADDR:0x3ffb2880(0x1111), SIZE:1
+I (3261) TEST_COMMON: 0x3ffc0fac, CHAR #3 MB_hold_reg-3 (Data) value = (0x4444) parameter read successful.
+I (3261) TEST_COMMON: CHAR #3, value is ok.
+I (3281) SLAVE: OBJ 0x3ffbc1c0, READ (2916521 us), SL: 0, REG:3, TYPE:2, INST_ADDR:0x3ffb2886(0x4444), SIZE:1
+I (3301) TEST_COMMON: 0x3ffc0fac, CHAR #4 CYCLE_COUNTER (Data) value = (0x0003), write successful.
+I (3311) SLAVE: OBJ 0x3ffaff70, WRITE (2695899 us), SL: 0, REG:1, TYPE:1, INST_ADDR:0x3ffb2882(0x2222), SIZE:1
+I (3361) SLAVE: OBJ 0x3ffaff70, WRITE (2715898 us), SL: 0, REG:2, TYPE:1, INST_ADDR:0x3ffb2884(0x3333), SIZE:1
+I (3381) TEST_COMMON: 0x3ffc0fac, CHAR #0 MB_hold_reg-0 (Data) value = (0x1111), write successful.
+I (3381) TEST_COMMON: CHAR #0, value is ok.
+I (3401) TEST_COMMON: 0x3ffc0fac, CHAR #1 MB_hold_reg-1 (Data) value = (0x2222), write successful.
+I (3401) TEST_COMMON: CHAR #1, value is ok.
+I (3411) SLAVE: OBJ 0x3ffaff70, WRITE (2757705 us), SL: 0, REG:4, TYPE:1, INST_ADDR:0x3ffb2888(0x3), SIZE:1
+I (3421) TEST_COMMON: 0x3ffc0fac, CHAR #2 MB_hold_reg-2 (Data) value = (0x3333), write successful.
+I (3421) TEST_COMMON: CHAR #2, value is ok.
+I (3461) TEST_COMMON: 0x3ffc0fac, CHAR #3 MB_hold_reg-3 (Data) value = (0x4444), write successful.
+I (3461) TEST_COMMON: CHAR #3, value is ok.
+I (3461) SLAVE: OBJ 0x3ffaff70, READ (2832271 us), SL: 0, REG:0, TYPE:2, INST_ADDR:0x3ffb2880(0x1111), SIZE:1
+I (3481) TEST_COMMON: 0x3ffc0fac, CHAR #4 CYCLE_COUNTER (Data) value = (0x0004), write successful.
+I (3501) SLAVE: OBJ 0x3ffbc1c0, WRITE (3112313 us), SL: 0, REG:3, TYPE:1, INST_ADDR:0x3ffb2886(0x4444), SIZE:1
+I (3531) SLAVE: OBJ 0x3ffaff70, READ (2856592 us), SL: 0, REG:1, TYPE:2, INST_ADDR:0x3ffb2882(0x2222), SIZE:1
+I (3561) TEST_COMMON: 0x3ffc0fac, CHAR #0 MB_hold_reg-0 (Data) value = (0x1111) parameter read successful.
+I (3561) TEST_COMMON: CHAR #0, value is ok.
+I (3581) TEST_COMMON: 0x3ffc0fac, CHAR #1 MB_hold_reg-1 (Data) value = (0x2222) parameter read successful.
+I (3581) TEST_COMMON: CHAR #1, value is ok.
+I (3581) SLAVE: OBJ 0x3ffaff70, READ (2892241 us), SL: 0, REG:2, TYPE:2, INST_ADDR:0x3ffb2884(0x3333), SIZE:1
+I (3601) TEST_COMMON: 0x3ffc0fac, CHAR #2 MB_hold_reg-2 (Data) value = (0x3333) parameter read successful.
+I (3601) TEST_COMMON: CHAR #2, value is ok.
+I (3631) SLAVE: OBJ 0x3ffbc1c0, READ (3292190 us), SL: 0, REG:3, TYPE:2, INST_ADDR:0x3ffb2886(0x4444), SIZE:1
+I (3641) TEST_COMMON: 0x3ffc0fac, CHAR #3 MB_hold_reg-3 (Data) value = (0x4444) parameter read successful.
+I (3641) TEST_COMMON: CHAR #3, value is ok.
+I (3651) SLAVE: OBJ 0x3ffaff70, WRITE (2952323 us), SL: 0, REG:4, TYPE:1, INST_ADDR:0x3ffb2888(0x4), SIZE:1
+I (3661) TEST_COMMON: 0x3ffc0fac, CHAR #4 CYCLE_COUNTER (Data) value = (0x0005), write successful.
+I (3711) SLAVE: OBJ 0x3ffaff70, WRITE (3032308 us), SL: 0, REG:0, TYPE:1, INST_ADDR:0x3ffb2880(0x1111), SIZE:1
+I (3741) TEST_COMMON: 0x3ffc0fac, CHAR #0 MB_hold_reg-0 (Data) value = (0x1111), write successful.
+I (3741) TEST_COMMON: CHAR #0, value is ok.
+I (3761) TEST_COMMON: 0x3ffc0fac, CHAR #1 MB_hold_reg-1 (Data) value = (0x2222), write successful.
+I (3761) TEST_COMMON: CHAR #1, value is ok.
+I (3761) SLAVE: OBJ 0x3ffaff70, WRITE (3055851 us), SL: 0, REG:1, TYPE:1, INST_ADDR:0x3ffb2882(0x2222), SIZE:1
+I (3781) TEST_COMMON: 0x3ffc0fac, CHAR #2 MB_hold_reg-2 (Data) value = (0x3333), write successful.
+I (3781) TEST_COMMON: CHAR #2, value is ok.
+I (3801) TEST_COMMON: 0x3ffc0fac, CHAR #3 MB_hold_reg-3 (Data) value = (0x4444), write successful.
+I (3801) TEST_COMMON: CHAR #3, value is ok.
+I (3821) TEST_COMMON: 0x3ffc0fac, CHAR #4 CYCLE_COUNTER (Data) value = (0x0006), write successful.
+I (3831) SLAVE: OBJ 0x3ffaff70, WRITE (3075891 us), SL: 0, REG:2, TYPE:1, INST_ADDR:0x3ffb2884(0x3333), SIZE:1
+I (3851) SLAVE: OBJ 0x3ffbc1c0, WRITE (3461046 us), SL: 0, REG:3, TYPE:1, INST_ADDR:0x3ffb2886(0x4444), SIZE:1
+I (3881) SLAVE: OBJ 0x3ffaff70, WRITE (3135912 us), SL: 0, REG:4, TYPE:1, INST_ADDR:0x3ffb2888(0x6), SIZE:1
+I (3901) TEST_COMMON: 0x3ffc0fac, CHAR #0 MB_hold_reg-0 (Data) value = (0x1111) parameter read successful.
+I (3901) TEST_COMMON: CHAR #0, value is ok.
+I (3921) TEST_COMMON: 0x3ffc0fac, CHAR #1 MB_hold_reg-1 (Data) value = (0x2222) parameter read successful.
+I (3921) TEST_COMMON: CHAR #1, value is ok.
+I (3931) SLAVE: OBJ 0x3ffaff70, READ (3212277 us), SL: 0, REG:0, TYPE:2, INST_ADDR:0x3ffb2880(0x1111), SIZE:1
+I (3941) TEST_COMMON: 0x3ffc0fac, CHAR #2 MB_hold_reg-2 (Data) value = (0x3333) parameter read successful.
+I (3941) TEST_COMMON: CHAR #2, value is ok.
+I (3961) SLAVE: OBJ 0x3ffbc1c0, READ (3632219 us), SL: 0, REG:3, TYPE:2, INST_ADDR:0x3ffb2886(0x4444), SIZE:1
+I (3981) TEST_COMMON: 0x3ffc0fac, CHAR #3 MB_hold_reg-3 (Data) value = (0x4444) parameter read successful.
+I (3981) TEST_COMMON: CHAR #3, value is ok.
+I (3981) SLAVE: OBJ 0x3ffaff70, READ (3236597 us), SL: 0, REG:1, TYPE:2, INST_ADDR:0x3ffb2882(0x2222), SIZE:1
+I (4001) TEST_COMMON: 0x3ffc0fac, CHAR #4 CYCLE_COUNTER (Data) value = (0x0007), write successful.
+I (4051) SLAVE: OBJ 0x3ffaff70, READ (3256592 us), SL: 0, REG:2, TYPE:2, INST_ADDR:0x3ffb2884(0x3333), SIZE:1
+I (4081) TEST_COMMON: 0x3ffc0fac, CHAR #0 MB_hold_reg-0 (Data) value = (0x1111), write successful.
+I (4081) TEST_COMMON: CHAR #0, value is ok.
+I (4101) TEST_COMMON: 0x3ffc0fac, CHAR #1 MB_hold_reg-1 (Data) value = (0x2222), write successful.
+I (4101) TEST_COMMON: CHAR #1, value is ok.
+I (4101) SLAVE: OBJ 0x3ffaff70, WRITE (3317189 us), SL: 0, REG:4, TYPE:1, INST_ADDR:0x3ffb2888(0x7), SIZE:1
+I (4121) TEST_COMMON: 0x3ffc0fac, CHAR #2 MB_hold_reg-2 (Data) value = (0x3333), write successful.
+I (4121) TEST_COMMON: CHAR #2, value is ok.
+I (4141) TEST_COMMON: 0x3ffc0fac, CHAR #3 MB_hold_reg-3 (Data) value = (0x4444), write successful.
+I (4141) TEST_COMMON: CHAR #3, value is ok.
+I (4161) TEST_COMMON: 0x3ffc0fac, CHAR #4 CYCLE_COUNTER (Data) value = (0x0008), write successful.
+I (4171) SLAVE: OBJ 0x3ffbc1c0, WRITE (3800798 us), SL: 0, REG:3, TYPE:1, INST_ADDR:0x3ffb2886(0x4444), SIZE:1
+I (4171) SLAVE: OBJ 0x3ffaff70, WRITE (3392307 us), SL: 0, REG:0, TYPE:1, INST_ADDR:0x3ffb2880(0x1111), SIZE:1
+I (4241) TEST_COMMON: 0x3ffc0fac, CHAR #0 MB_hold_reg-0 (Data) value = (0x1111) parameter read successful.
+I (4241) TEST_COMMON: CHAR #0, value is ok.
+I (4241) SLAVE: OBJ 0x3ffaff70, WRITE (3415907 us), SL: 0, REG:1, TYPE:1, INST_ADDR:0x3ffb2882(0x2222), SIZE:1
+I (4261) TEST_COMMON: 0x3ffc0fac, CHAR #1 MB_hold_reg-1 (Data) value = (0x2222) parameter read successful.
+I (4261) TEST_COMMON: CHAR #1, value is ok.
+I (4301) TEST_COMMON: 0x3ffc0fac, CHAR #2 MB_hold_reg-2 (Data) value = (0x3333) parameter read successful.
+I (4301) TEST_COMMON: CHAR #2, value is ok.
+I (4301) SLAVE: OBJ 0x3ffaff70, WRITE (3435893 us), SL: 0, REG:2, TYPE:1, INST_ADDR:0x3ffb2884(0x3333), SIZE:1
+I (4321) TEST_COMMON: 0x3ffc0fac, CHAR #3 MB_hold_reg-3 (Data) value = (0x4444) parameter read successful.
+I (4321) TEST_COMMON: CHAR #3, value is ok.
+I (4341) SLAVE: OBJ 0x3ffbc1c0, READ (3976522 us), SL: 0, REG:3, TYPE:2, INST_ADDR:0x3ffb2886(0x4444), SIZE:1
+I (4361) TEST_COMMON: 0x3ffc0fac, CHAR #4 CYCLE_COUNTER (Data) value = (0x0009), write successful.
+I (4371) SLAVE: OBJ 0x3ffaff70, WRITE (3477778 us), SL: 0, REG:4, TYPE:1, INST_ADDR:0x3ffb2888(0x9), SIZE:1
+I (4421) SLAVE: OBJ 0x3ffaff70, READ (3552271 us), SL: 0, REG:0, TYPE:2, INST_ADDR:0x3ffb2880(0x1111), SIZE:1
+I (4441) TEST_COMMON: 0x3ffc0fac, CHAR #0 MB_hold_reg-0 (Data) value = (0x1111), write successful.
+I (4441) TEST_COMMON: CHAR #0, value is ok.
+I (4461) TEST_COMMON: 0x3ffc0fac, CHAR #1 MB_hold_reg-1 (Data) value = (0x2222), write successful.
+I (4461) TEST_COMMON: CHAR #1, value is ok.
+I (4471) SLAVE: OBJ 0x3ffaff70, READ (3576533 us), SL: 0, REG:1, TYPE:2, INST_ADDR:0x3ffb2882(0x2222), SIZE:1
+I (4481) TEST_COMMON: 0x3ffc0fac, CHAR #2 MB_hold_reg-2 (Data) value = (0x3333), write successful.
+I (4481) TEST_COMMON: CHAR #2, value is ok.
+I (4521) TEST_COMMON: 0x3ffc0fac, CHAR #3 MB_hold_reg-3 (Data) value = (0x4444), write successful.
+I (4521) TEST_COMMON: CHAR #3, value is ok.
+I (4541) TEST_COMMON: 0x3ffc0fac, CHAR #4 CYCLE_COUNTER (Data) value = (0x000a), write successful.
+I (4581) TEST_COMMON: Destroy slave, inst: 0x3ffaff70.
+I (4601) TEST_COMMON: Destroy master, inst: 0x3ffc0fac.
+I (4621) TEST_COMMON: Destroy slave, inst: 0x3ffbc1c0.
+I (4621) TEST_COMMON: Test task 0x3ffc5b94, done successfully.
+I (4641) TEST_COMMON: Test task 0x3ffc0de0, done successfully.
+I (4651) TEST_COMMON: Test task 0x3ffbbff4, done successfully.
+MALLOC_CAP_8BIT usage: Free memory delta: 0 Leak threshold: -128 
+MALLOC_CAP_32BIT usage: Free memory delta: 0 Leak threshold: -128 
+I (4661) MODBUS_SERIAL_TEST: TEST_modbus_adapter_serial_TEAR_DOWN, done successfully.</system-out></testcase></testsuite>
