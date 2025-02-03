@@ -68,6 +68,22 @@ static esp_err_t trigger_async_send(httpd_handle_t handle, httpd_req_t *req)
     return ret;
 }
 
+static esp_err_t http_index_handler(httpd_req_t *req)
+{
+        ESP_LOGI(TAG, "%s: index called", __func__);
+//	httpd_ws_send_frame(req, &ws_pkt);
+
+	return ESP_OK;
+}
+
+static esp_err_t no_one_http_handler(httpd_req_t *req)
+{
+        ESP_LOGI(TAG, "%s: common handler is called", __func__);
+//	httpd_ws_send_frame(req, &ws_pkt);
+
+	return ESP_OK;
+}
+
 /*
  * This handler echos back the received ws data
  * and triggers an async send if certain message received
@@ -121,13 +137,22 @@ static esp_err_t echo_handler(httpd_req_t *req)
     return ret;
 }
 
-// static const httpd_uri_t http = {
-//         .uri        = "/index.html",
-//         .method     = HTTP_GET,
-//         .handler    = echo_handler,
-//         .user_ctx   = NULL,
-//         .is_websocket = true
-// };
+#define NO_ONE_HTTP_NAME "NO_ONE"
+static const httpd_uri_t http_index = {
+        .uri        = "/index.html",
+        .method     = HTTP_GET,
+        .handler    = http_index_handler,
+        .user_ctx   = NULL,
+        .is_websocket = false 
+};
+
+static const httpd_uri_t no_one_http = {
+        .uri        = NO_ONE_HTTP_NAME,
+        .method     = HTTP_GET,
+        .handler    = no_one_http_handler,
+        .user_ctx   = NULL,
+        .is_websocket = false 
+};
 
 static const httpd_uri_t ws = {
         .uri        = "/ws", //http://<ip>/ws
@@ -137,18 +162,49 @@ static const httpd_uri_t ws = {
         .is_websocket = true
 };
 
+// Just a copy from esp-idf (it is static in esp-idf)
+static bool httpd_uri_match_simple(const char *uri1, const char *uri2, size_t len2)
+{
+    return strlen(uri1) == len2 &&          // First match lengths
+        (strncmp(uri1, uri2, len2) == 0);   // Then match actual URIs
+}
+
+static bool server_uri_matcher(const char *uri1, const char *uri2, size_t len2)
+{
+	//NOTE: uri1 is always http_data (server data) => we can check it for 
+	//default handler
+	
+//        ESP_LOGI(TAG, "%s: uri1: %s   uri2: %s\n", __func__, uri1, uri2);
+	if (httpd_uri_match_simple(uri1, uri2, len2))
+		return true;
+
+	// 1. it is already registere2
+	// 2. we haven't found any handlers and come up to NO_ONE_HTTP_NAME
+	if (strcmp(uri1, NO_ONE_HTTP_NAME) == 0)
+		return true;
+
+	return false;
+}
 
 static httpd_handle_t start_webserver(void)
 {
     httpd_handle_t server = NULL;
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
 
+    // Rewrite uri_match_fn which is NULL and is set by HTTPD_DEFAULT_CONFIG()
+    config.uri_match_fn = server_uri_matcher;
+
     // Start the httpd server
     ESP_LOGI(TAG, "Starting server on port: '%d'", config.server_port);
     if (httpd_start(&server, &config) == ESP_OK) {
-        // Registering the ws handler
         ESP_LOGI(TAG, "Registering URI handlers");
         httpd_register_uri_handler(server, &ws);
+        httpd_register_uri_handler(server, &http_index);
+	
+	// WARNINNG: keep no_one_http handler at the end because it will always be called
+	// in case of any matches. This guaranteed by uri_match_fn which check code name
+	// and return the hander
+        httpd_register_uri_handler(server, &no_one_http);
         return server;
     }
 
