@@ -17,8 +17,18 @@
 #include "esp_eth.h"
 #include "protocol_examples_common.h"
 #include "ws_api.h"
+#include "esp_littlefs.h"
 
 #include <esp_http_server.h>
+
+/* Littlefs */
+esp_vfs_littlefs_conf_t conf = {
+        .base_path = "/littlefs",
+        .partition_label = "storage",
+        .format_if_mount_failed = true,
+        .dont_mount = false,
+};
+
 
 /* A simple example that demonstrates using websocket echo server
  */
@@ -80,6 +90,14 @@ static esp_err_t no_one_http_handler(httpd_req_t *req)
 {
         ESP_LOGI(TAG, "%s: common handler is called", __func__);
 //	httpd_ws_send_frame(req, &ws_pkt);
+
+        ESP_LOGI(TAG, "Opening file");
+        FILE *f = fopen("/littlefs/hello.txt", "w");
+        if (f == NULL) {
+            ESP_LOGE(TAG, "Failed to open file for writing");
+        } else {
+            ESP_LOGE(TAG, "file is opened");
+	}
 
 	return ESP_OK;
 }
@@ -242,17 +260,62 @@ static void connect_handler(void* arg, esp_event_base_t event_base,
     }
 }
 
+esp_err_t setup_littlefs(void)
+{
+    // Use settings defined above to initialize and mount LittleFS filesystem.
+    // Note: esp_vfs_littlefs_register is an all-in-one convenience function.
+    esp_err_t ret = esp_vfs_littlefs_register(&conf);
+
+    if (ret != ESP_OK) {
+        if (ret == ESP_FAIL) {
+            ESP_LOGE(TAG, "Failed to mount or format filesystem");
+        } else if (ret == ESP_ERR_NOT_FOUND) {
+            ESP_LOGE(TAG, "Failed to find LittleFS partition");
+        } else {
+            ESP_LOGE(TAG, "Failed to initialize LittleFS (%s)", esp_err_to_name(ret));
+        }
+        return ESP_OK;
+    }
+
+    return ESP_OK;
+}
 
 void app_main(void)
 {
     static httpd_handle_t server = NULL;
-    
+    esp_err_t ret = ESP_FAIL;
     //NOTE: just a test to check component build system. Delete it as soon as possible
     ws_api_inc_test();
 
     ESP_ERROR_CHECK(nvs_flash_init());
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
+
+    ret = setup_littlefs();
+    if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to initialize LittleFS (%s)", esp_err_to_name(ret));
+    } else {
+            ESP_LOGI(TAG, "Initialize LittleFS success!!!(%s)", esp_err_to_name(ret));
+
+	    ESP_LOGI(TAG, "Opening file");
+	    FILE *f = fopen("/littlefs/hello.txt", "w");
+	    if (f == NULL) {
+	        ESP_LOGE(TAG, "Failed to open file for writing");
+	        return;
+	    }
+	    fprintf(f, "Hello World!\n");
+	    fclose(f);
+	    ESP_LOGI(TAG, "File written");
+
+	    size_t total = 0, used = 0;
+	    ret = esp_littlefs_info(conf.partition_label, &total, &used);
+	    if (ret != ESP_OK) {
+	        ESP_LOGE(TAG, "Failed to get LittleFS partition information (%s)", esp_err_to_name(ret));
+	        esp_littlefs_format(conf.partition_label);
+	    } else {
+	        ESP_LOGI(TAG, "Partition size: total: %d, used: %d", total, used);
+	    }
+    }
 
     /* This helper function configures Wi-Fi or Ethernet, as selected in menuconfig.
      * Read "Establishing Wi-Fi or Ethernet Connection" section in
