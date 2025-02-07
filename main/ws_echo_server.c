@@ -18,8 +18,10 @@
 #include "protocol_examples_common.h"
 #include "ws_api.h"
 #include "esp_littlefs.h"
+#include <tftp_server_wg.h>
 
 #include <esp_http_server.h>
+#include <stdio.h>
 
 /* Littlefs */
 esp_vfs_littlefs_conf_t conf = {
@@ -290,6 +292,8 @@ void app_main(void)
     ESP_ERROR_CHECK(nvs_flash_init());
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
+
+    tftp_example_init_server();
 
     ret = setup_littlefs();
     if (ret != ESP_OK) {
