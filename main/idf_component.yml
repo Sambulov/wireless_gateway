@@ -1,9 +1,11 @@
 dependencies:
-  protocol_examples_common:
-    path: ${IDF_PATH}/examples/common_components/protocol_examples_common
+  #protocol_examples_common:
+  #  path: ${IDF_PATH}/examples/common_components/protocol_examples_common
   joltwallet/littlefs: "~=1.16.0"
   ws_api:
     path: ../ws_api
   tftp_server:
     path: ../tftp_server
+  protocol_examples_common:
+    path: ../protocol_examples_common
   espressif/esp-modbus: "~=2.0.0"

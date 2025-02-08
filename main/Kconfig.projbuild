@@ -1,0 +1,9 @@
+menu "Project Configuration"
+    config TEST_STRING
+            string "test string config parameter"
+            default "test str"
+            help
+                Type something klever or add some other options & properties
+                @"Show me the code!!!"
+
+endmenu
