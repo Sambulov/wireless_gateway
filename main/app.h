@@ -9,7 +9,7 @@ esp_err_t setup_littlefs(void);
 
 /*=======================*/
 
-#define NO_ONE_HTTP_NAME "NO_ONE"
+#define WEB_FILE_HANDLER_NAME "/*"
 
 void connect_handler(void* arg, esp_event_base_t event_base,
                             int32_t event_id, void* event_data);
@@ -21,4 +21,7 @@ esp_err_t stop_webserver(httpd_handle_t server);
 
 httpd_handle_t start_webserver(void);
 
-extern const httpd_uri_t no_one_http;
+extern httpd_uri_t file_server;
+extern httpd_uri_t dir_list;
+extern httpd_uri_t file_upload;
+extern httpd_uri_t file_delete;

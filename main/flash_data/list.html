@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Файловый менеджер</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+        }
+        .file-manager {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 20px;
+        }
+        .file-tile {
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            padding: 10px;
+            text-align: center;
+            width: 100px;
+            position: relative;
+        }
+        .file-icon {
+            font-size: 40px;
+        }
+        .file-name {
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+
+<h1>Файловый менеджер</h1>
+<div class="file-manager" id="fileManager"></div>
+
+<input type="file" id="fileInput" style="display: none;" />
+<button onclick="document.getElementById('fileInput').click();">Загрузить файл</button>
+<button id="deleteFileButton">Удалить файл</button>
+
+<script>
+    const fileManager = document.getElementById('fileManager');
+    const fileInput = document.getElementById('fileInput');
+    const deleteFileButton = document.getElementById('deleteFileButton');
+    const gateway = `ws://${window.location.hostname}/ws`;
+    let websocket;
+    let selectedFile = null;
+
+    function connectWebSocket() {
+        websocket = new WebSocket(gateway);
+
+        websocket.onopen = function() {
+            console.log('Соединение установлено');
+            websocket.send(JSON.stringify({ action: 'list_files' }));
+        };
+
+        websocket.onmessage = function(event) {
+            const data = JSON.parse(event.data);
+            if (data.action === 'list_files') {
+                displayFiles(data.files);
+            }
+        };
+
+        websocket.onclose = function(event) {
+            console.log('Соединение закрыто', event);
+        };
+    }
+
+    function displayFiles(files) {
+        fileManager.innerHTML = '';
+        files.forEach(file => {
+            const tile = document.createElement('div');
+            tile.className = 'file-tile';
+            tile.innerHTML = `
+                <div class="file-icon">${getFileIcon(file.name)}</div>
+                <div class="file-name">${file.name}</div>
+            `;
+            tile.onclick = () => {
+                selectedFile = file;
+                tile.classList.toggle('selected');
+            };
+            fileManager.appendChild(tile);
+        });
+    }
+
+    function getFileIcon(fileName) {
+        const extension = fileName.split('.').pop();
+        switch (extension) {
+            case 'jpg':
+            case 'png':
+            case 'gif':
+                return '🖼️'; // image icon
+            case 'txt':
+                return '📄'; // text file icon
+            case 'pdf':
+                return '📑'; // pdf icon
+            case 'zip':
+                return '📦'; // zip file icon
+            default:
+                return '📁'; // folder icon
+        }
+    }
+
+    fileInput.onchange = function() {
+        const file = fileInput.files[0];
+        if (file) {
+            const reader = new FileReader();
+            reader.onload = function() {
+                websocket.send(JSON.stringify({ action: 'upload_file', name: file.name, data: reader.result }));
+            };
+            reader.readAsArrayBuffer(file);
+        }
+    };
+
+    deleteFileButton.onclick = function() {
+        if (selectedFile) {
+            websocket.send(JSON.stringify({ action: 'delete_file', name: selectedFile.name }));
+            selectedFile = null;
+        } else {
+            alert('Выберите файл для удаления');
+        }
+    };
+
+    connectWebSocket();
+</script>
+
+</body>
+</html>
