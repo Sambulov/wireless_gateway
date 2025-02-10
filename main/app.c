@@ -21,8 +21,10 @@ static const char *TAG = "app";
 
 void app_main(void)
 {
-    static httpd_handle_t server = NULL;
-    esp_err_t ret = ESP_FAIL;
+    static app_context_t app_context;
+    ESP_LOGI(TAG, "App start");
+
+
     //NOTE: just a test to check component build system. Delete it as soon as possible
     //ws_api_inc_test();
 
@@ -32,16 +34,6 @@ void app_main(void)
 
     setup_littlefs();
 
-    // ESP_LOGI(TAG, "Opening file");
-    // FILE *f = fopen("/lfs/hello.txt", "w");
-    // if (f == NULL) {
-    //     ESP_LOGE(TAG, "Failed to open file for writing");
-    //     return;
-    // }
-    // fprintf(f, "Hello World!\n");
-    // fclose(f);
-    // ESP_LOGI(TAG, "File written");
-
     tftp_example_init_server();
 
     /* This helper function configures Wi-Fi or Ethernet, as selected in menuconfig.
@@ -50,18 +42,18 @@ void app_main(void)
      */
     ESP_ERROR_CHECK(example_connect());
 
+    // /* Start the server for the first time */
+    app_context.web_server = start_webserver();
+
     /* Register event handlers to stop the server when Wi-Fi or Ethernet is disconnected,
      * and re-start it upon connection.
      */
 #ifdef CONFIG_EXAMPLE_CONNECT_WIFI
-    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &connect_handler, &server));
-    ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, &disconnect_handler, &server));
+    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &connect_handler, &app_context));
+    ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, &disconnect_handler, &app_context));
 #endif // CONFIG_EXAMPLE_CONNECT_WIFI
 #ifdef CONFIG_EXAMPLE_CONNECT_ETHERNET
-    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_ETH_GOT_IP, &connect_handler, &server));
-    ESP_ERROR_CHECK(esp_event_handler_register(ETH_EVENT, ETHERNET_EVENT_DISCONNECTED, &disconnect_handler, &server));
+    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_ETH_GOT_IP, &connect_handler, &app_context));
+    ESP_ERROR_CHECK(esp_event_handler_register(ETH_EVENT, ETHERNET_EVENT_DISCONNECTED, &disconnect_handler, &app_context));
 #endif // CONFIG_EXAMPLE_CONNECT_ETHERNET
-
-    // /* Start the server for the first time */
-    server = start_webserver();
 }

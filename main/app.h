@@ -1,4 +1,8 @@
 
+#include "esp_littlefs.h"
+#include "esp_http_server.h"
+
+
 extern const httpd_uri_t ws;
 
 
@@ -25,3 +29,18 @@ extern httpd_uri_t file_server;
 extern httpd_uri_t dir_list;
 extern httpd_uri_t file_upload;
 extern httpd_uri_t file_delete;
+
+/*=======================*/
+
+typedef struct {
+    char sta_ssid[32];
+    size_t sta_ssid_len;
+    char sta_pass[64];
+    size_t sta_pass_len;
+    char ap_ssid[32];
+    size_t ap_ssid_len;
+    char ap_pass[64];
+    size_t ap_pass_len;
+
+    httpd_handle_t web_server;
+} app_context_t;

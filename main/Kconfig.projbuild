@@ -1,4 +1,22 @@
 menu "Project Configuration"
+    config WEB_SERVER_PORT
+        int "Web server port"
+        range 0 65535
+        default 80
+        help
+            Set server port number used by web serer.
+    config WIFI_AP_DEFAULT_SSID
+        string "Default AP name"
+        default "TestNet"
+        help
+            Set default AP ssid.
+
+    config WIFI_AP_DEFAULT_PASS
+        string "Default AP password"
+        default ""
+        help
+            Set default AP password.
+
     config TEST_STRING
             string "test string config parameter"
             default "test str"
