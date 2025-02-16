@@ -35,40 +35,47 @@ void save_wifi_ap_config(const char *ssid, const char *password) {
     ESP_LOGI(TAG, "Wi-Fi AP settings saved to NVS: SSID=%s", ssid);
 }
 
-static bool _load_config_default(app_context_t *cnf) {
+static bool _load_config_default(app_context_t *app) {
+    app->ap_cnf.ap.ssid[0] = '\0';
+    app->ap_cnf.ap.ssid_len = min(sizeof(CONFIG_WIFI_AP_DEFAULT_SSID), sizeof(app->ap_cnf.ap.ssid));
+    strlcpy((char *)app->ap_cnf.ap.ssid, CONFIG_WIFI_AP_DEFAULT_SSID, app->ap_cnf.ap.ssid_len);
 
-    strlcpy(cnf->ap_ssid, CONFIG_WIFI_AP_DEFAULT_SSID, sizeof(cnf->ap_ssid));
-    cnf->ap_ssid_len = sizeof(CONFIG_WIFI_AP_DEFAULT_SSID) - 1;
+    app->ap_cnf.ap.password[0] = '\0';
+    size_t pass_len = min(sizeof(CONFIG_WIFI_AP_DEFAULT_PASS), sizeof(app->ap_cnf.ap.password));
+    strlcpy((char *)app->ap_cnf.ap.password, CONFIG_WIFI_AP_DEFAULT_PASS, pass_len);
 
-    strlcpy(cnf->ap_pass, CONFIG_WIFI_AP_DEFAULT_PASS, sizeof(cnf->ap_pass));
-    cnf->ap_pass_len = sizeof(CONFIG_WIFI_AP_DEFAULT_PASS) - 1;
+    app->ap_cnf.ap.max_connection = 4;
+    app->ap_cnf.ap.authmode = WIFI_AUTH_WPA2_PSK;
 
-    cnf->sta_ssid_len = 0;
-    cnf->sta_pass_len = 0;
+    app->sta_cnf.sta.ssid[0] = '\0';
+    app->sta_cnf.sta.password[0] = '\0';
+
     ESP_LOGI(TAG, "App config loaded default");
     return true;
 }
 
-bool load_config(app_context_t *cnf) {
+bool load_config(app_context_t *app) {
     nvs_handle_t nvs_handle;
     if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs_handle) != ESP_OK)
-        return _load_config_default(cnf);
+        return _load_config_default(app);
 
-    cnf->ap_ssid_len = sizeof(cnf->ap_ssid);
-    if(nvs_get_str(nvs_handle, NVS_KEY_AP_SSID, cnf->ap_ssid, &cnf->ap_ssid_len) != ESP_OK)
-        cnf->ap_ssid_len = 0;
+    app->ap_cnf.ap.ssid_len = sizeof(app->ap_cnf.ap.ssid);
+    size_t len = sizeof(app->ap_cnf.ap.ssid);
+    app->ap_cnf.ap.ssid_len = 0;
+    if(nvs_get_str(nvs_handle, NVS_KEY_AP_SSID, (char *)app->ap_cnf.ap.ssid, &len) == ESP_OK)
+        app->ap_cnf.ap.ssid_len = len;
 
-    cnf->ap_pass_len = sizeof(cnf->ap_pass);
-    if(nvs_get_str(nvs_handle, NVS_KEY_AP_PASS, cnf->ap_pass, &cnf->ap_pass_len) != ESP_OK)
-        cnf->ap_pass_len = 0;
+    len = sizeof(app->ap_cnf.ap.password);
+    if(nvs_get_str(nvs_handle, NVS_KEY_AP_PASS, (char *)app->ap_cnf.ap.password, &len) != ESP_OK)
+        app->ap_cnf.ap.password[0] = '\0';
 
-    cnf->sta_ssid_len = sizeof(cnf->sta_ssid);
-    if(nvs_get_str(nvs_handle, NVS_KEY_STA_SSID, cnf->sta_ssid, &cnf->sta_ssid_len) != ESP_OK)
-      cnf->sta_ssid_len = 0;
+    len = sizeof(app->sta_cnf.sta.ssid);
+    if(nvs_get_str(nvs_handle, NVS_KEY_STA_SSID, (char *)app->sta_cnf.sta.ssid, &len) != ESP_OK)
+        app->sta_cnf.sta.ssid[0] = '\0';
 
-    cnf->sta_pass_len = sizeof(cnf->sta_pass);
-    if(nvs_get_str(nvs_handle, NVS_KEY_STA_PASS, cnf->sta_pass, &cnf->sta_pass_len) != ESP_OK)
-        cnf->sta_pass_len = 0;
+    len = sizeof(app->sta_cnf.sta.password);
+    if(nvs_get_str(nvs_handle, NVS_KEY_STA_PASS, (char *)app->sta_cnf.sta.password, &len) != ESP_OK)
+        app->sta_cnf.sta.password[0] = '\0';
 
     nvs_close(nvs_handle);
     ESP_LOGI(TAG, "App config loaded from NVS");

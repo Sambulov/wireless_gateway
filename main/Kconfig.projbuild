@@ -13,7 +13,7 @@ menu "Project Configuration"
 
     config WIFI_AP_DEFAULT_PASS
         string "Default AP password"
-        default ""
+        default "12345678"
         help
             Set default AP password.
 

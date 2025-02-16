@@ -6,30 +6,6 @@
 
 static const char *TAG = "web_server";
 
-void connect_handler(void* arg, esp_event_base_t event_base,
-                            int32_t event_id, void* event_data)
-{
-    app_context_t* app = (app_context_t*) arg;
-    if (app->web_server == NULL) {
-        ESP_LOGI(TAG, "Starting webserver");
-        app->web_server = start_webserver();
-    }
-}
-
-void disconnect_handler(void* arg, esp_event_base_t event_base,
-                               int32_t event_id, void* event_data)
-{
-    app_context_t* app = (app_context_t*) arg;
-    if (app->web_server) {
-        ESP_LOGI(TAG, "Stopping webserver");
-        if (httpd_stop(app->web_server) == ESP_OK) {
-            app->web_server = NULL;
-        } else {
-            ESP_LOGE(TAG, "Failed to stop http server");
-        }
-    }
-}
-
 httpd_handle_t start_webserver(void)
 {
     httpd_handle_t server = NULL;

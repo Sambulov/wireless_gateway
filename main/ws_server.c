@@ -20,9 +20,12 @@
 #include "ws_api.h"
 #include "esp_littlefs.h"
 #include <tftp_server_wg.h>
+#include "cJSON.h"
 
 #include <esp_http_server.h>
 #include <stdio.h>
+
+#include "app.h"
 
 #define ESP_VFS_PATH_MAX    128
 
@@ -146,10 +149,84 @@ static esp_err_t echo_handler(httpd_req_t *req)
     return ret;
 }
 
-const httpd_uri_t ws = {
-        .uri        = "/ws", //http://<ip>/ws
-        .method     = HTTP_GET,
-        .handler    = echo_handler,
-        .user_ctx   = NULL,
-        .is_websocket = true
+// Обработчик WebSocket-сообщений
+// esp_err_t ws_handler(httpd_req_t *req) {
+//     if (req->method == HTTP_GET) {
+//         ESP_LOGI(TAG, "WebSocket connection established");
+//         return ESP_OK;
+//     }
+
+//     uint8_t buf[512];
+//     int len = httpd_ws_recv_frame(req, buf, sizeof(buf));
+//     if (len < 0) {
+//         ESP_LOGE(TAG, "WebSocket receive failed");
+//         return ESP_FAIL;
+//     }
+
+//     // Обработка полученного сообщения
+//     buf[len] = '\0';
+//     ESP_LOGI(TAG, "WebSocket message received: %s", buf);
+
+//     // Парсинг JSON
+//     cJSON *json = cJSON_Parse((char *)buf);
+//     if (json == NULL) {
+//         ESP_LOGE(TAG, "Invalid JSON");
+//         return ESP_FAIL;
+//     }
+
+//     // Обработка команды для настройки UART
+//     cJSON *baud_rate_json = cJSON_GetObjectItem(json, "baud_rate");
+//     if (baud_rate_json != NULL) {
+//         int baud_rate = baud_rate_json->valueint;
+
+//         uart_reconfigure(baud_rate);
+//     }
+
+//     // Обработка команды для настройки Wi-Fi STA
+//     cJSON *wifi_ssid_json = cJSON_GetObjectItem(json, "wifi_ssid");
+//     cJSON *wifi_pass_json = cJSON_GetObjectItem(json, "wifi_pass");
+//     if (wifi_ssid_json != NULL && wifi_pass_json != NULL) {
+//         const char *ssid = wifi_ssid_json->valuestring;
+//         const char *pass = wifi_pass_json->valuestring;
+//         save_wifi_config(ssid, pass);
+//         wifi_init_ap_sta(ssid, pass);
+//     }
+
+//     // Обработка команды для отправки данных на UART
+//     cJSON *uart_data_json = cJSON_GetObjectItem(json, "uart_data");
+//     if (uart_data_json != NULL) {
+//         const char *uart_data = uart_data_json->valuestring;
+//         uart_send_data(uart_data, strlen(uart_data));
+//     }
+
+//     cJSON_Delete(json);
+//     return ESP_OK;
+// }
+
+// // Задача для чтения данных с UART и отправки через WebSocket
+// void uart_to_websocket_send(app_context_t *context, const char *data, size_t len) {
+//     if (server != NULL) {
+//         httpd_ws_frame_t ws_pkt = {
+//             .final = true,
+//             .fragmented = false,
+//             .type = HTTPD_WS_TYPE_TEXT,
+//             .payload = data,
+//             .len = len,
+//         };
+//         httpd_ws_send_frame_async(context->web_server, httpd_req_to_sockfd(server->hd_req), &ws_pkt);
+//     }
+// }
+
+#include "app.h"
+
+httpd_uri_t ws = {
+    .uri        = "/ws", //http://<ip>/ws
+    .method     = HTTP_GET,
+    .handler    = echo_handler,
+    .user_ctx   = NULL,
+    .is_websocket = true
 };
+
+void ws_init(app_context_t *context) {
+    ws.user_ctx = context;
+}
