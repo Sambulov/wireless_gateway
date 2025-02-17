@@ -27,26 +27,19 @@
 
 #include "app.h"
 
-#define ESP_VFS_PATH_MAX    128
+#include "web_api.h"
 
-#define FILE_PATH_MAX (ESP_VFS_PATH_MAX + CONFIG_LITTLEFS_OBJ_NAME_LEN)
-#define SCRATCH_BUFSIZE  8192
-struct file_server_data {
-    /* Base path of file storage */
-    char base_path[ESP_VFS_PATH_MAX + 1];
- 
-    /* Scratch buffer for temporary storage during file transfer */
-    char scratch[SCRATCH_BUFSIZE];
-};
-
-
-/* Max size of an individual file. Make sure this
- * value is same as that set in upload_script.html */
-#define MAX_FILE_SIZE   (200*1024) // 200 KB
-#define MAX_FILE_SIZE_STR "200KB"
-
-/* Scratch buffer size */
-#define SCRATCH_BUFSIZE  8192
+// typedef struct {
+//     __LinkedListObject__
+//     uint8_t *pucReqData;
+//     uint32_t ulReqDataLen;
+//      *pxWsc;
+//     uint32_t ulTimestamp;
+//     uint32_t ulId;
+//     void *pxHandlerContext;
+//     WsApiHandler_t *pxApiEP;
+//     uint8_t ucStatus;
+//   } WsApiCall_t;
 
 /* A simple example that demonstrates using websocket echo server
  */
@@ -103,6 +96,7 @@ static esp_err_t trigger_async_send(httpd_handle_t handle, httpd_req_t *req)
 static esp_err_t echo_handler(httpd_req_t *req)
 {
     if (req->method == HTTP_GET) {
+
         ESP_LOGI(TAG, "Handshake done, the new connection was opened");
         return ESP_OK;
     }
@@ -220,7 +214,7 @@ static esp_err_t echo_handler(httpd_req_t *req)
 #include "app.h"
 
 httpd_uri_t ws = {
-    .uri        = "/ws", //http://<ip>/ws
+    .uri        = "/ws", // http://<ip>/ws -> ws://<ip>/ws
     .method     = HTTP_GET,
     .handler    = echo_handler,
     .user_ctx   = NULL,
