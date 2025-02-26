@@ -55,6 +55,7 @@ typedef struct {
     httpd_handle_t web_server;
 } app_context_t;
 
+void ws_init(app_context_t *context);
 
 /*==========================*/
 

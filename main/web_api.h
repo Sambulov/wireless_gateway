@@ -3,7 +3,7 @@
 
 #include "LinkedList.h"
 
-#define API_HANDLER_ID_BASIC                       0x00000000
+#define API_HANDLER_ID_GENEGAL                     0x00000000
 
 #define WEB_API_STATUS_OK                          0x00000000
 #define WEB_API_STATUS_CANCELED                    0x00000001
@@ -27,7 +27,7 @@
 	@param[in] pucData request arg (json string)
 	@param[in] ulLen arg size
 */
-typedef void (WsRequestHandler_t)(uint32_t ulCallId, void **ppxInOutCallContext, uint8_t *pucData, uint32_t ulLen);
+typedef uint8_t (WsRequestHandler_t)(uint32_t ulCallId, void **ppxInOutCallContext, char *pucData, uint32_t ulLen);
 
 typedef void (*ApiDataSerializer_t)(uint8_t *pucBuf, uint32_t *ulInOutSize, void *pxArg);
 
@@ -37,14 +37,15 @@ typedef struct {
   uint32_t ulFunctionId;
 } WsApiHandler_t;
 
-void vWebApiRegisterHandler(WsApiHandler_t *handler); //todo: use esp_event
+uint8_t vWebApiRegisterHandler(WsApiHandler_t *handler);
 
 int32_t lWebApiResponseSerializerFidGroup(uint32_t ulFid, ApiDataSerializer_t fSerializer, void *pxArg);
 int32_t lWebApiResponseDataFidGroup(uint32_t ulFid, uint8_t *ucData, uint32_t ulLen);
 
 int32_t lWebApiResponseSerializer(uint32_t ulCallId, ApiDataSerializer_t fSerializer, void *pxArg);
 int32_t lWebApiResponseData(uint32_t ulCallId, uint8_t *ucData, uint32_t ulLen);
-int32_t lWebApiResponseStatus(uint32_t ulCallId, uint32_t ulSta);
+
+uint8_t bWebApiResponseStatus(uint32_t ulCallId, uint32_t ulSta);
 
 void vWebApiCallComplete(uint32_t ulCallId);
 

@@ -60,7 +60,7 @@ httpd_handle_t start_webserver(void)
         httpd_register_uri_handler(server, &dir_list);
         httpd_register_uri_handler(server, &file_upload);
         httpd_register_uri_handler(server, &file_delete);
-        httpd_register_uri_handler(server, &file_server);        
+        httpd_register_uri_handler(server, &file_server);
         return server;
     }
 

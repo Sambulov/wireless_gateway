@@ -8,18 +8,44 @@
 #include "esp_netif.h"
 #include "esp_eth.h"
 #include "protocol_examples_common.h"
-//#include "ws_api.h"
 #include "esp_littlefs.h"
 #include <tftp_server_wg.h>
 
 #include <esp_http_server.h>
 #include <stdio.h>
 
+#include "web_api.h"
+
 #include "app.h"
 
 #include "connection.h"
 
 static const char *TAG = "app";
+
+uint8_t bWsApiHandlerEcho(uint32_t ulCallId, void **ppxInOutCallContext, char *pucData, uint32_t ulLen) {
+    ESP_LOGI(TAG, "WS echo handler call %lu, with arg:%s", ulCallId, pucData);
+    return 1;
+}
+
+uint8_t bWsApiHandlerContinues(uint32_t ulCallId, void **ppxInOutCallContext, char *pucData, uint32_t ulLen) {
+    uint32_t *tmp = (uint32_t *)ppxInOutCallContext;
+    if(*tmp == 0) {
+        ESP_LOGI(TAG, "WS first cont handler call %lu, with arg:%s", ulCallId, pucData);
+        bWebApiResponseStatus(ulCallId, WEB_API_STATUS_OK);
+        *tmp = 1;
+    }
+    else {
+        bWebApiResponseStatus(ulCallId, WEB_API_STATUS_BUSY);
+        ESP_LOGI(TAG, "WS second cont handler call %lu, with arg:%s", ulCallId, pucData);
+    }
+    return 0;
+}
+
+#define ESP_EVENT_WS_API_ECHO_ID    1000
+WsApiHandler_t ws_api_call_echo = {.pfHandler = bWsApiHandlerEcho, .ulFunctionId = ESP_EVENT_WS_API_ECHO_ID};
+#define ESP_EVENT_WS_API_CONT_ID    1001
+WsApiHandler_t ws_api_call_cont = {.pfHandler = bWsApiHandlerContinues, .ulFunctionId = ESP_EVENT_WS_API_CONT_ID};
+
 
 void app_main(void)
 {
@@ -52,4 +78,10 @@ void app_main(void)
 
     // /* Start the server for the first time */
     app_context.web_server = start_webserver();
+    ws_init(&app_context);
+
+    
+    vWebApiRegisterHandler(&ws_api_call_echo);
+    vWebApiRegisterHandler(&ws_api_call_cont);
+
 }
