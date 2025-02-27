@@ -49,7 +49,11 @@ httpd_handle_t start_webserver(void)
 
     config.uri_match_fn = httpd_uri_match_wildcard;
     config.server_port = CONFIG_WEB_SERVER_PORT;
-
+    config.keep_alive_enable = true;
+    config.keep_alive_idle = 30;
+    config.keep_alive_interval = 5;
+    config.keep_alive_count = 3;
+    
     esp_event_handler_register(ESP_HTTP_SERVER_EVENT ,ESP_EVENT_ANY_ID, &httpd_event_handler, NULL);
 
     // Start the httpd server

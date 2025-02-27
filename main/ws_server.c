@@ -14,8 +14,9 @@
 
 static const char *TAG = "ws_server";
 
-#define NEW_CALL_QUEUE_LENGTH           20
+#define NEW_WS_QUEUE_LENGTH             20
 #define NEW_CALL_ITEM_SIZE              sizeof(void *)
+//#define NEW_CLOSE_ITEM_SIZE             sizeof(int)
 
 #define WS_FRAME_LEN_MAX 2000
 
@@ -60,13 +61,15 @@ httpd_uri_t ws = {
     .method     = HTTP_GET,
     .handler    = ws_handler,
     .user_ctx   = NULL,
-    .is_websocket = true
+    .is_websocket = true,
+    .handle_ws_control_frames = true
 };
 
 static SemaphoreHandle_t xWsApiMutex = NULL;
 static LinkedList_t pxWsApiHandlers = NULL;
 static LinkedList_t pxWsApiCall = NULL;
 static QueueHandle_t xWsApiCallNewQueue = NULL;
+//static QueueHandle_t xWsCloseQueue = NULL;
 
 
 static uint8_t bHandlerFidMatch(LinkedListItem_t *item, void *arg) {
@@ -91,19 +94,32 @@ static void vTerminateApiCallByFid(LinkedListItem_t *item, void *arg) {
     ApiCall_t *call = LinkedListGetObject(ApiCall_t, item);
     uint32_t fid = (uint32_t)arg;
     if((call->ucStatus != API_CALL_STATUS_FIN) && (call->ulFid == fid)) {
+        ESP_LOGI(TAG, "Terminate call id:%lu", call->ulId);
         call->fHandler(call, &call->pxHandlerContext, API_CALL_BREAK, NULL, 0);
         call->ucStatus = API_CALL_STATUS_FIN;
         call->fHandler = NULL;
     }
 }
 
+static void vBreakApiCallByFd(LinkedListItem_t *item, void *arg) {
+    ApiCall_t *call = LinkedListGetObject(ApiCall_t, item);
+    uint32_t fd = (uint32_t)arg;
+    if((call->ucStatus == API_CALL_STATUS_WRK) && (call->pxWsc.fd == fd)) {
+        ESP_LOGI(TAG, "Break call id:%lu", call->ulId);
+        call->ucStatus = API_CALL_STATUS_BRK;
+    }
+}
+
+
 static void vFreeApiCall(LinkedListItem_t *item, void *arg) {
     ApiCall_t *call = LinkedListGetObject(ApiCall_t, item);
     if(call->ucStatus == API_CALL_STATUS_BRK) {
+        ESP_LOGI(TAG, "Do call break: %lu", call->ulId);
         call->fHandler(call, &call->pxHandlerContext, API_CALL_BREAK, NULL, 0);
         call->ucStatus = API_CALL_STATUS_FIN;        
     }
     if(call->ucStatus == API_CALL_STATUS_FIN) {
+        vTaskDelay(1);
         vLinkedListUnlink(item);
         ESP_LOGI(TAG, "Call freed id:%lu", call->ulId);
         free(call);
@@ -162,7 +178,7 @@ void vApiCallComplete(void *pxApiCall) {
     if((bLinkedListContains(pxWsApiCall, LinkedListItem(call))) && 
        (call->ucStatus != API_CALL_STATUS_FIN)) {
         call->ucStatus = API_CALL_STATUS_BRK;
-        ESP_LOGI(TAG, "Api call complete %lu", call->ulId);
+        ESP_LOGI(TAG, "Api call break %lu", call->ulId);
     }
     xSemaphoreGiveRecursive(xWsApiMutex);
 }
@@ -197,17 +213,14 @@ uint8_t bApiCallGetSockFd(void *pxApiCall, int *pxOutFd) {
 
 static uint8_t _bApiCallSendJson(void *pxApiCall, uint32_t ulFid, const uint8_t *ucJson, uint32_t ulLen, const char *pucTemplate) {
     if(((pxApiCall == NULL) && (ulFid == 0)) || ((pxApiCall != NULL) && (ulFid != 0))) return 0;
-    ESP_LOGI(TAG, "Api call send begin");    
     esp_err_t res = ESP_OK;
     xSemaphoreTakeRecursive(xWsApiMutex, portMAX_DELAY);
     ApiCall_t *call = pxApiCall;
     if(bLinkedListContains(pxWsApiCall, LinkedListItem(call))) {
-        ESP_LOGI(TAG, "Send to api call %lu", call->ulId);
         if(call->ucStatus == API_CALL_STATUS_FIN) call = NULL;
     }
     uint32_t fid_group = 0;
     if(call == NULL) {
-        ESP_LOGI(TAG, "Send fid group %08lx", ulFid);
         fid_group = ulLinkedListCount(pxWsApiCall, bCallFidMatch, (void *)ulFid);
         if(fid_group)
             call = LinkedListGetObject(ApiCall_t, pxLinkedListFindFirst(pxWsApiCall, bCallFidMatch, (void *)ulFid));
@@ -224,7 +237,6 @@ static uint8_t _bApiCallSendJson(void *pxApiCall, uint32_t ulFid, const uint8_t 
             resp->frame.type = HTTPD_WS_TYPE_TEXT;
             resp->frame.payload = resp->payload;
             resp->frame.len = len - 1;
-            ESP_LOGI(TAG, "Frame ready");
             while (call != NULL) {
                 res = httpd_ws_send_data_async(call->pxWsc.hd, call->pxWsc.fd, &resp->frame, vWsTransferComplete_cb, resp);
                 ESP_LOGI(TAG, "Api call %lu json sent with %d", call->ulId, res);
@@ -276,6 +288,34 @@ static esp_err_t ws_handler(httpd_req_t *req) {
         goto err_exit;
     }
 
+    if (ws_pkt.type == HTTPD_WS_TYPE_CLOSE) {
+        ESP_LOGI(TAG, "Close frame");
+        uint32_t fd = httpd_req_to_sockfd(req);
+        httpd_ws_send_frame(req, &ws_pkt);
+        httpd_sess_trigger_close(req->handle, fd);
+        xSemaphoreTakeRecursive(xWsApiMutex, portMAX_DELAY);
+        ulLinkedListDoForeach(pxWsApiCall, vBreakApiCallByFd, (void *)fd);
+        xSemaphoreGiveRecursive(xWsApiMutex);
+        xQueueSend(xWsApiCallNewQueue, (void *)&wscd, pdMS_TO_TICKS(10));
+        return ESP_OK;
+    }
+
+    if (ws_pkt.type == HTTPD_WS_TYPE_PING) {
+        ESP_LOGI(TAG, "Ping frame");
+        httpd_ws_frame_t frame = {
+            .type = HTTPD_WS_TYPE_PONG,
+            .payload = NULL,
+            .len = 0
+        };
+        httpd_ws_send_frame(req, &frame);
+        return ESP_OK;
+    }
+
+    if (ws_pkt.type == HTTPD_WS_TYPE_PONG) {
+        ESP_LOGI(TAG, "Pong frame");
+        return ESP_OK;
+    }
+    
     ESP_LOGI(TAG, "Аrg len is %d", ws_pkt.len);
     if(!ws_pkt.len || (ws_pkt.len > WS_FRAME_LEN_MAX) || (ws_pkt.type != HTTPD_WS_TYPE_TEXT)) {
         ESP_LOGW(TAG, "No data or length too big or bad data type");
@@ -376,6 +416,7 @@ static void vWsApiCallWorker( void * pvParameters ) {
         ApiCall_t *call = NULL;
         if(xQueueReceive(xWsApiCallNewQueue, &call, pdMS_TO_TICKS(1000)) == pdPASS ) {
             xSemaphoreTakeRecursive(xWsApiMutex, portMAX_DELAY);
+            ESP_LOGI(TAG, "Call worker");
             ulLinkedListDoForeach(pxWsApiCall, vFreeApiCall, NULL);
             if(call != NULL) {
                 call->ucStatus = API_CALL_STATUS_WRK;
@@ -413,13 +454,24 @@ static void vWsApiCallWorker( void * pvParameters ) {
 
 void ws_init(app_context_t *context) {
     static StaticQueue_t xWsApiCallNewQueueStat;
-    static uint8_t ucWsApiCallNewQueueStorageArea[NEW_CALL_QUEUE_LENGTH * NEW_CALL_ITEM_SIZE];
+    static uint8_t ucWsApiCallNewQueueStorageArea[NEW_WS_QUEUE_LENGTH * NEW_CALL_ITEM_SIZE];
+
+    //static StaticQueue_t xWsCloseNewQueueStat;
+    //static uint8_t ucWsCloseNewQueueStorageArea[NEW_WS_QUEUE_LENGTH * NEW_CALL_ITEM_SIZE];
+
     static StaticSemaphore_t xMutexBuffer;
-    /* Create a queue capable of containing 10 uint64_t values. */
-    xWsApiCallNewQueue = xQueueCreateStatic(NEW_CALL_QUEUE_LENGTH,
+
+    
+    //xWsCloseQueue = xQueueCreateStatic(NEW_WS_QUEUE_LENGTH,
+    //                        NEW_CLOSE_ITEM_SIZE,
+    //                        ucWsCloseNewQueueStorageArea,
+    //                        &xWsCloseNewQueueStat);
+
+    xWsApiCallNewQueue = xQueueCreateStatic(NEW_WS_QUEUE_LENGTH,
                             NEW_CALL_ITEM_SIZE,
                             ucWsApiCallNewQueueStorageArea,
                             &xWsApiCallNewQueueStat);
+    
     ws.user_ctx = context;
     xWsApiMutex = xSemaphoreCreateRecursiveMutexStatic( &xMutexBuffer );
     xTaskCreate(vWsApiCallWorker, "ApiCallWork", 4096, NULL, uxTaskPriorityGet(NULL), NULL);

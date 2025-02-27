@@ -69,6 +69,7 @@ uint8_t bApiHandlerSubs(void *pxApiCall, void **ppxContext, ApiCallReason_t eRea
     uint32_t ulCallId; 
     bApiCallGetId(pxApiCall, &ulCallId);
     uint32_t *tmp = (uint32_t *)ppxContext;
+    if(pucData == NULL) pucData = (uint8_t *)"Null";
     if(*tmp == 0) {
         ESP_LOGI(TAG, "WS subscribtion handler call %lu, with arg:%s", ulCallId, pucData);
         bApiCallSendStatus(pxApiCall, API_CALL_STATUS_OK);
