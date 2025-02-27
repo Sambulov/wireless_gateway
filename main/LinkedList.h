@@ -24,7 +24,7 @@ static inline void *__LinkedListCalcObjPtr(size_t llOffset, void *llPtr) { retur
 
 #define LinkedListGetObject(objType, listPtr)           ((objType *)__LinkedListCalcObjPtr(offsetof(objType, __ll),(listPtr)))
 #define __LinkedListObject__                            LinkedListItem_t __ll;
-#define LinkedListItem(pxObj)                           (&((pxObj)->__ll))
+#define LinkedListItem(pxObj)                           ((pxObj == libNULL)? libNULL: &((pxObj)->__ll))
 
 #define LL_ITEM_SIZE    16
 

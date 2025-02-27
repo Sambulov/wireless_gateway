@@ -22,29 +22,65 @@
 
 static const char *TAG = "app";
 
-uint8_t bWsApiHandlerEcho(uint32_t ulCallId, void **ppxInOutCallContext, char *pucData, uint32_t ulLen) {
-    ESP_LOGI(TAG, "WS echo handler call %lu, with arg:%s", ulCallId, pucData);
+#define ESP_EVENT_WS_API_ECHO_ID    1000
+uint8_t bApiHandlerEcho(void *pxApiCall, void **ppxContext, ApiCallReason_t eReason, uint8_t *pucData, uint32_t ulDataLen) {
+    ESP_LOGI(TAG, "WS echo handler call with arg:%s", pucData);
+    bApiCallSendJson(pxApiCall, pucData, ulDataLen);
+    int fd;
+    if(bApiCallGetSockFd(pxApiCall, &fd)) {
+        esp_netif_t *nif = pxGetNetIfFromSocket(fd);
+        if(nif != NULL) {
+            ESP_LOGI(TAG, "Echo api call from: %s", esp_netif_get_ifkey(nif));
+        }
+    }
     return 1;
 }
 
-uint8_t bWsApiHandlerContinues(uint32_t ulCallId, void **ppxInOutCallContext, char *pucData, uint32_t ulLen) {
-    uint32_t *tmp = (uint32_t *)ppxInOutCallContext;
+#define ESP_EVENT_WS_API_CONT_ID    1001
+uint8_t bApiHandlerCont(void *pxApiCall, void **ppxContext, ApiCallReason_t eReason, uint8_t *pucData, uint32_t ulDataLen) {
+    uint32_t ulCallId; 
+    bApiCallGetId(pxApiCall, &ulCallId);
+    uint32_t *tmp = (uint32_t *)ppxContext;
     if(*tmp == 0) {
         ESP_LOGI(TAG, "WS first cont handler call %lu, with arg:%s", ulCallId, pucData);
-        bWebApiResponseStatus(ulCallId, WEB_API_STATUS_OK);
+        bApiCallSendStatus(pxApiCall, API_CALL_STATUS_OK);
         *tmp = 1;
     }
     else {
-        bWebApiResponseStatus(ulCallId, WEB_API_STATUS_BUSY);
-        ESP_LOGI(TAG, "WS second cont handler call %lu, with arg:%s", ulCallId, pucData);
+        bApiCallSendStatus(pxApiCall, API_CALL_STATUS_CANCELED);
+        ESP_LOGI(TAG, "WS cont handler canceled call %lu, with arg:%s", ulCallId, pucData);
+        return 1;
     }
     return 0;
 }
 
-#define ESP_EVENT_WS_API_ECHO_ID    1000
-WsApiHandler_t ws_api_call_echo = {.pfHandler = bWsApiHandlerEcho, .ulFunctionId = ESP_EVENT_WS_API_ECHO_ID};
-#define ESP_EVENT_WS_API_CONT_ID    1001
-WsApiHandler_t ws_api_call_cont = {.pfHandler = bWsApiHandlerContinues, .ulFunctionId = ESP_EVENT_WS_API_CONT_ID};
+#define ESP_EVENT_WS_API_ASYNC_ID    1002
+
+static void vAsyncTestWorker( void * pvParameters ) {
+    const char data[] = "{\"data\":\"Async test\"}";
+    while (1) {
+        bApiCallSendJsonFidGroup(ESP_EVENT_WS_API_ASYNC_ID, (uint8_t *)data, sizeof(data));
+        vTaskDelay(100);
+    }
+    vTaskDelete(NULL);
+}
+
+uint8_t bApiHandlerSubs(void *pxApiCall, void **ppxContext, ApiCallReason_t eReason, uint8_t *pucData, uint32_t ulDataLen) {
+    uint32_t ulCallId; 
+    bApiCallGetId(pxApiCall, &ulCallId);
+    uint32_t *tmp = (uint32_t *)ppxContext;
+    if(*tmp == 0) {
+        ESP_LOGI(TAG, "WS subscribtion handler call %lu, with arg:%s", ulCallId, pucData);
+        bApiCallSendStatus(pxApiCall, API_CALL_STATUS_OK);
+        *tmp = 1;
+    }
+    else {
+        bApiCallSendStatus(pxApiCall, API_CALL_STATUS_CANCELED);
+        ESP_LOGI(TAG, "WS subscribtion handler canceled call %lu, with arg:%s", ulCallId, pucData);
+        return 1;
+    }
+    return 0;
+}
 
 
 void app_main(void)
@@ -80,8 +116,9 @@ void app_main(void)
     app_context.web_server = start_webserver();
     ws_init(&app_context);
 
-    
-    vWebApiRegisterHandler(&ws_api_call_echo);
-    vWebApiRegisterHandler(&ws_api_call_cont);
+    bApiCallRegister(bApiHandlerEcho, ESP_EVENT_WS_API_ECHO_ID);
+    bApiCallRegister(bApiHandlerCont, ESP_EVENT_WS_API_CONT_ID);
+    bApiCallRegister(bApiHandlerSubs, ESP_EVENT_WS_API_ASYNC_ID);
 
+    xTaskCreate(vAsyncTestWorker, "ApiAyncWork", 4096, NULL, uxTaskPriorityGet(NULL), NULL);
 }

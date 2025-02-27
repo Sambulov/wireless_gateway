@@ -8,6 +8,8 @@ extern "C" {
 
 void wifi_init_ap_sta(wifi_config_t *ap_cnf, wifi_config_t *sta_cnf);
 
+esp_netif_t* pxGetNetIfFromSocket(int sock);
+
 #ifdef __cplusplus
 }
 #endif
