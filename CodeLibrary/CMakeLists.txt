@@ -1,0 +1,8 @@
+add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/CL")
+
+get_property(CL_DEFINITIONS GLOBAL PROPERTY CL_DEFINES)
+get_property(CL_SOURCES GLOBAL PROPERTY CL_SOURCES)
+get_property(CL_HEADERS GLOBAL PROPERTY CL_HEADERS)
+
+idf_component_register(SRCS ${CL_SOURCES} 
+                        INCLUDE_DIRS ${CL_HEADERS})
