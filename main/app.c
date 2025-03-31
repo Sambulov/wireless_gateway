@@ -20,6 +20,8 @@
 
 #include "connection.h"
 
+#include "CodeLib.h"
+
 static const char *TAG = "app";
 
 #define ESP_EVENT_WS_API_ECHO_ID    1000

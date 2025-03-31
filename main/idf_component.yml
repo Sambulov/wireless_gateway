@@ -4,10 +4,11 @@ dependencies:
   joltwallet/littlefs: "~=1.16.0"
   json:
     path: ../json
+  CodeLibrary:
+    path: ../CodeLibrary
   ws_api:
     path: ../ws_api
   tftp_server:
     path: ../tftp_server
   protocol_examples_common:
     path: ../protocol_examples_common
-  espressif/esp-modbus: "~=2.0.0"
