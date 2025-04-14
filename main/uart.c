@@ -2,6 +2,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
+#include "esp_intr_alloc.h"
 #include "app.h"
 
 
@@ -14,9 +15,9 @@ UART_NUM_1  9 10  11   6
 UART_NUM_2 16 17   7   8
 */
 
-#define UART_PORT         UART_NUM_1
-#define UART_RX_PIN                9
-#define UART_TX_PIN               10
+#define UART_PORT         UART_NUM_2
+#define UART_RX_PIN               16
+#define UART_TX_PIN               17
 #define UART_RTS_PIN              11
 #define UART_CTS_PIN               6
 #define UART_BUF_SIZE           1024
@@ -44,26 +45,37 @@ void uart_to_websocket_task(void *pvParameters) {
     free(data);
 }
 
+#define GREETING_TEST	0
 static void uart_event_task(void *pvParameters)
 {
+#if 1
     uart_event_t event;
-    QueueHandle_t uart_queue = (QueueHandle_t)pvParameters;
+    QueueHandle_t uart_queue = *((QueueHandle_t*)pvParameters);
     size_t buffered_size;
     uint8_t* dtmp = (uint8_t*) malloc(UART_BUF_SIZE);
+#if GREETING_TEST
+    char *greeting = "hello\n";
+#endif
+
     for (;;) {
+#if GREETING_TEST
+        ESP_LOGI(TAG, "%s", __func__);
+	uart_send_data(greeting, strlen(greeting));
+	vTaskDelay(500 / portTICK_PERIOD_MS);
+	continue;
+#endif
+
         //Waiting for UART event.
         if (xQueueReceive(uart_queue, (void *)&event, (TickType_t)portMAX_DELAY)) {
-            bzero(dtmp, UART_BUF_SIZE);
-            ESP_LOGI(TAG, "uart[%d] event:", UART_PORT);
+		bzero(dtmp, UART_BUF_SIZE);
+
             switch (event.type) {
             //Event of UART receiving data
             /*We'd better handler data event fast, there would be much more data events than
             other types of events. If we take too much time on data event, the queue might
             be full.*/
             case UART_DATA:
-                ESP_LOGI(TAG, "[UART DATA]: %d", event.size);
                 uart_read_bytes(UART_PORT, dtmp, event.size, portMAX_DELAY);
-                ESP_LOGI(TAG, "[DATA EVT]:");
                 uart_write_bytes(UART_PORT, (const char*) dtmp, event.size);
                 break;
             //Event of HW FIFO overflow detected
@@ -119,9 +131,12 @@ static void uart_event_task(void *pvParameters)
     free(dtmp);
     dtmp = NULL;
     vTaskDelete(NULL);
+#endif
 }
 
-void uart_init() {
+#define USE_FIFO_THRESHOLD 	0
+
+void uart_init(void) {
     static QueueHandle_t uart_queue;
     static const uart_config_t uart_defaut_config = {
         .baud_rate = 115200,
@@ -131,16 +146,27 @@ void uart_init() {
         .flow_ctrl = UART_HW_FLOWCTRL_RTS,
         .rx_flow_ctrl_thresh = 122,
     };
-    uart_param_config(UART_PORT, &uart_defaut_config);
-    uart_set_pin(UART_PORT, UART_TX_PIN, UART_RX_PIN, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
-    uart_driver_install(UART_PORT, UART_BUF_SIZE, UART_BUF_SIZE, 10, &uart_queue, 0);
-    xTaskCreate(uart_event_task, "uart_event", 4096, &uart_queue, 5, NULL);
-}
+#if USE_FIFO_THRESHOLD
+    // NOTE: Draft. Doesn't work. Good reason to use fifo threeshold to emptify fifo buffer on time.
+    uart_intr_config_t uart_intr = {
+	.intr_enable_mask = UART_INTR_RXFIFO_FULL | UART_INTR_RXFIFO_TOUT,
+	.rxfifo_full_thresh = 100,
+	.rx_timeout_thresh = 10,
+    };
+#endif
 
-void uart_reconfigure(uart_config_t *uart_cnf) {
-    ESP_ERROR_CHECK(uart_param_config(UART_PORT, uart_cnf));
-    ESP_LOGI(TAG, "UART reconfigured: br=%d, db=%d, p=%d, sb=%d", 
-        uart_cnf->baud_rate, uart_cnf->data_bits, uart_cnf->parity, uart_cnf->stop_bits);
+    ESP_ERROR_CHECK(uart_driver_install(UART_PORT, UART_BUF_SIZE, UART_BUF_SIZE, 10, &uart_queue, 0));
+    ESP_ERROR_CHECK(uart_param_config(UART_PORT, &uart_defaut_config));
+#if USE_FIFO_THRESHOLD
+#error This is not checked
+    ESP_ERROR_CHECK(uart_intr_config(UART_PORT, &uart_intr));
+#endif
+    ESP_ERROR_CHECK(uart_set_pin(UART_PORT, UART_TX_PIN, UART_RX_PIN, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
+    ESP_ERROR_CHECK(uart_enable_rx_intr(UART_PORT));
+
+    ESP_LOGI(TAG, "UART configured: port %d, tx_pin: %d, rx_pin: %d", UART_PORT, UART_TX_PIN, UART_RX_PIN);
+
+    xTaskCreate(uart_event_task, "uart_event", 4096, &uart_queue, tskIDLE_PRIORITY, NULL);
 }
 
 void uart_send_data(const char *data, size_t len) {
