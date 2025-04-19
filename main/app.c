@@ -5,6 +5,7 @@
 #include <nvs_flash.h>
 #include <sys/param.h>
 #include <sys/stat.h>
+#include "driver/uart.h"
 #include "esp_netif.h"
 #include "esp_eth.h"
 #include "protocol_examples_common.h"
@@ -23,6 +24,7 @@
 #include "CodeLib.h"
 
 static const char *TAG = "app";
+static Modbus_t pxMb;
 
 #define ESP_EVENT_WS_API_ECHO_ID    1000
 uint8_t bApiHandlerEcho(void *pxApiCall, void **ppxContext, ApiCallReason_t eReason, uint8_t *pucData, uint32_t ulDataLen) {
@@ -85,6 +87,49 @@ uint8_t bApiHandlerSubs(void *pxApiCall, void **ppxContext, ApiCallReason_t eRea
     return 0;
 }
 
+static int32_t mb_read(void *pxPhy, uint8_t *pucBuf, uint16_t ulSize)
+{
+	int uart_num = *(int *)pxPhy;
+	const int TIMEOUT_MS = 2000;
+	return uart_read_bytes(uart_num, pucBuf, ulSize, TIMEOUT_MS / portTICK_PERIOD_MS);
+}
+
+static int32_t mb_write(void *pxPhy, const uint8_t *pucBuf, uint16_t ulSize)
+{
+	int uart_num = *(int *)pxPhy;
+	return uart_write_bytes(uart_num, pucBuf, ulSize);
+}
+
+static uint32_t mb_timer(const void *pxTimerPhy)
+{
+	return xTaskGetTickCount();
+}
+
+static void __modbus_init(void)
+{
+	const char *TAG = "modbus";
+	const uint8_t BUF_SIZE = 255;
+	static ModbusIface_t xIface;
+	ModbusConfig_t xConfig;
+	static int uart_context = UART_NUM_2; // Pass to context uart num
+
+	xIface.pfRead = mb_read;
+	xIface.pfWrite = mb_write;
+	xIface.pfTimer = mb_timer;
+	xConfig.pxRxContext = &uart_context;
+	xConfig.pxTxContext = &uart_context;
+	xConfig.pucPayLoadBuffer = malloc(BUF_SIZE);
+	if (!xConfig.pucPayLoadBuffer) {
+	    ESP_LOGI(TAG, "alloc failure");
+	    while(1);
+	}
+	xConfig.ucPayLoadBufferSize = BUF_SIZE;
+	xConfig.pxIface = &xIface;
+	if (bModbusInit(&pxMb, &xConfig) != cl_true) {
+	    ESP_LOGI(TAG, "init failure");
+	    while(1);
+	}
+}
 
 void app_main(void)
 {
@@ -96,6 +141,7 @@ void app_main(void)
     //ws_api_inc_test();
 
     uart_init();
+    __modbus_init();
 
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
