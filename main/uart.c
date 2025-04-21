@@ -111,7 +111,7 @@ uint8_t gw_uart_set(void *desc, gw_uart_word_t bits, uint32_t boud, gw_uart_pari
         .data_bits = bits,
         .parity = parity,
         .stop_bits = stop,
-        .flow_ctrl = UART_HW_FLOWCTRL_RTS,
+        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
         .rx_flow_ctrl_thresh = 122,
     };
     int rxp, txp, rts, cts = UART_PIN_NO_CHANGE;
@@ -123,13 +123,12 @@ uint8_t gw_uart_set(void *desc, gw_uart_word_t bits, uint32_t boud, gw_uart_pari
     */
     switch(uart->port) {
         case UART_NUM_0: rxp = 3; txp = 1; rts = 22; break;
-        case UART_NUM_2: rxp = 16; txp = 17; rts = 4; break;
+        case UART_NUM_2: rxp = 16; txp = 17; rts = 18; break;
         case UART_NUM_1: rxp = 9; txp = 10; rts = 11; /* GPIO6 to GPIO11 connected to flash */
         /* fall through */
         default: return 0;
     }
     uint8_t result = 1;
-    //result = result && (uart_set_mode(uart->port, UART_MODE_UART) == ESP_OK);
     result = result && (uart_set_pin(uart->port, txp, rxp, rts, cts) == ESP_OK);
     result = result && (uart_param_config(uart->port, &new_config) == ESP_OK);
     ESP_LOGI(TAG, "UART configured: port %d, tx_pin: %d, rx_pin: %d", uart->port, txp, rxp);
@@ -147,6 +146,7 @@ uint8_t gw_uart_init(void *desc, gw_uart_port_t port, uint32_t buffer_size) {
     uart->port = port;
     uint8_t result = gw_uart_set(desc, GW_UART_WORD_8BIT, 115200, GW_UART_PARITY_NONE, GW_UART_STOP_BITS1);
     result = result && (uart_driver_install(port, buffer_size, buffer_size, 10, &uart->uart_queue, 0) == ESP_OK);
+    result = result && (uart_set_mode(uart->port, UART_MODE_RS485_HALF_DUPLEX) == ESP_OK);
     //ESP_ERROR_CHECK(uart_enable_rx_intr(uart->port));
     result = result && (xTaskCreate(uart_event_task, "uart_event", 4096, uart, tskIDLE_PRIORITY, NULL) == pdPASS);
     return result;
