@@ -4,173 +4,160 @@
 #include "freertos/queue.h"
 #include "esp_intr_alloc.h"
 #include "app.h"
-
+#include "uart.h"
 
 static const char *TAG = "uart";
 
-/*  
-UART0      RX TX RTS CTS
-UART_NUM_0  3  1  22  19
-UART_NUM_1  9 10  11   6
-UART_NUM_2 16 17   7   8
-*/
+typedef struct {
+    QueueHandle_t uart_queue;
+    int port; // UART_NUM_0, UART_NUM_1, UART_NUM_2
+} gw_uart_private_t;
 
-#define UART_PORT         UART_NUM_2
-#define UART_RX_PIN               16
-#define UART_TX_PIN               17
-#define UART_RTS_PIN              11
-#define UART_CTS_PIN               6
-#define UART_BUF_SIZE           1024
+#define ASSERRT_STRUCTURE_CAST(private_type, public_type, prv_size_def, def_file)   _Static_assert(sizeof(private_type) == sizeof(public_type), "In "def_file" data structure size of "#public_type" doesn't match, check "#prv_size_def)
 
-// Задача для чтения данных с UART и отправки через WebSocket
-void uart_to_websocket_task(void *pvParameters) {
-    uint8_t *data = (uint8_t *)malloc(UART_BUF_SIZE);
-    while (1) {
-        int len = uart_read_bytes(UART_PORT, data, UART_BUF_SIZE, pdMS_TO_TICKS(100));
-        if (len > 0) {
-            ESP_LOGI(TAG, "UART Data Received: %.*s", len, data);
-            // Отправляем данные всем подключенным WebSocket-клиентам
-            // if (server != NULL) {
-            //     httpd_ws_frame_t ws_pkt = {
-            //         .final = true,
-            //         .fragmented = false,
-            //         .type = HTTPD_WS_TYPE_TEXT,
-            //         .payload = data,
-            //         .len = len,
-            //     };
-            //     httpd_ws_send_frame_async(server, httpd_req_to_sockfd(server->hd_req), &ws_pkt);
-            // }
-        }
-    }
-    free(data);
-}
+ASSERRT_STRUCTURE_CAST(gw_uart_private_t, gw_uart_t, GW_UART_PRIVATE_SIZE, "uart.h");
 
-#define GREETING_TEST	0
 static void uart_event_task(void *pvParameters)
 {
-#if 1
     uart_event_t event;
-    QueueHandle_t uart_queue = *((QueueHandle_t*)pvParameters);
-    size_t buffered_size;
-    uint8_t* dtmp = (uint8_t*) malloc(UART_BUF_SIZE);
-#if GREETING_TEST
-    char *greeting = "hello\n";
-#endif
+    gw_uart_private_t *uart = (gw_uart_private_t *)pvParameters;
 
-    for (;;) {
-#if GREETING_TEST
-        ESP_LOGI(TAG, "%s", __func__);
-	uart_send_data(greeting, strlen(greeting));
-	vTaskDelay(500 / portTICK_PERIOD_MS);
-	continue;
-#endif
-
-        //Waiting for UART event.
-        if (xQueueReceive(uart_queue, (void *)&event, (TickType_t)portMAX_DELAY)) {
-		bzero(dtmp, UART_BUF_SIZE);
-
-            switch (event.type) {
-            //Event of UART receiving data
-            /*We'd better handler data event fast, there would be much more data events than
-            other types of events. If we take too much time on data event, the queue might
-            be full.*/
-            case UART_DATA:
-                uart_read_bytes(UART_PORT, dtmp, event.size, portMAX_DELAY);
-                uart_write_bytes(UART_PORT, (const char*) dtmp, event.size);
-                break;
-            //Event of HW FIFO overflow detected
-            case UART_FIFO_OVF:
-                ESP_LOGI(TAG, "hw fifo overflow");
-                // If fifo overflow happened, you should consider adding flow control for your application.
-                // The ISR has already reset the rx FIFO,
-                // As an example, we directly flush the rx buffer here in order to read more data.
-                uart_flush_input(UART_PORT);
-                xQueueReset(uart_queue);
-                break;
-            //Event of UART ring buffer full
-            case UART_BUFFER_FULL:
-                ESP_LOGI(TAG, "ring buffer full");
-                // If buffer full happened, you should consider increasing your buffer size
-                // As an example, we directly flush the rx buffer here in order to read more data.
-                uart_flush_input(UART_PORT);
-                xQueueReset(uart_queue);
-                break;
-            //Event of UART RX break detected
-            case UART_BREAK:
-                ESP_LOGI(TAG, "uart rx break");
-                break;
-            //Event of UART parity check error
-            case UART_PARITY_ERR:
-                ESP_LOGI(TAG, "uart parity error");
-                break;
-            //Event of UART frame error
-            case UART_FRAME_ERR:
-                ESP_LOGI(TAG, "uart frame error");
-                break;
-            //UART_PATTERN_DET
-            case UART_PATTERN_DET:
-                uart_get_buffered_data_len(UART_PORT, &buffered_size);
-                int pos = uart_pattern_pop_pos(UART_PORT);
-                ESP_LOGI(TAG, "[UART PATTERN DETECTED] pos: %d, buffered size: %d", pos, buffered_size);
-                if (pos == -1) {
-                    // There used to be a UART_PATTERN_DET event, but the pattern position queue is full so that it can not
-                    // record the position. We should set a larger queue size.
-                    // As an example, we directly flush the rx buffer here.
-                    uart_flush_input(UART_PORT);
-                } else {
-                    uart_read_bytes(UART_PORT, dtmp, pos, 100 / portTICK_PERIOD_MS);
-                }
-                break;
-            //Others
-            default:
-                ESP_LOGI(TAG, "uart event type: %d", event.type);
-                break;
-            }
+    //Waiting for UART event.
+    while (xQueueReceive(uart->uart_queue, (void *)&event, (TickType_t)portMAX_DELAY)) {
+        switch (event.type) {
+        //Event of UART receiving data
+        /*We'd better handler data event fast, there would be much more data events than
+        other types of events. If we take too much time on data event, the queue might
+        be full.*/
+        case UART_DATA:
+            //uart_read_bytes(UART_PORT, dtmp, event.size, portMAX_DELAY);
+            //uart_write_bytes(UART_PORT, (const char*) dtmp, event.size);
+            break;
+        //Event of HW FIFO overflow detected
+        case UART_FIFO_OVF:
+            ESP_LOGI(TAG, "hw fifo overflow");
+            // If fifo overflow happened, you should consider adding flow control for your application.
+            // The ISR has already reset the rx FIFO,
+            // As an example, we directly flush the rx buffer here in order to read more data.
+            uart_flush_input(uart->port);
+            xQueueReset(uart->uart_queue);
+            break;
+        //Event of UART ring buffer full
+        case UART_BUFFER_FULL:
+            ESP_LOGI(TAG, "ring buffer full");
+            // If buffer full happened, you should consider increasing your buffer size
+            // As an example, we directly flush the rx buffer here in order to read more data.
+            uart_flush_input(uart->port);
+            xQueueReset(uart->uart_queue);
+            break;
+        //Event of UART RX break detected
+        case UART_BREAK:
+            //ESP_LOGI(TAG, "uart rx break");
+            break;
+        //Event of UART parity check error
+        case UART_PARITY_ERR:
+            //ESP_LOGI(TAG, "uart parity error");
+            break;
+        //Event of UART frame error
+        case UART_FRAME_ERR:
+            //ESP_LOGI(TAG, "uart frame error");
+            break;
+        //UART_PATTERN_DET
+        case UART_PATTERN_DET:
+            //uart_get_buffered_data_len(UART_PORT, &buffered_size);
+            //int pos = uart_pattern_pop_pos(UART_PORT);
+            //ESP_LOGI(TAG, "[UART PATTERN DETECTED] pos: %d, buffered size: %d", pos, buffered_size);
+            //if (pos == -1) {
+                // There used to be a UART_PATTERN_DET event, but the pattern position queue is full so that it can not
+                // record the position. We should set a larger queue size.
+                // As an example, we directly flush the rx buffer here.
+            //    uart_flush_input(UART_PORT);
+            //} else {
+            //    uart_read_bytes(UART_PORT, dtmp, pos, 100 / portTICK_PERIOD_MS);
+            //}
+            break;
+        //Others
+        default:
+            ESP_LOGI(TAG, "uart event type: %d", event.type);
+            break;
         }
     }
-    free(dtmp);
-    dtmp = NULL;
     vTaskDelete(NULL);
-#endif
 }
 
-#define USE_FIFO_THRESHOLD 	0
-
-void uart_init(void) {
-    static QueueHandle_t uart_queue;
-    static const uart_config_t uart_defaut_config = {
-        .baud_rate = 115200,
-        .data_bits = UART_DATA_8_BITS,
-        .parity = UART_PARITY_DISABLE,
-        .stop_bits = UART_STOP_BITS_1,
+uint8_t gw_uart_set(void *desc, gw_uart_word_t bits, uint32_t boud, gw_uart_parity_t parity, gw_uart_stop_bits_t stop) {
+    gw_uart_private_t *uart = (gw_uart_private_t *) desc;
+    switch (bits) {
+        case GW_UART_WORD_7BIT: bits = UART_DATA_7_BITS; break;
+        case GW_UART_WORD_8BIT: bits = UART_DATA_8_BITS; break;
+        case GW_UART_WORD_9BIT:
+        default: return 0;
+    }
+    switch (parity) {
+        case GW_UART_PARITY_NONE: parity = UART_PARITY_DISABLE; break;
+        case GW_UART_PARITY_ODD: parity = UART_PARITY_ODD; break;
+        case GW_UART_PARITY_EVEN: parity = UART_PARITY_EVEN; break;
+        default: return 0;
+    }
+    switch (stop) {
+        case GW_UART_STOP_BITS1: stop = UART_STOP_BITS_1; break;
+        case GW_UART_STOP_BITS1_5: stop = UART_STOP_BITS_1_5; break;
+        case GW_UART_STOP_BITS2: stop = UART_STOP_BITS_2; break;
+        case GW_UART_STOP_BITS0_5:
+        default: return 0;
+    }
+    const uart_config_t new_config = {
+        .baud_rate = boud,
+        .data_bits = bits,
+        .parity = parity,
+        .stop_bits = stop,
         .flow_ctrl = UART_HW_FLOWCTRL_RTS,
         .rx_flow_ctrl_thresh = 122,
     };
-#if USE_FIFO_THRESHOLD
-    // NOTE: Draft. Doesn't work. Good reason to use fifo threeshold to emptify fifo buffer on time.
-    uart_intr_config_t uart_intr = {
-	.intr_enable_mask = UART_INTR_RXFIFO_FULL | UART_INTR_RXFIFO_TOUT,
-	.rxfifo_full_thresh = 100,
-	.rx_timeout_thresh = 10,
-    };
-#endif
-
-    ESP_ERROR_CHECK(uart_driver_install(UART_PORT, UART_BUF_SIZE, UART_BUF_SIZE, 10, &uart_queue, 0));
-    ESP_ERROR_CHECK(uart_param_config(UART_PORT, &uart_defaut_config));
-#if USE_FIFO_THRESHOLD
-#error This is not checked
-    ESP_ERROR_CHECK(uart_intr_config(UART_PORT, &uart_intr));
-#endif
-    ESP_ERROR_CHECK(uart_set_pin(UART_PORT, UART_TX_PIN, UART_RX_PIN, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
-    ESP_ERROR_CHECK(uart_enable_rx_intr(UART_PORT));
-
-    ESP_LOGI(TAG, "UART configured: port %d, tx_pin: %d, rx_pin: %d", UART_PORT, UART_TX_PIN, UART_RX_PIN);
-
-    xTaskCreate(uart_event_task, "uart_event", 4096, &uart_queue, tskIDLE_PRIORITY, NULL);
+    int rxp, txp, rts, cts = UART_PIN_NO_CHANGE;
+    /*  
+    UART0      RX TX RTS CTS
+    UART_NUM_0  3  1  22  19
+    UART_NUM_1  9 10  11   6
+    UART_NUM_2 16 17   7   8
+    */
+    switch(uart->port) {
+        case UART_NUM_0: rxp = 3; txp = 1; rts = 22; break;
+        case UART_NUM_2: rxp = 16; txp = 17; rts = 4; break;
+        case UART_NUM_1: rxp = 9; txp = 10; rts = 11; /* GPIO6 to GPIO11 connected to flash */
+        /* fall through */
+        default: return 0;
+    }
+    uint8_t result = 1;
+    //result = result && (uart_set_mode(uart->port, UART_MODE_UART) == ESP_OK);
+    result = result && (uart_set_pin(uart->port, txp, rxp, rts, cts) == ESP_OK);
+    result = result && (uart_param_config(uart->port, &new_config) == ESP_OK);
+    ESP_LOGI(TAG, "UART configured: port %d, tx_pin: %d, rx_pin: %d", uart->port, txp, rxp);
+    return result;
 }
 
-void uart_send_data(const char *data, size_t len) {
-    uart_write_bytes(UART_PORT, data, len);
-    ESP_LOGI(TAG, "Data sent to UART: %.*s", len, data);
+uint8_t gw_uart_init(void *desc, gw_uart_port_t port, uint32_t buffer_size) {
+    gw_uart_private_t *uart = (gw_uart_private_t *) desc;
+    switch (port) {
+        case GW_UART_PORT_0: port = UART_NUM_0; break;
+        case GW_UART_PORT_1: port = UART_NUM_1; break;
+        case GW_UART_PORT_2: port = UART_NUM_2; break;
+        default: return 0;
+    }
+    uart->port = port;
+    uint8_t result = gw_uart_set(desc, GW_UART_WORD_8BIT, 115200, GW_UART_PARITY_NONE, GW_UART_STOP_BITS1);
+    result = result && (uart_driver_install(port, buffer_size, buffer_size, 10, &uart->uart_queue, 0) == ESP_OK);
+    //ESP_ERROR_CHECK(uart_enable_rx_intr(uart->port));
+    result = result && (xTaskCreate(uart_event_task, "uart_event", 4096, uart, tskIDLE_PRIORITY, NULL) == pdPASS);
+    return result;
 }
 
+int32_t gw_uart_read(void *desc, uint8_t *buf, uint16_t size) {
+    gw_uart_private_t *uart = (gw_uart_private_t *) desc;
+	return uart_read_bytes(uart->port, buf, size, 0);
+}
+
+int32_t gw_uart_write(void *desc, const uint8_t *buf, uint16_t size) {
+    gw_uart_private_t *uart = (gw_uart_private_t *) desc;
+	return uart_write_bytes(uart->port, buf, size);
+}
