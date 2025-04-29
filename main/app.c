@@ -61,7 +61,7 @@ static void vAsyncTestWorker( void * pvParameters ) {
     const char data[] = "{\"data\":\"Async test\"}";
     while (1) {
         bApiCallSendJsonFidGroup(ESP_EVENT_WS_API_ASYNC_ID, (uint8_t *)data, sizeof(data));
-        vTaskDelay(100);
+        vTaskDelay(1000);
     }
     vTaskDelete(NULL);
 }
@@ -171,9 +171,9 @@ void app_main(void)
     app_context.web_server = start_webserver();
     ws_init(&app_context);
 
-    bApiCallRegister(bApiHandlerEcho, ESP_EVENT_WS_API_ECHO_ID);
-    bApiCallRegister(bApiHandlerCont, ESP_EVENT_WS_API_CONT_ID);
-    bApiCallRegister(bApiHandlerSubs, ESP_EVENT_WS_API_ASYNC_ID);
+    bApiCallRegister(bApiHandlerEcho, ESP_EVENT_WS_API_ECHO_ID, NULL);
+    bApiCallRegister(bApiHandlerCont, ESP_EVENT_WS_API_CONT_ID, NULL);
+    bApiCallRegister(bApiHandlerSubs, ESP_EVENT_WS_API_ASYNC_ID, NULL);
 
     xTaskCreate(vAsyncTestWorker, "ApiAyncWork", 4096, NULL, uxTaskPriorityGet(NULL), NULL);
 
@@ -184,7 +184,7 @@ void app_main(void)
 
     while (1) {
        vModbusWork(&pxMb);
-       modbus_request(&pxMb, &mb_request, &modbus_cb, NULL);
+       //modbus_request(&pxMb, &mb_request, &modbus_cb, NULL);
 
        vTaskDelay(1);
     }

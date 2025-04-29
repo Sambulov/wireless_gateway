@@ -38,7 +38,7 @@ typedef uint8_t (*ApiHandler_t)(void *pxApiCall, void **ppxContext, ApiCallReaso
 
 //typedef void (*ApiDataSerializer_t)(uint8_t *pucBuf, uint32_t *ulInOutSize, void *pxArg);
 
-uint8_t bApiCallRegister(ApiHandler_t fHandler, uint32_t ulFid);
+uint8_t bApiCallRegister(ApiHandler_t fHandler, uint32_t ulFid, void *pxContext);
 uint8_t bApiCallUnregister(uint32_t ulFid);
 
 uint8_t bApiCallGetData(void *pxApiCall, uint8_t **ppucData, uint32_t *ulOutDataLen);

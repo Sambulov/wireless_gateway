@@ -5,6 +5,11 @@ menu "Project Configuration"
         default 80
         help
             Set server port number used by web serer.
+    config WEB_SOCKET_PING_DELAY
+        int "Web-socket ping delay"
+        default 1000
+        help
+            Web socket clients ping delay
     config WIFI_AP_DEFAULT_SSID
         string "Default AP name"
         default "TestNet"
