@@ -52,7 +52,7 @@ typedef struct {
 typedef struct {
     uint32_t counter;
     httpd_ws_frame_t frame;
-    uint8_t payload[4];
+    uint8_t payload[];
 } ApiData_t;
 
 
@@ -229,34 +229,36 @@ static uint8_t _bApiCallSendJson(void *pxApiCall, uint32_t ulFid, const uint8_t 
     xSemaphoreTakeRecursive(xWsApiMutex, portMAX_DELAY);
     ApiCall_t *call = pxApiCall;
     uint32_t fid_group = 1;
-    uint32_t second_arg = xTaskGetTickCount();
-    char *const pucTemplate = "{\"FID\":\"0x%08lx\",\"CID\":\"0x%08lx\",\"ARG\":%s}";
+    uint32_t rid = xTaskGetTickCount();
     if(call != NULL) {
         if(!bLinkedListContains(pxWsApiCall, LinkedListItem(call)) ||
             (call->ucStatus == API_CALL_STATUS_FIN)) {
             res = ESP_ERR_INVALID_STATE;
             call = NULL;
         }
-        else second_arg = call->ulId;
+        else rid = call->ulId;
     }
     else {
-        pucTemplate = "{\"FID\":\"0x%08lx\",\"RTS\":\"0x%08lx\",\"ARG\":%s}"
         fid_group = ulLinkedListCount(pxWsApiCall, bCallFidMatch, (void *)ulFid);
         if(fid_group) call = LinkedListGetObject(ApiCall_t, pxLinkedListFindFirst(pxWsApiCall, bCallFidMatch, (void *)ulFid));
     }
     if(call != NULL) {
-        uint32_t len = ulLen + lStrLen(pucTemplate);
+        char pucTemplate[] = "{\"FID\":\"0x%08lx\",\"RID\":\"0x%08lx\",\"ARG\":";
+        uint32_t len = ulLen + sizeof(pucTemplate) + /* length_dif("%08lx", "00000000") X 2 = 6 symb, and ("/0" -> "}" */ 6;
         ApiData_t *resp = malloc(sizeof(ApiData_t) + len);
         if(resp != NULL) {
-            sprintf((char *)resp->payload, pucTemplate, call->ulFid, second_arg, ucJson);
+            int offset = sprintf((char *)resp->payload, pucTemplate, call->ulFid, rid);
+            mem_cpy(&resp->payload[offset], ucJson, ulLen);
+            offset += ulLen;
+            resp->payload[offset] = '}';
             resp->counter = fid_group;
             resp->frame.fragmented = 0;
             resp->frame.type = HTTPD_WS_TYPE_TEXT;
             resp->frame.payload = resp->payload;
-            resp->frame.len = len - 1;
+            resp->frame.len = len;
             while (call != NULL) {
                 res = httpd_ws_send_data_async(call->pxWsc.hd, call->pxWsc.fd, &resp->frame, vWsTransferComplete_cb, resp);
-                ESP_LOGI(TAG, "Api call %lu json sent with %d", call->ulId, res);
+                ESP_LOGI(TAG, "Api call %lu json sending with %d", call->ulId, res);
                 if(fid_group)
                     call = LinkedListGetObject(ApiCall_t, pxLinkedListFindNextNoOverlap(LinkedListItem(call), bCallFidMatch, (void *)ulFid));
                 else break;
@@ -275,7 +277,7 @@ uint8_t bApiCallSendJson(void *pxApiCall, const uint8_t *ucJson, uint32_t ulLen)
 uint8_t bApiCallSendStatus(void *pxApiCall, uint32_t ulSta) {
     uint8_t sta[21];
     sprintf((char *)sta, "{\"STA\":\"0x%08lx\"}", ulSta);
-    return _bApiCallSendJson(pxApiCall, 0, sta, sizeof(sta), "{\"FID\":\"0x%08lx\",\"CID\":\"0x%08lx\",\"STA\":%s}");
+    return _bApiCallSendJson(pxApiCall, 0, sta, sizeof(sta));
 }
 
 uint8_t bApiCallSendJsonFidGroup(uint32_t ulFid, const uint8_t *ucJson, uint32_t ulLen) {
@@ -295,6 +297,7 @@ static esp_err_t ws_handler(httpd_req_t *req) {
         ESP_LOGI(TAG, "Handshake done, the new connection was opened");
         return ESP_OK;
     }
+    ESP_LOGI(TAG, "New WS request");
 
     httpd_ws_frame_t ws_pkt;
     memset(&ws_pkt, 0, sizeof(httpd_ws_frame_t));
@@ -334,14 +337,13 @@ static esp_err_t ws_handler(httpd_req_t *req) {
         return ESP_OK;
     }
     
-    ESP_LOGI(TAG, "Аrg len is %d", ws_pkt.len);
     if(!ws_pkt.len || (ws_pkt.len > WS_FRAME_LEN_MAX) || (ws_pkt.type != HTTPD_WS_TYPE_TEXT)) {
-        ESP_LOGW(TAG, "No data or length too big or bad data type");
+        ESP_LOGW(TAG, "No data or length too big or bad data type; len = %d", ws_pkt.len);
         ret = ESP_FAIL;
         goto err_exit;
     }
 
-    buf = malloc(ws_pkt.len);
+    buf = malloc(ws_pkt.len + 1);
     if (buf == NULL) {
         ESP_LOGW(TAG, "Failed to calloc memory for buf");
         ret = ESP_ERR_NO_MEM;
@@ -384,13 +386,13 @@ static esp_err_t ws_handler(httpd_req_t *req) {
     cJSON *arg_json = cJSON_GetObjectItem(json, "ARG");
     if(arg_json != NULL) {
         if(arg_json->type != cJSON_Object) {
-            ESP_LOGI(TAG, "Api call \"arg\" type is not an object");
+            ESP_LOGI(TAG, "Api call \"ARG\" type is not an object");
             ret = ESP_FAIL;
             goto err_exit;
         }
         data = cJSON_PrintUnformatted(arg_json);
         dataLen = strlen(data);
-        ESP_LOGI(TAG, "Api arg serialized %s", data);
+        ESP_LOGI(TAG, "Api arg %s", data);
     }
 
     wscd = malloc(sizeof(ApiCall_t));

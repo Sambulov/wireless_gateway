@@ -23,9 +23,15 @@
 
 static const char *TAG = "app";
 
+static const uint8_t json_null[] = "\"null\"";
+
 #define ESP_EVENT_WS_API_ECHO_ID    1000
 uint8_t bApiHandlerEcho(void *pxApiCall, void **ppxContext, ApiCallReason_t eReason, uint8_t *pucData, uint32_t ulDataLen) {
-    ESP_LOGI(TAG, "WS echo handler call with arg:%s", pucData);
+    if(pucData == NULL) {
+        pucData = (uint8_t *)json_null;
+        ulDataLen = sizeof(json_null) - 1 /* length of "Null" except terminator */;
+    }
+    ESP_LOGI(TAG, "WS echo handler call with arg: %s", pucData);
     bApiCallSendJson(pxApiCall, pucData, ulDataLen);
     int fd;
     if(bApiCallGetSockFd(pxApiCall, &fd)) {
@@ -39,7 +45,8 @@ uint8_t bApiHandlerEcho(void *pxApiCall, void **ppxContext, ApiCallReason_t eRea
 
 #define ESP_EVENT_WS_API_CONT_ID    1001
 uint8_t bApiHandlerCont(void *pxApiCall, void **ppxContext, ApiCallReason_t eReason, uint8_t *pucData, uint32_t ulDataLen) {
-    uint32_t ulCallId; 
+    if(pucData == NULL) pucData = (uint8_t *)json_null;
+    uint32_t ulCallId;
     bApiCallGetId(pxApiCall, &ulCallId);
     uint32_t *tmp = (uint32_t *)ppxContext;
     if(*tmp == 0) {
@@ -70,7 +77,7 @@ uint8_t bApiHandlerSubs(void *pxApiCall, void **ppxContext, ApiCallReason_t eRea
     uint32_t ulCallId; 
     bApiCallGetId(pxApiCall, &ulCallId);
     uint32_t *tmp = (uint32_t *)ppxContext;
-    if(pucData == NULL) pucData = (uint8_t *)"Null";
+    if(pucData == NULL) pucData = (uint8_t *)json_null;
     if(*tmp == 0) {
         ESP_LOGI(TAG, "WS subscribtion handler call %lu, with arg:%s", ulCallId, pucData);
         bApiCallSendStatus(pxApiCall, API_CALL_STATUS_OK);

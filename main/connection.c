@@ -60,8 +60,10 @@ esp_netif_t* pxGetNetIfFromSocket(int sock) {
         for (int i = 0; i < NET_IF_AMOUNT; i++) {
             if (esp_netif_get_ip_info(apxNetIf[i], &ip_info) != ESP_OK) continue;
             uint8_t *ipi = (uint8_t *)&ip_info.ip;
-            ESP_LOGI(TAG, "NetIf IP v4 %d.%d.%d.%d", ipi[0], ipi[1], ipi[2], ipi[3]);
-            if (memcmp(ipi, ip4_addr, 4) == 0) return apxNetIf[i];
+            if (memcmp(ipi, ip4_addr, 4) == 0) {
+                ESP_LOGI(TAG, "NetIf IP v4 %d.%d.%d.%d", ipi[0], ipi[1], ipi[2], ipi[3]);
+                return apxNetIf[i];
+            }
         }
     }
     else {
