@@ -86,6 +86,7 @@ esp_netif_t* pxGetNetIfFromSocket(int sock) {
 static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data) {
     //app_context_t* app = (app_context_t*) arg;
 
+    ESP_LOGI(TAG, "Event id: %ld, base: %ld", event_id, (uint32_t)event_base);
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         ESP_LOGI(TAG, "Wi-Fi disconnected, trying to reconnect...");
         esp_wifi_connect();

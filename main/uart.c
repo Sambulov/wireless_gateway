@@ -131,7 +131,7 @@ uint8_t gw_uart_set(void *desc, gw_uart_word_t bits, uint32_t boud, gw_uart_pari
     uint8_t result = 1;
     result = result && (uart_set_pin(uart->port, txp, rxp, rts, cts) == ESP_OK);
     result = result && (uart_param_config(uart->port, &new_config) == ESP_OK);
-    ESP_LOGI(TAG, "UART configured: port %d, tx_pin: %d, rx_pin: %d", uart->port, txp, rxp);
+    ESP_LOGI(TAG, "UART configured: port %d, tx_pin: %d, rx_pin: %d, boud: %lu", uart->port, txp, rxp, boud);
     return result;
 }
 

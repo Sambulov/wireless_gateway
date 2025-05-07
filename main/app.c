@@ -150,10 +150,6 @@ void app_main(void)
 	}
     ESP_LOGI("modbus", "init ok");
 
-
-
-
-
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK(nvs_flash_erase());
@@ -176,7 +172,16 @@ void app_main(void)
 
     // /* Start the server for the first time */
     app_context.web_server = start_webserver();
-    ws_init(&app_context);
+
+
+    ESP_LOGI(TAG, "Registering URI handlers");
+    webserver_register_handler(app_context.web_server, pxWsServerInit("/ws"));
+    webserver_register_handler(app_context.web_server, &dir_list);
+    webserver_register_handler(app_context.web_server, &file_upload);
+    webserver_register_handler(app_context.web_server, &file_delete);
+    webserver_register_handler(app_context.web_server, &file_server);
+
+    
 
     bApiCallRegister(bApiHandlerEcho, ESP_EVENT_WS_API_ECHO_ID, NULL);
     bApiCallRegister(bApiHandlerCont, ESP_EVENT_WS_API_CONT_ID, NULL);

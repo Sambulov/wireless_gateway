@@ -433,7 +433,7 @@ httpd_uri_t file_server = {
 };
 
 httpd_uri_t dir_list = {
-    .uri       = "/dir/*",  // Match all URIs of type /path/to/file
+    .uri       = "/dir/*",  // Match all URIs of type /dir/path/to/file
     .method    = HTTP_GET,
     .handler   = dir_http_handler,
     .user_ctx   = NULL,

@@ -15,11 +15,8 @@
 
 static const char *TAG = "ws_server";
 
-#define NEW_WS_QUEUE_LENGTH             20
+#define NEW_WS_QUEUE_LENGTH             10
 #define NEW_CALL_ITEM_SIZE              sizeof(void *)
-//#define NEW_CLOSE_ITEM_SIZE             sizeof(int)
-
-#define WS_FRAME_LEN_MAX 2000
 
 #define API_CALL_STATUS_NEW     0
 #define API_CALL_STATUS_WRK     1
@@ -41,7 +38,8 @@ typedef struct {
         httpd_handle_t hd;
         int fd;
     } pxWsc;
-    uint32_t ulTimestamp;
+    uint32_t ulAliveTs;
+    uint32_t ulPingTs;
     uint32_t ulId;
     void *pxHandlerContext;
     ApiHandler_t fHandler;
@@ -55,17 +53,6 @@ typedef struct {
     uint8_t payload[];
 } ApiData_t;
 
-
-static esp_err_t ws_handler(httpd_req_t *req);
-
-httpd_uri_t ws = {
-    .uri        = "/ws", // http://<ip>/ws -> ws://<ip>/ws
-    .method     = HTTP_GET,
-    .handler    = ws_handler,
-    .user_ctx   = NULL,
-    .is_websocket = true,
-    .handle_ws_control_frames = true
-};
 
 static SemaphoreHandle_t xWsApiMutex = NULL;
 static LinkedList_t pxWsApiHandlers = NULL;
@@ -101,6 +88,24 @@ static void vTerminateApiCallByFid(LinkedListItem_t *item, void *arg) {
     }
 }
 
+static void vRefreshApiCallAliveTsByFd(LinkedListItem_t *item, void *arg) {
+    ApiCall_t *call = LinkedListGetObject(ApiCall_t, item);
+    uint32_t fd = (uint32_t)arg;
+    if((call->ucStatus == API_CALL_STATUS_WRK) && (call->pxWsc.fd == fd)) {
+        ESP_LOGW(TAG, "Refresh call alive ts; socket:%d", call->pxWsc.fd);
+        call->ulAliveTs = xTaskGetTickCount();
+    }
+}
+
+static void vRefreshApiCallPingTsByFd(LinkedListItem_t *item, void *arg) {
+    ApiCall_t *call = LinkedListGetObject(ApiCall_t, item);
+    uint32_t fd = (uint32_t)arg;
+    if((call->ucStatus == API_CALL_STATUS_WRK) && (call->pxWsc.fd == fd)) {
+        ESP_LOGW(TAG, "Refresh call ping ts; socket:%d", call->pxWsc.fd);
+        call->ulPingTs = xTaskGetTickCount();
+    }
+}
+
 static void vBreakApiCallByFd(LinkedListItem_t *item, void *arg) {
     ApiCall_t *call = LinkedListGetObject(ApiCall_t, item);
     uint32_t fd = (uint32_t)arg;
@@ -110,18 +115,46 @@ static void vBreakApiCallByFd(LinkedListItem_t *item, void *arg) {
     }
 }
 
+static void vBrakeApiCallsByFd(uint32_t LockWait, int fd) {
+    if(xSemaphoreTakeRecursive(xWsApiMutex, pdMS_TO_TICKS(LockWait)) == pdTRUE) {
+        ulLinkedListDoForeach(pxWsApiCall, vBreakApiCallByFd, (void *)fd);
+        xSemaphoreGiveRecursive(xWsApiMutex);
+    }
+}
+
+static void vRefreshApiCallsAliveTsByFd(uint32_t LockWait, int fd) {
+    if(xSemaphoreTakeRecursive(xWsApiMutex, pdMS_TO_TICKS(LockWait)) == pdTRUE) {
+        ulLinkedListDoForeach(pxWsApiCall, vRefreshApiCallAliveTsByFd, (void *)fd);
+        xSemaphoreGiveRecursive(xWsApiMutex);
+    }
+}
+
+static void vRefreshApiCallsPingTsByFd(uint32_t LockWait, int fd) {
+    if(xSemaphoreTakeRecursive(xWsApiMutex, pdMS_TO_TICKS(LockWait)) == pdTRUE) {
+        ulLinkedListDoForeach(pxWsApiCall, vRefreshApiCallPingTsByFd, (void *)fd);
+        xSemaphoreGiveRecursive(xWsApiMutex);
+    }
+}
+
 static void vServeApiCall(LinkedListItem_t *item, void *arg) {
     ApiCall_t *call = LinkedListGetObject(ApiCall_t, item);
     if(call->ucStatus == API_CALL_STATUS_WRK) {
-        static httpd_ws_frame_t frame = { .type = HTTPD_WS_TYPE_PING };
+        static httpd_ws_frame_t frame = { 
+            .final = 1, 
+            .fragmented = 0, 
+            .payload = NULL,
+            .len = 0,
+            .type = HTTPD_WS_TYPE_PING
+        };
         uint32_t now = xTaskGetTickCount();
-        if((now - call->ulTimestamp) >= CONFIG_WEB_SOCKET_PING_DELAY) {
-            ESP_LOGI(TAG, "Send ping for %lu", call->ulFid);
-            call->ulTimestamp = now;
+        if(((now - call->ulAliveTs) >= CONFIG_WEB_SOCKET_PING_DELAY) && 
+           ((now - call->ulPingTs) >= CONFIG_WEB_SOCKET_PING_DELAY)) {
+            ESP_LOGI(TAG, "Send ping with socket: %d", call->pxWsc.fd);
             if(httpd_ws_send_frame_async(call->pxWsc.hd, call->pxWsc.fd, &frame) != ESP_OK) {
-                ESP_LOGE(TAG, "Send ping error");
+                ESP_LOGW(TAG, "Send ping error");
                 vApiCallComplete(call);
             }
+            vRefreshApiCallsPingTsByFd(0, call->pxWsc.fd);
         }
     }
     if(call->ucStatus == API_CALL_STATUS_BRK) {
@@ -130,7 +163,6 @@ static void vServeApiCall(LinkedListItem_t *item, void *arg) {
         call->ucStatus = API_CALL_STATUS_FIN;        
     }
     if(call->ucStatus == API_CALL_STATUS_FIN) {
-        //vTaskDelay(1);
         vLinkedListUnlink(item);
         ESP_LOGI(TAG, "Call freed id:%lu", call->ulId);
         free(call);
@@ -139,8 +171,9 @@ static void vServeApiCall(LinkedListItem_t *item, void *arg) {
 
 static void vWsTransferComplete_cb(esp_err_t err, int socket, void *arg) {
     ApiData_t *apiData = (ApiData_t *)arg;
+    ESP_LOGI(TAG, "Transfer Complete, err: %d, fd: %d", err, socket);
+    if(err) vBrakeApiCallsByFd(0, socket);
     if((!apiData->counter) || !(--apiData->counter)) {
-        ESP_LOGI(TAG, "Transfer Complete");
         free(arg);
     }
 }
@@ -258,7 +291,7 @@ static uint8_t _bApiCallSendJson(void *pxApiCall, uint32_t ulFid, const uint8_t 
             resp->frame.len = len;
             while (call != NULL) {
                 res = httpd_ws_send_data_async(call->pxWsc.hd, call->pxWsc.fd, &resp->frame, vWsTransferComplete_cb, resp);
-                ESP_LOGI(TAG, "Api call %lu json sending with %d", call->ulId, res);
+                ESP_LOGI(TAG, "Api call %lu json sending with result: %d", call->ulId, res);
                 if(fid_group)
                     call = LinkedListGetObject(ApiCall_t, pxLinkedListFindNextNoOverlap(LinkedListItem(call), bCallFidMatch, (void *)ulFid));
                 else break;
@@ -284,177 +317,139 @@ uint8_t bApiCallSendJsonFidGroup(uint32_t ulFid, const uint8_t *ucJson, uint32_t
     return _bApiCallSendJson(NULL, ulFid, ucJson, ulLen);
 }
 
-static esp_err_t ws_handler(httpd_req_t *req) {
-    static uint32_t call_id = 0;
-
-    esp_err_t ret = ESP_OK;
-    ApiCall_t *wscd = NULL;
-    uint8_t *buf = NULL;
-    cJSON *json = NULL;
-    char *data = NULL;
-
-    if (req->method == HTTP_GET) {
-        ESP_LOGI(TAG, "Handshake done, the new connection was opened");
-        return ESP_OK;
-    }
-    ESP_LOGI(TAG, "New WS request");
-
-    httpd_ws_frame_t ws_pkt;
-    memset(&ws_pkt, 0, sizeof(httpd_ws_frame_t));
-    /* Set max_len = 0 to get the frame len */
-    ret = httpd_ws_recv_frame(req, &ws_pkt, 0);
-    if (ret != ESP_OK) {
-        ESP_LOGW(TAG, "Failed to get WS frame len with %d", ret);
-        goto err_exit;
-    }
-
-    if (ws_pkt.type == HTTPD_WS_TYPE_CLOSE) {
-        ESP_LOGI(TAG, "Close frame");
-        uint32_t fd = httpd_req_to_sockfd(req);
-        httpd_ws_send_frame(req, &ws_pkt);
-        httpd_sess_trigger_close(req->handle, fd);
-        xSemaphoreTakeRecursive(xWsApiMutex, portMAX_DELAY);
-        ulLinkedListDoForeach(pxWsApiCall, vBreakApiCallByFd, (void *)fd);
-        xSemaphoreGiveRecursive(xWsApiMutex);
-        return ESP_OK;
-    }
-
-    if (ws_pkt.type == HTTPD_WS_TYPE_PING) {
-        ESP_LOGI(TAG, "Ping frame");
-        httpd_ws_frame_t frame;
-        memset(&frame, 0, sizeof(httpd_ws_frame_t));
-        frame.type = HTTPD_WS_TYPE_PONG;
-        //frame.payload = NULL,
-        //frame.len = 0
-        httpd_ws_send_frame(req, &frame);
-        return ESP_OK;
-    }
-
-    if (ws_pkt.type == HTTPD_WS_TYPE_PONG) {
-        ESP_LOGI(TAG, "Pong frame");
-        // TODO: update client timestamp
-        return ESP_OK;
-    }
-    
-    if(!ws_pkt.len || (ws_pkt.len > WS_FRAME_LEN_MAX) || (ws_pkt.type != HTTPD_WS_TYPE_TEXT)) {
-        ESP_LOGW(TAG, "No data or length too big or bad data type; len = %d", ws_pkt.len);
-        ret = ESP_FAIL;
-        goto err_exit;
-    }
-
-    buf = malloc(ws_pkt.len + 1);
-    if (buf == NULL) {
-        ESP_LOGW(TAG, "Failed to calloc memory for buf");
-        ret = ESP_ERR_NO_MEM;
-        goto err_exit;
-    }
-
-    ws_pkt.payload = buf;
-    /* Set max_len = ws_pkt.len to get the frame payload */
-    ret = httpd_ws_recv_frame(req, &ws_pkt, ws_pkt.len);
-    if (ret != ESP_OK) {
-        ESP_LOGW(TAG, "WS receive failed with %d", ret);
-        goto err_exit;
-    }
-
-    ws_pkt.payload[ws_pkt.len] = '\0';
-    ESP_LOGI(TAG, "Got packet with message: %s", ws_pkt.payload);
-
-    json = cJSON_ParseWithLengthOpts((char *)ws_pkt.payload, ws_pkt.len, 0, 0);
-    if (json == NULL) {
-        ESP_LOGW(TAG, "Invalid JSON");
-        ret = ESP_FAIL;
-        goto err_exit;
-    }
-
-    cJSON *fid_json = cJSON_GetObjectItem(json, "FID");
-    uint32_t fid = 0;
-    if (cJSON_IsNumber(fid_json)) {
-        fid = fid_json->valueint;
-    }
-    else if (cJSON_IsString(fid_json)) {
-        fid = (uint32_t)strtol(fid_json->valuestring, NULL, 16);
-    }
-    if(fid == API_HANDLER_ID_GENEGAL) {
-        ESP_LOGW(TAG, "Bad API arg");
-        ret = ESP_FAIL;
-        goto err_exit;
-    }
-
-    uint32_t dataLen = 0;
-    cJSON *arg_json = cJSON_GetObjectItem(json, "ARG");
-    if(arg_json != NULL) {
-        if(arg_json->type != cJSON_Object) {
-            ESP_LOGI(TAG, "Api call \"ARG\" type is not an object");
-            ret = ESP_FAIL;
-            goto err_exit;
+static void vWsParseApiRequest(uint8_t *payload, int32_t pl_len, httpd_handle_t hd, int fd) {
+    uint8_t err = 1;
+    ApiCall_t *wscd = malloc(sizeof(ApiCall_t));
+    if(wscd != NULL) {
+        wscd->ulFid = 0;
+        wscd->pucReqData = NULL;
+        wscd->ulReqDataLen = 0;
+        wscd->pxWsc.fd = fd;
+        wscd->pxWsc.hd = hd;
+        cJSON *json = cJSON_ParseWithLengthOpts((char *)payload, pl_len, 0, 0);
+        if (json != NULL) {
+            cJSON *fid_json = cJSON_GetObjectItem(json, "FID");
+            if (cJSON_IsNumber(fid_json)) wscd->ulFid = fid_json->valueint;
+            else if (cJSON_IsString(fid_json)) wscd->ulFid = (uint32_t)strtol(fid_json->valuestring, NULL, 16);
+            if(wscd->ulFid != API_HANDLER_ID_GENEGAL) {
+                cJSON *arg_json = cJSON_GetObjectItem(json, "ARG");
+                if(arg_json != NULL) {
+                    //if(arg_json->type == cJSON_Object) {
+                        wscd->pucReqData = (uint8_t *)cJSON_PrintUnformatted(arg_json);
+                        wscd->ulReqDataLen = lStrLen(wscd->pucReqData);
+                        ESP_LOGI(TAG, "Api arg %s", wscd->pucReqData);
+                    //}
+                    //else ESP_LOGI(TAG, "Api call ARG property type is not an object");
+                }
+                if(xQueueSend(xWsApiNewCallQueue, (void *)&wscd, pdMS_TO_TICKS(10)) == pdPASS) {
+                    err = 0;
+                    ESP_LOGI(TAG, "New api call %lu enqueued with id:%lu", wscd->ulFid, wscd->ulId);
+                }
+                else ESP_LOGW(TAG, "Queue full");
+            }
+            else ESP_LOGW(TAG, "Api call bad FID property");
+            cJSON_Delete(json);
         }
-        data = cJSON_PrintUnformatted(arg_json);
-        dataLen = strlen(data);
-        ESP_LOGI(TAG, "Api arg %s", data);
+        else ESP_LOGW(TAG, "Invalid JSON");
+        if(err) {
+            if(wscd->pucReqData != NULL) free(wscd->pucReqData);
+            free(wscd);
+        }
     }
-
-    wscd = malloc(sizeof(ApiCall_t));
-    if(wscd == NULL){
-        ret = ESP_ERR_NO_MEM;
-        goto err_exit;
-    }
-    wscd->ulFid = fid;
-    wscd->fHandler = NULL; //assigned in worker
-    wscd->pxWsc.fd = httpd_req_to_sockfd(req);
-    wscd->pxWsc.hd = req->handle;
-    wscd->pxHandlerContext = NULL;
-    wscd->ulTimestamp = xTaskGetTickCount();
-    wscd->pucReqData = (uint8_t *)data;
-    wscd->ulReqDataLen = dataLen;
-    wscd->ulId = call_id++;
-    wscd->ucStatus = API_CALL_STATUS_NEW;
-    
-    if(xQueueSend(xWsApiNewCallQueue, (void *)&wscd, pdMS_TO_TICKS(10)) != pdPASS ) {
-        ret = ESP_ERR_NO_MEM;
-        goto err_exit;
-    }
-
-    ESP_LOGI(TAG, "New api call %lu enqueued with id:%lu", fid, wscd->ulId);
-    goto finally;
-
-err_exit:
-    if(wscd != NULL) free(wscd);
-    if(data != NULL) free(data);
-finally:
-    if(buf != NULL) free(buf);
-    if(json != NULL) cJSON_Delete(json);
-    uint32_t heap = (uint32_t)heap_caps_get_free_size(MALLOC_CAP_DEFAULT);
-    ESP_LOGI(TAG, "Heap left:%lu", heap);
-   //return ret;
-   return ESP_OK; //ignore error, drop packet;
+    else ESP_LOGW(TAG, "Failed to malloc memory for ws api call");
 }
 
-static void vWsApiCallWorker( void * pvParameters ) {
+static esp_err_t eWsHandler(httpd_req_t *req) {
+    ESP_LOGI(TAG, "New web request, type: %d, len: %d", req->method, req->content_len);
+    if (req->method == HTTP_GET) ESP_LOGI(TAG, "Handshake done, the new connection was opened");
+    else {
+        httpd_ws_frame_t ws_pkt;
+        memset(&ws_pkt, 0, sizeof(httpd_ws_frame_t));
+        esp_err_t ret = httpd_ws_recv_frame(req, &ws_pkt, 0); /* max_len = 0 to populate httpd_ws_frame except data */
+        if (ret == ESP_OK) {
+            ESP_LOGI(TAG, "New WS request, type: %d", ws_pkt.type);
+            uint32_t fd = httpd_req_to_sockfd(req);
+            vRefreshApiCallsAliveTsByFd(0, fd);
+            if (ws_pkt.type == HTTPD_WS_TYPE_PING) {
+                ESP_LOGI(TAG, "Ping frame, sending pong");
+                httpd_ws_frame_t frame;
+                memset(&frame, 0, sizeof(httpd_ws_frame_t));
+                frame.type = HTTPD_WS_TYPE_PONG;
+                httpd_ws_send_frame(req, &frame);
+            }
+            else if (ws_pkt.type == HTTPD_WS_TYPE_PONG) {
+                ESP_LOGI(TAG, "Pong frame");
+            }
+            else if (ws_pkt.type == HTTPD_WS_TYPE_CLOSE) {
+                ESP_LOGI(TAG, "Close frame");
+                //httpd_ws_send_frame(req, &ws_pkt); /* ?????????? */
+                //httpd_sess_trigger_close(req->handle, fd); /* ?????????? */
+                vBrakeApiCallsByFd(0, fd);
+            }
+            else if (ws_pkt.type == HTTPD_WS_TYPE_BINARY) {
+                ESP_LOGW(TAG, "Binary frame; len = %d", ws_pkt.len);
+                /* skeep frame */
+            }
+            else if (ws_pkt.type == HTTPD_WS_TYPE_CONTINUE) {
+                ESP_LOGW(TAG, "Fragmented frame part; len = %d", ws_pkt.len);
+                /* skeep frame */
+            }
+            else if(ws_pkt.type == HTTPD_WS_TYPE_TEXT) {
+                ws_pkt.payload = malloc(ws_pkt.len + 1) /* +1 string terminator */;
+                if (ws_pkt.payload != NULL) {
+                    ret = httpd_ws_recv_frame(req, &ws_pkt, ws_pkt.len);
+                    ws_pkt.payload[ws_pkt.len] = '\0';
+                    if (ret == ESP_OK) {
+                        ESP_LOGI(TAG, "Got packet with message: %s", ws_pkt.payload);
+                        vWsParseApiRequest((uint8_t *)ws_pkt.payload, ws_pkt.len, req->handle, httpd_req_to_sockfd(req));
+                    } else ESP_LOGW(TAG, "WS receive failed with %d", ret);
+                    free(ws_pkt.payload);
+                }
+                else ESP_LOGW(TAG, "Failed to malloc memory for payload");
+            }
+            else if(ws_pkt.type != HTTPD_WS_TYPE_TEXT) /* Other types shielding */ {
+                ESP_LOGW(TAG, "Frame type unsupported");
+            }
+        }
+        else ESP_LOGW(TAG, "Failed to get WS frame len with %d", ret);
+    }
+    uint32_t heap = (uint32_t)heap_caps_get_free_size(MALLOC_CAP_DEFAULT);
+    ESP_LOGI(TAG, "Heap left:%lu", heap);
+    return ESP_OK; //ignore errors, drop packet;
+}
+
+static void vWsApiCallWorker(void *pvParameters) {
     ApiCall_t *call = NULL;
-    for( ;; ) {
+    for(;;) {
         xSemaphoreTakeRecursive(xWsApiMutex, portMAX_DELAY);
         ulLinkedListDoForeach(pxWsApiCall, vServeApiCall, NULL);
         xSemaphoreGiveRecursive(xWsApiMutex);
-        if(xQueueReceive(xWsApiNewCallQueue, &call, pdMS_TO_TICKS(100)) == pdPASS ) {
-            xSemaphoreTakeRecursive(xWsApiMutex, portMAX_DELAY);
+        if(xQueueReceive(xWsApiNewCallQueue, &call, pdMS_TO_TICKS(10)) == pdPASS ) {
+            static uint32_t call_id = 0;
+            call->fHandler = NULL;
+            call->pxHandlerContext = NULL;
+            call->ulAliveTs = xTaskGetTickCount();
+            call->ulId = call_id++;
             call->ucStatus = API_CALL_STATUS_WRK;
+            xSemaphoreTakeRecursive(xWsApiMutex, portMAX_DELAY);
             ApiCall_t *call_prev = LinkedListGetObject(ApiCall_t,
                 pxLinkedListFindFirst(pxWsApiCall, bCallClientMatch,
                     (void *)((void *[]){ (void *)call->pxWsc.fd, (void *)call->ulFid})));
             if(call_prev != NULL) {
                 call_prev->pucReqData = call->pucReqData;
                 call_prev->ulReqDataLen = call->ulReqDataLen;
-                call_prev->ulTimestamp = call->ulTimestamp;
+                call_prev->ulAliveTs = call->ulAliveTs;
                 free(call);
                 call = call_prev;
             }
             else {
+                vLinkedListInsertLast(&pxWsApiCall, LinkedListItem(call));
                 ApiHandlerItem_t *hlr = LinkedListGetObject(ApiHandlerItem_t, pxLinkedListFindFirst(pxWsApiHandlers, bHandlerFidMatch, (void *)call->ulFid));
                 if(hlr != NULL) {
                     call->fHandler = hlr->fHandler;
-                    vLinkedListInsertLast(&pxWsApiCall, LinkedListItem(call));
+                    call->pxHandlerContext = hlr->xHandlerContext;
                 }
+                else bApiCallSendStatus(pxWsApiCall, API_CALL_ERROR_STATUS_NO_HANDLER);
             }
             if(call->fHandler != NULL) {
                 uint8_t res = call->fHandler(call, &call->pxHandlerContext,
@@ -471,27 +466,26 @@ static void vWsApiCallWorker( void * pvParameters ) {
     vTaskDelete(NULL);
 }
 
-void ws_init(app_context_t *context) {
-    static StaticQueue_t xWsApiNewCallQueueStat;
-    static uint8_t ucWsApiCallNewQueueStorageArea[NEW_WS_QUEUE_LENGTH * NEW_CALL_ITEM_SIZE];
-
-    //static StaticQueue_t xWsCloseNewQueueStat;
-    //static uint8_t ucWsCloseNewQueueStorageArea[NEW_WS_QUEUE_LENGTH * NEW_CALL_ITEM_SIZE];
-
-    static StaticSemaphore_t xMutexBuffer;
-
-    
-    //xWsCloseQueue = xQueueCreateStatic(NEW_WS_QUEUE_LENGTH,
-    //                        NEW_CLOSE_ITEM_SIZE,
-    //                        ucWsCloseNewQueueStorageArea,
-    //                        &xWsCloseNewQueueStat);
-
-    xWsApiNewCallQueue = xQueueCreateStatic(NEW_WS_QUEUE_LENGTH,
-                            NEW_CALL_ITEM_SIZE,
-                            ucWsApiCallNewQueueStorageArea,
-                            &xWsApiNewCallQueueStat);
-    
-    ws.user_ctx = context;
-    xWsApiMutex = xSemaphoreCreateRecursiveMutexStatic( &xMutexBuffer );
-    xTaskCreate(vWsApiCallWorker, "ApiCallWork", 4096, NULL, uxTaskPriorityGet(NULL), NULL);
+httpd_uri_t *pxWsServerInit(char *uri) {
+    //static esp_err_t eWsHandler(httpd_req_t *req);
+    httpd_uri_t *ws_h = malloc(sizeof(httpd_uri_t));
+    if(ws_h != NULL) {
+        memset(ws_h, 0, sizeof(httpd_uri_t));
+        ws_h->uri                      = uri;
+        ws_h->method                   = HTTP_GET;
+        ws_h->handler                  = eWsHandler;
+        ws_h->user_ctx                 = NULL;
+        ws_h->is_websocket             = true;
+        ws_h->handle_ws_control_frames = true;
+        static StaticQueue_t xWsApiNewCallQueueStat;
+        static uint8_t ucWsApiCallNewQueueStorageArea[NEW_WS_QUEUE_LENGTH * NEW_CALL_ITEM_SIZE];
+        static StaticSemaphore_t xMutexBuffer;
+        xWsApiNewCallQueue = xQueueCreateStatic(NEW_WS_QUEUE_LENGTH,
+                                NEW_CALL_ITEM_SIZE,
+                                ucWsApiCallNewQueueStorageArea,
+                                &xWsApiNewCallQueueStat);
+        xWsApiMutex = xSemaphoreCreateRecursiveMutexStatic( &xMutexBuffer );
+        xTaskCreate(vWsApiCallWorker, "ApiCallWork", 4096, NULL, uxTaskPriorityGet(NULL), NULL);
+    }
+    return ws_h;
 }

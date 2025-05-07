@@ -37,8 +37,8 @@ esp_err_t setup_littlefs(void);
 esp_err_t stop_webserver(httpd_handle_t server);
 
 httpd_handle_t start_webserver(void);
+uint8_t webserver_register_handler(httpd_handle_t server, httpd_uri_t *uri_handler);
 
-extern httpd_uri_t ws;
 extern httpd_uri_t file_server;
 extern httpd_uri_t dir_list;
 extern httpd_uri_t file_upload;
@@ -55,7 +55,7 @@ typedef struct {
     httpd_handle_t web_server;
 } app_context_t;
 
-void ws_init(app_context_t *context);
+httpd_uri_t *pxWsServerInit(char *uri);
 
 /*==========================*/
 
