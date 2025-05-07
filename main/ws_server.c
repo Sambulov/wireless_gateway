@@ -316,7 +316,6 @@ static esp_err_t ws_handler(httpd_req_t *req) {
         xSemaphoreTakeRecursive(xWsApiMutex, portMAX_DELAY);
         ulLinkedListDoForeach(pxWsApiCall, vBreakApiCallByFd, (void *)fd);
         xSemaphoreGiveRecursive(xWsApiMutex);
-        xQueueSend(xWsApiNewCallQueue, (void *)&wscd, pdMS_TO_TICKS(10));
         return ESP_OK;
     }
 
