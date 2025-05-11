@@ -444,7 +444,7 @@ static void vWsApiCallWorker(void *pvParameters) {
             }
             if(call->fHandler != NULL) {
                 uint8_t res = call->fHandler(call, &call->pxHandlerContext, call->ulCallPending, call->pucReqData, call->ulReqDataLen);
-                if(res) call->ulCallPending--;
+                if(res && (call->ulCallPending > 0)) call->ulCallPending--;
             }
             if(call->pucReqData != NULL) free(call->pucReqData);
             call->ulReqDataLen = 0;

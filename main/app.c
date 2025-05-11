@@ -98,26 +98,6 @@ uint8_t bApiHandlerSubs(void *pxApiCall, void **ppxContext, uint32_t ulPending, 
 
 #include "cJSON.h"
 
-typedef struct {
-    Modbus_t *pxModbus;
-    QueueHandle_t xMbQueue;
-} ApiContextModbus_t;
-
-typedef struct {
-    __LinkedListObject__
-    uint32_t ulTaskID;
-    uint32_t ulTransferError;
-    ModbusFrame_t *xMbFrame;
-    uint32_t ulRepeatDelay;
-    uint32_t ulAwaiteTimeout;
-    void *pxApiCall;
-    uint32_t ulTimestamp;
-} ApiCmdModbus_t;
-
-
-
-#define ESP_WS_API_MODBUS_ID    2000
-
 uint8_t cJSON_ParseInt(cJSON *pxJson, const char *pcName, uint32_t *pulOutVal) {
     uint32_t val = 0;
     if(pcName != NULL) pxJson = cJSON_GetObjectItem(pxJson, pcName);
@@ -127,6 +107,24 @@ uint8_t cJSON_ParseInt(cJSON *pxJson, const char *pcName, uint32_t *pulOutVal) {
     *pulOutVal = val;
     return 1;
 }
+
+typedef struct {
+    Modbus_t *pxModbus;
+    QueueHandle_t xCmdQueue;
+} ApiContextModbus_t;
+
+typedef struct {
+    __LinkedListObject__
+    uint32_t ulTaskID;
+    void *pxApiCall;
+    uint32_t ulTimestamp;
+    uint32_t ulRepeatDelay;
+    uint32_t ulAwaiteTimeout;
+    uint32_t ulTransferError;
+    ModbusFrame_t *xMbFrame;
+} ApiCmdModbus_t;
+
+#define ESP_WS_API_MODBUS_ID    2000
 
 uint8_t bApiHandlerModbus(void *pxApiCall, void **ppxContext, uint32_t ulPending, uint8_t *pucData, uint32_t ulDataLen) {
     static uint32_t taskId = 0;
@@ -194,7 +192,7 @@ uint8_t bApiHandlerModbus(void *pxApiCall, void **ppxContext, uint32_t ulPending
             pxCmd->ulTaskID = taskId++;
         }
         status = API_CALL_ERROR_STATUS_NO_FREE_DESCRIPTORS;
-        if(xQueueSend(context->xMbQueue, (void *)&pxCmd, pdMS_TO_TICKS(0)) != pdPASS) { break; }
+        if(xQueueSend(context->xCmdQueue, (void *)&pxCmd, pdMS_TO_TICKS(0)) != pdPASS) { break; }
         ESP_LOGI(TAG, "Mb req enqueued");
         status = API_CALL_STATUS_EXECUTING;
         break;
@@ -214,6 +212,100 @@ uint8_t bApiHandlerModbus(void *pxApiCall, void **ppxContext, uint32_t ulPending
 }
 
 #include "uart.h"
+
+typedef struct {
+    gw_uart_t *pxUart;
+    QueueHandle_t xCmdQueue;
+} ApiContextUart_t;
+
+typedef struct {
+    __LinkedListObject__
+    uint32_t ulTaskID;
+    void *pxApiCall;
+    uint32_t ulTimestamp;
+    uint32_t ulRepeatDelay;
+    uint32_t ulAwaiteTimeout;
+    uint8_t bWordLenSet : 1,
+            bBoudSet    : 1,
+            bParitySet  : 1,
+            bStopBitsSet: 1;
+    uint8_t ucWordLen;
+    uint8_t ucParity;
+    uint8_t ucStopBits;
+    uint32_t ulBoud;
+} ApiCmdUart_t;
+
+#define ESP_WS_API_UART_ID    3000
+
+uint8_t bApiHandlerUart(void *pxApiCall, void **ppxContext, uint32_t ulPending, uint8_t *pucData, uint32_t ulDataLen) {
+    static uint32_t taskId = 0;
+    if(!ulPending) return 1;
+    if(pucData == NULL) {
+        if(ulPending == 1) {
+            bApiCallSendStatus(pxApiCall, API_CALL_STATUS_EXECUTING);
+            return 0;
+        }
+        else {
+            bApiCallSendStatus(pxApiCall, API_CALL_STATUS_CANCELED);
+            vApiCallComplete(pxApiCall);
+            return 1;
+        }
+    }
+    ApiContextUart_t *context = (ApiContextUart_t *)*ppxContext;
+    ESP_LOGI(TAG, "Uart call, with arg:%s", pucData);
+    cJSON *json = cJSON_ParseWithLengthOpts((char *)pucData, ulDataLen, 0, 0);
+    uint32_t status = API_CALL_ERROR_STATUS_NO_MEM;
+    ApiCmdUart_t *pxCmd = malloc(sizeof(ApiCmdUart_t));
+    do {
+        if(pxCmd == NULL) { break; }
+        memset(pxCmd, 0, sizeof(ApiCmdUart_t));
+        pxCmd->pxApiCall = pxApiCall;
+        pxCmd->ulTimestamp = xTaskGetTickCount();
+        status = API_CALL_ERROR_STATUS_BAD_ARG;
+        uint32_t val;
+        pxCmd->ulAwaiteTimeout = 0;
+        pxCmd->ulRepeatDelay = 0;
+        if(cJSON_ParseInt(json, "AWT", &val)) pxCmd->ulAwaiteTimeout = max(val, pxCmd->ulAwaiteTimeout);
+        ESP_LOGI(TAG, "mb req AWT:%lu", pxCmd->ulAwaiteTimeout);
+        if(cJSON_ParseInt(json, "RDL", &val)) pxCmd->ulRepeatDelay = val;
+        pxCmd->ulTimestamp -= pxCmd->ulRepeatDelay;
+        ESP_LOGI(TAG, "mb req RDL:%lu", pxCmd->ulRepeatDelay);
+
+        if(cJSON_ParseInt(json, "WL", &val)) {
+            if(val >= 2) { break; }
+            pxCmd->bWordLenSet = 1;
+            pxCmd->ucWordLen = val;
+        }
+        if(cJSON_ParseInt(json, "BR", &val)) {
+            if(val > 1000000) { break; }
+            pxCmd->bBoudSet = 1;
+            pxCmd->ulBoud = val;
+        }
+        if(cJSON_ParseInt(json, "PAR", &val)) {
+            if(val >= 3) { break; }
+            pxCmd->bParitySet = 1;
+            pxCmd->ucParity = val;
+        }
+        if(cJSON_ParseInt(json, "SB", &val)) {
+            if((val >= 4) || (val == GW_UART_STOP_BITS0_5)) { break; }
+            pxCmd->bStopBitsSet = 1;
+            pxCmd->ucStopBits = val;
+        }
+        pxCmd->ulTaskID = taskId++;
+        status = API_CALL_ERROR_STATUS_NO_FREE_DESCRIPTORS;
+        if(xQueueSend(context->xCmdQueue, (void *)&pxCmd, pdMS_TO_TICKS(0)) != pdPASS) { break; }
+        ESP_LOGI(TAG, "Uart req enqueued");
+        status = API_CALL_STATUS_EXECUTING;
+        break;
+    } while (1);
+    bApiCallSendStatus(pxApiCall, status);
+    if(status != API_CALL_STATUS_EXECUTING) {
+        if(pxCmd != NULL) free(pxCmd);
+    }
+    cJSON_Delete(json);
+    return 0;
+}
+
 
 static inline uint32_t mb_timer(const void *timer) {
     (void)timer;
@@ -316,7 +408,7 @@ void app_main(void)
     if(gw_uart_init(&mb_uart, GW_UART_PORT_2, 1024)) {
         ESP_LOGI("app", "Uart ok");
     }
-    gw_uart_set(&mb_uart, GW_UART_WORD_8BIT, 9600, GW_UART_PARITY_NONE, GW_UART_STOP_BITS1);
+    gw_uart_config_t xUartCnf = gw_uart_config_default;
 
     static Modbus_t pxMb;
 	#define BUF_SIZE  255
@@ -368,25 +460,32 @@ void app_main(void)
 
     
 
-    bApiCallRegister(bApiHandlerEcho, ESP_WS_API_ECHO_ID, NULL);
-    bApiCallRegister(bApiHandlerCont, ESP_WS_API_CONT_ID, NULL);
-    bApiCallRegister(bApiHandlerSubs, ESP_WS_API_ASYNC_ID, NULL);
+    bApiCallRegister(&bApiHandlerEcho, ESP_WS_API_ECHO_ID, NULL);
+    bApiCallRegister(&bApiHandlerCont, ESP_WS_API_CONT_ID, NULL);
+    bApiCallRegister(&bApiHandlerSubs, ESP_WS_API_ASYNC_ID, NULL);
 
-    static ApiContextModbus_t mbApiCtx;
-    mbApiCtx.pxModbus = &pxMb;
-    mbApiCtx.xMbQueue = xQueueCreate(5, sizeof(void *));
-    bApiCallRegister(bApiHandlerModbus, ESP_WS_API_MODBUS_ID, &mbApiCtx);
+    static ApiContextModbus_t mbApiCtxMb;
+    mbApiCtxMb.pxModbus = &pxMb;
+    mbApiCtxMb.xCmdQueue = xQueueCreate(5, sizeof(void *));
+    bApiCallRegister(&bApiHandlerModbus, ESP_WS_API_MODBUS_ID, &mbApiCtxMb);
 
-    
+    static ApiContextUart_t mbApiCtxUart;
+    mbApiCtxUart.pxUart = &mb_uart;
+    mbApiCtxUart.xCmdQueue = xQueueCreate(5, sizeof(void *));
+    bApiCallRegister(&bApiHandlerUart, ESP_WS_API_UART_ID, &mbApiCtxUart);
 
     xTaskCreate(vAsyncTestWorker, "ApiAyncWork", 4096, NULL, uxTaskPriorityGet(NULL), NULL);
 
     ESP_LOGI(TAG, "Run");
 
+    ApiCmdModbus_t *pxCmdMb = NULL;
+    LinkedList_t pxCmdStackModbus = NULL;
+    LinkedListItem_t *pxCmdCurrentModbus = NULL;
 
-    ApiCmdModbus_t *pxCmd = NULL;
-    LinkedList_t pxCommandStack = NULL;
-    LinkedListItem_t *pxCmdCurrent = NULL;
+    ApiCmdUart_t *pxCmdUart = NULL;
+    LinkedList_t pxCmdStackUart = NULL;
+    //LinkedListItem_t *pxCmdCurrentUart = NULL;
+
 
     //xIdleSemaphore = xSemaphoreCreateBinary();
     //esp_register_freertos_idle_hook(&esp_freertos_idle_cb);
@@ -398,42 +497,61 @@ void app_main(void)
         while (rep--) {
             uint32_t now = xTaskGetTickCount();
 
-            if(xQueueReceive(mbApiCtx.xMbQueue, &pxCmd, pdMS_TO_TICKS(0)) == pdPASS ) {
-                vLinkedListInsertLast(&pxCommandStack, LinkedListItem(pxCmd));
-                ESP_LOGI(TAG, "Cmd added");
+            if(xQueueReceive(mbApiCtxMb.xCmdQueue, &pxCmdMb, pdMS_TO_TICKS(0)) == pdPASS ) {
+                vLinkedListInsertLast(&pxCmdStackModbus, LinkedListItem(pxCmdMb));
+                ESP_LOGI(TAG, "Modbus cmd added");
+            }
+            if(xQueueReceive(mbApiCtxUart.xCmdQueue, &pxCmdUart, pdMS_TO_TICKS(0)) == pdPASS ) {
+                vLinkedListInsertLast(&pxCmdStackUart, LinkedListItem(pxCmdUart));
+                ESP_LOGI(TAG, "Uart cmd added");
             }
             if(!bModbusBusy(&pxMb)) {
-                if(pxCmdCurrent != NULL) {
-                    vLinkedListUnlink(pxCmdCurrent);
-                    pxCmd = LinkedListGetObject(ApiCmdModbus_t, pxCmdCurrent);
-                    if((!pxCmd->ulRepeatDelay) || (pxCmd->ulTransferError)) vCmdModbusFree(pxCmd);
+                if(pxCmdStackUart != NULL) {
+                    pxCmdUart = LinkedListGetObject(ApiCmdUart_t, pxCmdStackUart);
+                    if(pxCmdUart->bBoudSet)xUartCnf.boud = pxCmdUart->ulBoud;
+                    if(pxCmdUart->bParitySet)xUartCnf.parity = pxCmdUart->ucParity;
+                    if(pxCmdUart->bStopBitsSet)xUartCnf.stop = pxCmdUart->ucStopBits;
+                    if(pxCmdUart->bWordLenSet)xUartCnf.bits = pxCmdUart->ucWordLen;
+                    gw_uart_set(&mb_uart, &xUartCnf);
+                    uint8_t tmpbuf[64];
+                    uint32_t len = sprintf((char *)tmpbuf, "{\"BR\":\"0x%08lx\",\"WL\":\"0x%02x\",\"PAR\":\"0x%02x\",\"SB\":\"0x%02x\"}", xUartCnf.boud, xUartCnf.bits, xUartCnf.parity, xUartCnf.stop);
+                    ESP_LOGI(TAG, "Uart new config %s", tmpbuf);
+                    bApiCallSendJsonFidGroup(ESP_WS_API_UART_ID, tmpbuf, len);
+                    vApiCallComplete(pxCmdUart->pxApiCall);
+                    vLinkedListUnlink(pxCmdStackUart);
+                    free(pxCmdUart);
+                }
+                if(pxCmdCurrentModbus != NULL) {
+                    vLinkedListUnlink(pxCmdCurrentModbus);
+                    pxCmdMb = LinkedListGetObject(ApiCmdModbus_t, pxCmdCurrentModbus);
+                    if((!pxCmdMb->ulRepeatDelay) || (pxCmdMb->ulTransferError)) vCmdModbusFree(pxCmdMb);
                     else {
-                        pxCmd->ulTimestamp += pxCmd->ulRepeatDelay;
-                        if((now - pxCmd->ulTimestamp) > pxCmd->ulRepeatDelay) pxCmd->ulTimestamp = now - pxCmd->ulRepeatDelay;
-                        vLinkedListInsertLast(&pxCommandStack, LinkedListItem(pxCmd));
+                        pxCmdMb->ulTimestamp += pxCmdMb->ulRepeatDelay;
+                        if((now - pxCmdMb->ulTimestamp) > pxCmdMb->ulRepeatDelay) pxCmdMb->ulTimestamp = now - pxCmdMb->ulRepeatDelay;
+                        vLinkedListInsertLast(&pxCmdStackModbus, LinkedListItem(pxCmdMb));
                     }
                 }
-                pxCmdCurrent = pxLinkedListFindFirst(pxCommandStack, &bCmdExecuteReady, NULL);
-                if(pxCmdCurrent != NULL) {
-                    pxCmd = LinkedListGetObject(ApiCmdModbus_t, pxCmdCurrent);
-                    if(pxCmd->xMbFrame == NULL) { /* cancel request */
-                        vLinkedListUnlink(pxCmdCurrent);
-                        pxCmdCurrent = NULL;
+                pxCmdCurrentModbus = pxLinkedListFindFirst(pxCmdStackModbus, &bCmdExecuteReady, NULL);
+                if(pxCmdCurrentModbus != NULL) {
+                    pxCmdMb = LinkedListGetObject(ApiCmdModbus_t, pxCmdCurrentModbus);
+                    if(pxCmdMb->xMbFrame == NULL) { /* cancel request */
+                        vLinkedListUnlink(pxCmdCurrentModbus);
+                        pxCmdCurrentModbus = NULL;
                         ApiCmdModbus_t *pxCacelingCmd = 
-                            LinkedListGetObject(ApiCmdModbus_t, pxLinkedListFindFirst(pxCommandStack, &bCmdApiCallTidMatch, 
-                                (void *)((void *[]){ (void *)pxCmd->ulTaskID, pxCmd->pxApiCall})));
+                            LinkedListGetObject(ApiCmdModbus_t, pxLinkedListFindFirst(pxCmdStackModbus, &bCmdApiCallTidMatch, 
+                                (void *)((void *[]){ (void *)pxCmdMb->ulTaskID, pxCmdMb->pxApiCall})));
                         if(pxCacelingCmd != NULL) {
                             vLinkedListUnlink(LinkedListItem(pxCacelingCmd));
                             vCmdModbusFree(pxCacelingCmd);
-                            bApiCallSendStatus(pxCmd->pxApiCall, API_CALL_STATUS_CANCELED);
+                            bApiCallSendStatus(pxCmdMb->pxApiCall, API_CALL_STATUS_CANCELED);
                         }
-                        else bApiCallSendStatus(pxCmd->pxApiCall, API_CALL_ERROR_STATUS_BAD_ARG);
-                        vCmdModbusFree(pxCmd);
+                        else bApiCallSendStatus(pxCmdMb->pxApiCall, API_CALL_ERROR_STATUS_BAD_ARG);
+                        vCmdModbusFree(pxCmdMb);
                     }
                     else {
-                        mb_config.rx_timeout = pxCmd->ulAwaiteTimeout;
+                        mb_config.rx_timeout = pxCmdMb->ulAwaiteTimeout;
                         bModbusInit(&pxMb, &mb_config);
-                        ulModbusRequest(&pxMb, pxCmd->xMbFrame, &vModbusCb, pxCmd);
+                        ulModbusRequest(&pxMb, pxCmdMb->xMbFrame, &vModbusCb, pxCmdMb);
                     }
                 }
             }

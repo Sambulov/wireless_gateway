@@ -85,8 +85,12 @@ static void uart_event_task(void *pvParameters)
     vTaskDelete(NULL);
 }
 
-uint8_t gw_uart_set(void *desc, gw_uart_word_t bits, uint32_t boud, gw_uart_parity_t parity, gw_uart_stop_bits_t stop) {
+uint8_t gw_uart_set(void *desc, const gw_uart_config_t *cnf) {
     gw_uart_private_t *uart = (gw_uart_private_t *) desc;
+    gw_uart_word_t bits = cnf->bits;
+    uint32_t boud = cnf->boud;
+    gw_uart_parity_t parity = cnf->parity;
+    gw_uart_stop_bits_t stop = cnf->stop;
     switch (bits) {
         case GW_UART_WORD_7BIT: bits = UART_DATA_7_BITS; break;
         case GW_UART_WORD_8BIT: bits = UART_DATA_8_BITS; break;
@@ -144,13 +148,20 @@ uint8_t gw_uart_init(void *desc, gw_uart_port_t port, uint32_t buffer_size) {
         default: return 0;
     }
     uart->port = port;
-    uint8_t result = gw_uart_set(desc, GW_UART_WORD_8BIT, 115200, GW_UART_PARITY_NONE, GW_UART_STOP_BITS1);
+    uint8_t result = gw_uart_set(desc, &gw_uart_config_default);
     result = result && (uart_driver_install(port, buffer_size, buffer_size, 10, &uart->uart_queue, 0) == ESP_OK);
     result = result && (uart_set_mode(uart->port, UART_MODE_RS485_HALF_DUPLEX) == ESP_OK);
     //ESP_ERROR_CHECK(uart_enable_rx_intr(uart->port));
     result = result && (xTaskCreate(uart_event_task, "uart_event", 4096, uart, tskIDLE_PRIORITY, NULL) == pdPASS);
     return result;
 }
+
+const gw_uart_config_t gw_uart_config_default = {
+    .bits = GW_UART_WORD_8BIT,
+    .parity = GW_UART_PARITY_NONE,
+    .stop = GW_UART_STOP_BITS1,
+    .boud = 115200
+};
 
 int32_t gw_uart_read(void *desc, uint8_t *buf, uint16_t size) {
     gw_uart_private_t *uart = (gw_uart_private_t *) desc;

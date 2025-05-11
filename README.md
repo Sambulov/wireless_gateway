@@ -30,7 +30,7 @@ Response(personal) `{"FID":"0x000003e9","SID":"0x00000224","ARG":{"STA":"0x00000
 User subscription cancelled
 
 
-### Modbus request (2000)
+### Modbus master (2000)
 FN {byte} - function number\
 ADR {byte} - modbus device address\
 RA(optional) {word} - register address\
@@ -46,3 +46,13 @@ Request: `{"FID":2000,"ARG":{"AWT":500,"RDL":500,"FN":3,"ADR":"0x01","RA":0,"RVC
 Response: `{"FID":"0x000007d0","SID":"0x00000006","ARG":{"TID":"0x0000000A","ADR":"0x01","FN":"0x03","CV":"0x00","RA":"0x0000","RC":"0x14","RD":["0x04d2","0x223d","0x0000","0x1165","0x0000","0x0022","0x0002","0x1d0d","0x0059","0x0162","0x18d2","0x0000","0x0022","0x0044","0x0000","0x0381","0x7eb3","0x0000","0x0024","0x0003"]}}`\
 Request: `{"FID":2000,"ARG":{"TIDC":10}}`\
 Response: `{"FID":"0x000007d0","SID":"0x00000006","ARG":{"STA":"0x00000002"}`
+
+### UART (3000)
+BR(optional) {dword} - boudrate\
+PAR(optional) {byte} - parity (0 - none; 1 - odd; 2 - even)\
+WL(optional) {byte} - word length (0 - 7bits; 1 - 8bits)\
+SB(optional) {byte} - stop bits (0 - 1sb; 1 - 2sb; 2 - unsupported; 3 - 1,5sb)\
+no arg - subscription on uart notifications (e.g. config change)\
+#### Example:
+Request: `{"FID":3000,"ARG":{"BR":115200}}` set boudrate and left untouched other options\
+Response(public): `{"FID":"0x00000bb8","SID":"0x00037053","ARG":{"BR":"0x0001c200","WL":"0x01","PAR":"0x00","SB":"0x00"}}`

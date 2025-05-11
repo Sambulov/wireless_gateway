@@ -32,7 +32,7 @@ typedef uint8_t (*ApiHandler_t)(void *pxApiCall, void **ppxContext, uint32_t ulP
 uint8_t bApiCallRegister(ApiHandler_t fHandler, uint32_t ulFid, void *pxContext);
 uint8_t bApiCallUnregister(uint32_t ulFid);
 
-uint8_t bApiCallGetData(void *pxApiCall, uint8_t **ppucData, uint32_t *ulOutDataLen);
+//uint8_t bApiCallGetData(void *pxApiCall, uint8_t **ppucData, uint32_t *ulOutDataLen);
 uint8_t bApiCallGetId(void *pxApiCall, uint32_t *ulOutId);
 uint8_t bApiCallGetSockFd(void *pxApiCall, int *pxOutFd);
 void vApiCallComplete(void *pxApiCall);

@@ -30,11 +30,20 @@ typedef enum {
 #define GW_UART_PRIVATE_SIZE     8
 
 typedef struct {
-    GW_UART_PRIVATE(GW_UART_PRIVATE_SIZE);
+  GW_UART_PRIVATE(GW_UART_PRIVATE_SIZE);
 } gw_uart_t;
+
+typedef struct {
+  gw_uart_word_t bits;
+  uint32_t boud;
+  gw_uart_parity_t parity;
+  gw_uart_stop_bits_t stop;
+} gw_uart_config_t;
+
+extern const gw_uart_config_t gw_uart_config_default;
 
 uint8_t gw_uart_init(void *desc, gw_uart_port_t port, uint32_t buffer_size);
 int32_t gw_uart_read(void *desc, uint8_t *buf, uint16_t size);
 int32_t gw_uart_write(void *desc, const uint8_t *buf, uint16_t size);
-uint8_t gw_uart_set(void *desc, gw_uart_word_t bits, uint32_t boud, gw_uart_parity_t parity, gw_uart_stop_bits_t stop);
+uint8_t gw_uart_set(void *desc, const gw_uart_config_t *cnf);
 
