@@ -25,8 +25,8 @@ static const char *TAG = "app";
 
 static const uint8_t json_null[] = "\"null\"";
 
-#define ESP_EVENT_WS_API_ECHO_ID    1000
-uint8_t bApiHandlerEcho(void *pxApiCall, void **ppxContext, ApiCallReason_t eReason, uint8_t *pucData, uint32_t ulDataLen) {
+#define ESP_WS_API_ECHO_ID    1000
+uint8_t bApiHandlerEcho(void *pxApiCall, void **ppxContext, uint32_t ulPending, uint8_t *pucData, uint32_t ulDataLen) {
     if(pucData == NULL) {
         pucData = (uint8_t *)json_null;
         ulDataLen = sizeof(json_null) - 1 /* length of "Null" except terminator */;
@@ -43,15 +43,15 @@ uint8_t bApiHandlerEcho(void *pxApiCall, void **ppxContext, ApiCallReason_t eRea
     return 1;
 }
 
-#define ESP_EVENT_WS_API_CONT_ID    1001
-uint8_t bApiHandlerCont(void *pxApiCall, void **ppxContext, ApiCallReason_t eReason, uint8_t *pucData, uint32_t ulDataLen) {
+#define ESP_WS_API_CONT_ID    1001
+uint8_t bApiHandlerCont(void *pxApiCall, void **ppxContext, uint32_t ulPending, uint8_t *pucData, uint32_t ulDataLen) {
     if(pucData == NULL) pucData = (uint8_t *)json_null;
     uint32_t ulCallId;
     bApiCallGetId(pxApiCall, &ulCallId);
     uint32_t *tmp = (uint32_t *)ppxContext;
     if(*tmp == 0) {
         ESP_LOGI(TAG, "WS first cont handler call %lu, with arg:%s", ulCallId, pucData);
-        bApiCallSendStatus(pxApiCall, API_CALL_STATUS_OK);
+        bApiCallSendStatus(pxApiCall, API_CALL_STATUS_EXECUTING);
         *tmp = 1;
     }
     else {
@@ -62,35 +62,156 @@ uint8_t bApiHandlerCont(void *pxApiCall, void **ppxContext, ApiCallReason_t eRea
     return 0;
 }
 
-#define ESP_EVENT_WS_API_ASYNC_ID    1002
+#define ESP_WS_API_ASYNC_ID    1002
 
 static void vAsyncTestWorker( void * pvParameters ) {
     const char data[] = "{\"data\":\"Async test\"}";
     while (1) {
-        bApiCallSendJsonFidGroup(ESP_EVENT_WS_API_ASYNC_ID, (uint8_t *)data, sizeof(data));
+        bApiCallSendJsonFidGroup(ESP_WS_API_ASYNC_ID, (uint8_t *)data, sizeof(data));
         vTaskDelay(1000);
     }
     vTaskDelete(NULL);
 }
 
-uint8_t bApiHandlerSubs(void *pxApiCall, void **ppxContext, ApiCallReason_t eReason, uint8_t *pucData, uint32_t ulDataLen) {
+uint8_t bApiHandlerSubs(void *pxApiCall, void **ppxContext, uint32_t ulPending, uint8_t *pucData, uint32_t ulDataLen) {
     uint32_t ulCallId; 
     bApiCallGetId(pxApiCall, &ulCallId);
     uint32_t *tmp = (uint32_t *)ppxContext;
     if(pucData == NULL) pucData = (uint8_t *)json_null;
     if(*tmp == 0) {
         ESP_LOGI(TAG, "WS subscribtion handler call %lu, with arg:%s", ulCallId, pucData);
-        bApiCallSendStatus(pxApiCall, API_CALL_STATUS_OK);
+        bApiCallSendStatus(pxApiCall, API_CALL_STATUS_EXECUTING);
         *tmp = 1;
     }
     else {
-        bApiCallSendStatus(pxApiCall, API_CALL_STATUS_CANCELED);
+        bApiCallSendStatus(pxApiCall, API_CALL_STATUS_COMPLETE);
         ESP_LOGI(TAG, "WS subscribtion handler canceled call %lu, with arg:%s", ulCallId, pucData);
         return 1;
     }
     return 0;
 }
 
+
+
+
+
+
+#include "cJSON.h"
+
+typedef struct {
+    Modbus_t *pxModbus;
+    QueueHandle_t xMbQueue;
+} ApiContextModbus_t;
+
+typedef struct {
+    __LinkedListObject__
+    uint32_t ulTaskID;
+    uint32_t ulTransferError;
+    ModbusFrame_t *xMbFrame;
+    uint32_t ulRepeatDelay;
+    uint32_t ulAwaiteTimeout;
+    void *pxApiCall;
+    uint32_t ulTimestamp;
+} ApiCmdModbus_t;
+
+
+
+#define ESP_WS_API_MODBUS_ID    2000
+
+uint8_t cJSON_ParseInt(cJSON *pxJson, const char *pcName, uint32_t *pulOutVal) {
+    uint32_t val = 0;
+    if(pcName != NULL) pxJson = cJSON_GetObjectItem(pxJson, pcName);
+    if (cJSON_IsNumber(pxJson)) val = pxJson->valueint;
+    else if (cJSON_IsString(pxJson)) val = (uint32_t)strtol(pxJson->valuestring, NULL, 16);
+    else return 0;
+    *pulOutVal = val;
+    return 1;
+}
+
+uint8_t bApiHandlerModbus(void *pxApiCall, void **ppxContext, uint32_t ulPending, uint8_t *pucData, uint32_t ulDataLen) {
+    static uint32_t taskId = 0;
+    if(!ulPending || (pucData == NULL)) return 1;
+    ApiContextModbus_t *context = (ApiContextModbus_t *)*ppxContext;
+    ESP_LOGI(TAG, "Modbus call, with arg:%s", pucData);
+    cJSON *json = cJSON_ParseWithLengthOpts((char *)pucData, ulDataLen, 0, 0);
+    uint32_t status = API_CALL_ERROR_STATUS_NO_MEM;
+    ApiCmdModbus_t *pxCmd = malloc(sizeof(ApiCmdModbus_t));
+    do {
+        if(pxCmd == NULL) { break; }
+        memset(pxCmd, 0, sizeof(ApiCmdModbus_t));
+        pxCmd->pxApiCall = pxApiCall;
+        pxCmd->ulTimestamp = xTaskGetTickCount();
+        if(!cJSON_ParseInt(json, "TIDC", &pxCmd->ulTaskID)) {
+            status = API_CALL_ERROR_STATUS_NO_MEM;
+            pxCmd->xMbFrame = malloc(sizeof(ModbusFrame_t));
+            if(pxCmd->xMbFrame == NULL) break;
+            memset(pxCmd->xMbFrame, 0, sizeof(ModbusFrame_t));
+            status = API_CALL_ERROR_STATUS_BAD_ARG;
+            uint32_t val;
+            pxCmd->ulAwaiteTimeout = 100;
+            pxCmd->ulRepeatDelay = 0;
+            if(cJSON_ParseInt(json, "AWT", &val)) pxCmd->ulAwaiteTimeout = max(val, pxCmd->ulAwaiteTimeout);
+            ESP_LOGI(TAG, "mb req AWT:%lu", pxCmd->ulAwaiteTimeout);
+            if(cJSON_ParseInt(json, "RDL", &val)) pxCmd->ulRepeatDelay = val;
+            pxCmd->ulTimestamp -= pxCmd->ulRepeatDelay;
+            ESP_LOGI(TAG, "mb req RDL:%lu", pxCmd->ulRepeatDelay);
+            if(!cJSON_ParseInt(json, "FN", &val) || (val > 127)) { break; } pxCmd->xMbFrame->ucFunc = val;
+            ESP_LOGI(TAG, "mb req FN:%u", pxCmd->xMbFrame->ucFunc);
+            if(!cJSON_ParseInt(json, "ADR", &val) || (val > 255)) { break; } pxCmd->xMbFrame->ucAddr = val;
+            ESP_LOGI(TAG, "mb req ADR:%u", pxCmd->xMbFrame->ucAddr);
+            if(cJSON_ParseInt(json, "CV", &val)) pxCmd->xMbFrame->ucLengthCode = val;
+            ESP_LOGI(TAG, "mb req CV:%u", pxCmd->xMbFrame->ucLengthCode);
+            if(cJSON_ParseInt(json, "RA", &val)) pxCmd->xMbFrame->usRegAddr = val;
+            ESP_LOGI(TAG, "mb req RA:%u", pxCmd->xMbFrame->usRegAddr);
+            if(cJSON_ParseInt(json, "RVC", &val)) pxCmd->xMbFrame->usRegValueCount = val;
+            ESP_LOGI(TAG, "mb req RV:%u", pxCmd->xMbFrame->usRegValueCount);
+            cJSON *jobj = cJSON_GetObjectItem(json, "RD");
+            if(jobj != NULL) {
+                if (!cJSON_IsArray(jobj)) { break; }
+                uint32_t size = cJSON_GetArraySize(jobj);
+                if(size > 0) {
+                    status = API_CALL_ERROR_STATUS_NO_MEM;
+                    int k = 2;
+                    if(pxCmd->xMbFrame->ucFunc == MB_FUNC_WRITE_COILS) k = 1;
+                    //pxCmd->xMbFrame->usRegValueCount = size;
+                    pxCmd->xMbFrame->ucBufferSize = size * k;
+                    pxCmd->xMbFrame->pucData = malloc(pxCmd->xMbFrame->ucBufferSize);
+                    if(pxCmd->xMbFrame->pucData == NULL) { break; }
+                    cJSON *jvalue = jobj->child;
+                    uint8_t *value = pxCmd->xMbFrame->pucData;
+                    ESP_LOGI(TAG, "mb req RD amount:%lu", size);
+                    status = API_CALL_ERROR_STATUS_BAD_ARG;
+                    for(int i = 0; i < size; i++) {
+                        if(!cJSON_ParseInt(jvalue, NULL, &val)) { break; }
+                        if(k == 2) *((uint16_t *)value) = val;
+                        else *value = val;
+                        ESP_LOGI(TAG, "mb req RD[%d]:%lu", i, val);
+                        value += k;
+                        jvalue = jvalue->next;
+                    }
+                }
+            }
+            pxCmd->ulTaskID = taskId++;
+        }
+        status = API_CALL_ERROR_STATUS_NO_FREE_DESCRIPTORS;
+        if(xQueueSend(context->xMbQueue, (void *)&pxCmd, pdMS_TO_TICKS(0)) != pdPASS) { break; }
+        ESP_LOGI(TAG, "Mb req enqueued");
+        status = API_CALL_STATUS_EXECUTING;
+        break;
+    } while (1);
+    bApiCallSendStatus(pxApiCall, status);
+    if(status != API_CALL_STATUS_EXECUTING) {
+        if(pxCmd != NULL) {
+            if(pxCmd->xMbFrame != NULL) {
+                if(pxCmd->xMbFrame->pucData != NULL) free(pxCmd->xMbFrame->pucData);
+                free(pxCmd->xMbFrame);
+            }
+            free(pxCmd);
+        }
+    }
+    cJSON_Delete(json);
+    return 0;
+}
 
 #include "uart.h"
 
@@ -106,12 +227,81 @@ const ModbusIface_t mb_iface = {
 };
 
 
-static void modbus_cb(modbus_t *mb, void *context, modbus_frame_t *frame) {
-  (void)mb;
-  if(modbus_is_error_frame(frame)) ESP_LOGI("mb_cb", "error %d", frame->ucLengthCode);
-  else ESP_LOGI("mb_cb", "data %d", frame->pucData[0]);
+static void vModbusCb(modbus_t *mb, void *context, modbus_frame_t *frame) {
+    (void)mb;
+    ApiCmdModbus_t *task = (ApiCmdModbus_t *)context;
+    uint8_t amount, size, code;
+    uint8_t *regs = pucModbusResponseFrameData(frame, &code, &amount, &size);
+    uint32_t buf_size = sizeof("{\"TID\":\"0x00000000\",\"ADR\":\"0x00\",\"FN\":\"0x00\",\"CV\":\"0x00\",\"RA\":\"0x0000\",\"RC\":\"0x0000\",\"RD\":[]}");
+    if(regs != NULL) {
+        if(size == 2) buf_size += sizeof("\"0x0000\",") * amount;
+        else buf_size += sizeof("\"0x00\",") * amount;
+    }
+    uint8_t *response = malloc(buf_size);
+    if(response == NULL) {
+        uint8_t buf[40];
+        uint32_t len = sprintf((char *)buf, "{\"STA\":\"0x%08x\",\"TID\":\"0x%08lx\"}", API_CALL_ERROR_STATUS_NO_MEM, task->ulTaskID);
+        if(!bApiCallSendJson(task->pxApiCall, buf, len)) task->ulTransferError++;
+        else task->ulTransferError = 0;
+        return;
+    }
+    uint32_t offset = sprintf((char *)response, 
+        "{\"TID\":\"0x%08lx\",\"ADR\":\"0x%02x\",\"FN\":\"0x%02x\",\"CV\":\"0x%02x\",\"RA\":\"0x%04x\",\"RC\":\"0x%02x\",\"RD\":[", 
+        task->ulTaskID, frame->ucAddr, frame->ucFunc, code, frame->usRegAddr, amount);
+    if(regs != NULL) {
+        for(int i = 0; i < amount; i++) {
+            if(size == 1) {
+                uint8_t x = regs[i];
+                offset += sprintf((char *)(response + offset),"\"0x%02x\",", x);
+            }
+            else {
+                uint16_t x = swap_bytes(*((uint16_t *)&regs[i*2]));
+                offset += sprintf((char *)(response + offset),"\"0x%04x\",", x);
+            }
+        }
+        offset--;
+    }
+    response[offset++] = ']';
+    response[offset++] = '}';
+    response[offset] = '\0';
+    if(!bApiCallSendJson(task->pxApiCall, response, offset)) task->ulTransferError++;
+    else task->ulTransferError = 0;
+    free(response);
 }
 
+static uint8_t bCmdExecuteReady(LinkedListItem_t *item, void *arg) {
+    (void)arg;
+    ApiCmdModbus_t *xCmdTask = LinkedListGetObject(ApiCmdModbus_t, item);
+    return (xTaskGetTickCount() - xCmdTask->ulTimestamp) >= xCmdTask->ulRepeatDelay;
+}
+
+static uint8_t bCmdApiCallTidMatch(LinkedListItem_t *item, void *arg) {
+    uint32_t tid = (uint32_t)((void **)arg)[0];
+    void *apiCall = ((void **)arg)[1];
+    ApiCmdModbus_t *xCmdTask = LinkedListGetObject(ApiCmdModbus_t, item);
+    return (xCmdTask->pxApiCall == apiCall) && (xCmdTask->ulTaskID == tid);
+}
+
+// #include "esp_freertos_hooks.h"
+
+// static SemaphoreHandle_t xIdleSemaphore = NULL;
+
+// bool esp_freertos_idle_cb() {
+//     xSemaphoreGive(xIdleSemaphore);
+//     return true; /* true to continue using hook */
+// }
+
+void vCmdModbusFree(ApiCmdModbus_t *pxCmd) {
+    if(pxCmd != NULL) {
+        vApiCallComplete(pxCmd->pxApiCall);
+        if(pxCmd->xMbFrame != NULL) {
+            if(pxCmd->xMbFrame->pucData != NULL) free(pxCmd->xMbFrame->pucData);
+            free(pxCmd->xMbFrame);
+        }
+        free(pxCmd);
+        ESP_LOGI(TAG, "mb task free");
+    }
+}
 
 void app_main(void)
 {
@@ -143,12 +333,7 @@ void app_main(void)
         .ucPayLoadBufferSize = BUF_SIZE,
         .pucPayLoadBuffer = mb_buf
     };
-
-	if (bModbusInit(&pxMb, &mb_config) != cl_true) {
-	    ESP_LOGI("modbus", "init failure");
-	    while(1);
-	}
-    ESP_LOGI("modbus", "init ok");
+	bModbusInit(&pxMb, &mb_config); /* default config */
 
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -183,22 +368,87 @@ void app_main(void)
 
     
 
-    bApiCallRegister(bApiHandlerEcho, ESP_EVENT_WS_API_ECHO_ID, NULL);
-    bApiCallRegister(bApiHandlerCont, ESP_EVENT_WS_API_CONT_ID, NULL);
-    bApiCallRegister(bApiHandlerSubs, ESP_EVENT_WS_API_ASYNC_ID, NULL);
+    bApiCallRegister(bApiHandlerEcho, ESP_WS_API_ECHO_ID, NULL);
+    bApiCallRegister(bApiHandlerCont, ESP_WS_API_CONT_ID, NULL);
+    bApiCallRegister(bApiHandlerSubs, ESP_WS_API_ASYNC_ID, NULL);
+
+    static ApiContextModbus_t mbApiCtx;
+    mbApiCtx.pxModbus = &pxMb;
+    mbApiCtx.xMbQueue = xQueueCreate(5, sizeof(void *));
+    bApiCallRegister(bApiHandlerModbus, ESP_WS_API_MODBUS_ID, &mbApiCtx);
+
+    
 
     xTaskCreate(vAsyncTestWorker, "ApiAyncWork", 4096, NULL, uxTaskPriorityGet(NULL), NULL);
 
-    ESP_LOGI("app", "Run");
+    ESP_LOGI(TAG, "Run");
 
-    modbus_frame_t mb_request;
-    modbus_init_frame_read_holdings(&mb_request, 0x01, 0x0000, 0x0007);
 
+    ApiCmdModbus_t *pxCmd = NULL;
+    LinkedList_t pxCommandStack = NULL;
+    LinkedListItem_t *pxCmdCurrent = NULL;
+
+    //xIdleSemaphore = xSemaphoreCreateBinary();
+    //esp_register_freertos_idle_hook(&esp_freertos_idle_cb);
+
+    //uint32_t timer = xTaskGetTickCount();
+    //uint32_t cycles_count = 0;
     while (1) {
-       vModbusWork(&pxMb);
-       //modbus_request(&pxMb, &mb_request, &modbus_cb, NULL);
+        uint8_t rep = 100;
+        while (rep--) {
+            uint32_t now = xTaskGetTickCount();
 
-       vTaskDelay(1);
+            if(xQueueReceive(mbApiCtx.xMbQueue, &pxCmd, pdMS_TO_TICKS(0)) == pdPASS ) {
+                vLinkedListInsertLast(&pxCommandStack, LinkedListItem(pxCmd));
+                ESP_LOGI(TAG, "Cmd added");
+            }
+            if(!bModbusBusy(&pxMb)) {
+                if(pxCmdCurrent != NULL) {
+                    vLinkedListUnlink(pxCmdCurrent);
+                    pxCmd = LinkedListGetObject(ApiCmdModbus_t, pxCmdCurrent);
+                    if((!pxCmd->ulRepeatDelay) || (pxCmd->ulTransferError)) vCmdModbusFree(pxCmd);
+                    else {
+                        pxCmd->ulTimestamp += pxCmd->ulRepeatDelay;
+                        if((now - pxCmd->ulTimestamp) > pxCmd->ulRepeatDelay) pxCmd->ulTimestamp = now - pxCmd->ulRepeatDelay;
+                        vLinkedListInsertLast(&pxCommandStack, LinkedListItem(pxCmd));
+                    }
+                }
+                pxCmdCurrent = pxLinkedListFindFirst(pxCommandStack, &bCmdExecuteReady, NULL);
+                if(pxCmdCurrent != NULL) {
+                    pxCmd = LinkedListGetObject(ApiCmdModbus_t, pxCmdCurrent);
+                    if(pxCmd->xMbFrame == NULL) { /* cancel request */
+                        vLinkedListUnlink(pxCmdCurrent);
+                        pxCmdCurrent = NULL;
+                        ApiCmdModbus_t *pxCacelingCmd = 
+                            LinkedListGetObject(ApiCmdModbus_t, pxLinkedListFindFirst(pxCommandStack, &bCmdApiCallTidMatch, 
+                                (void *)((void *[]){ (void *)pxCmd->ulTaskID, pxCmd->pxApiCall})));
+                        if(pxCacelingCmd != NULL) {
+                            vLinkedListUnlink(LinkedListItem(pxCacelingCmd));
+                            vCmdModbusFree(pxCacelingCmd);
+                            bApiCallSendStatus(pxCmd->pxApiCall, API_CALL_STATUS_CANCELED);
+                        }
+                        else bApiCallSendStatus(pxCmd->pxApiCall, API_CALL_ERROR_STATUS_BAD_ARG);
+                        vCmdModbusFree(pxCmd);
+                    }
+                    else {
+                        mb_config.rx_timeout = pxCmd->ulAwaiteTimeout;
+                        bModbusInit(&pxMb, &mb_config);
+                        ulModbusRequest(&pxMb, pxCmd->xMbFrame, &vModbusCb, pxCmd);
+                    }
+                }
+            }
+            vModbusWork(&pxMb);
+
+            // cycles_count++;
+            // if((now - timer) >= 1000) {
+            //     timer += 1000;
+            //     ESP_LOGI(TAG, "Work sycles: %lu/s", cycles_count);
+            //     cycles_count = 0;
+            // }
+        }
+        /* give other tasks to work, also idle task to reset wdt */
+        //xSemaphoreTake(xIdleSemaphore, pdMS_TO_TICKS(1));
+        vTaskDelay(pdMS_TO_TICKS(1));
     }
     
 
