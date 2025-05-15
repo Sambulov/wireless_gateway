@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+		.main {
+			position: relative;
+			display: flex;
+			flex-wrap: wrap;
+		}
+    </style>
+</head>
+<body>
+	<div class="main">
+	</div>
+    <script>
+        class Gauge {
+            constructor(element_size, units_name, value_holder) {
+				this.elem = document.createElement("div");
+				this.elem.setAttribute("class", "gauge");
+				this.elem.setAttribute("style", `width:${element_size};height:${element_size};position:inherit;margin:5px;`);
+				this.html = `
+					<svg class="dial" viewBox="0 0 200 200" style="position:absolute;width:100%;height:100%;">
+						<path class="scale" style="fill:none;stroke:#4CAF50;stroke-width:10;stroke-linecap:round;" d="M22.06 145 A90 90 0 1 1 177.94 145" />
+						<text x="50%" y="62%" font-size="20px" dominant-baseline="middle" text-anchor="middle">${units_name}</text>
+						<text id="valstr" x="50%" y="75%" font-size="40px" dominant-baseline="middle" text-anchor="middle">${value_holder}</text>
+					</svg>
+					<style>
+						.needle {
+							position: absolute;
+							top: 50%;
+							left: 50%;
+							width: 2px;
+							height: 40%;
+							background: #222222;
+							transform-origin: 50% 100%;
+							transition: transform 0.5s ease-in-out;
+							transform: translate(-50%, -100%) rotate(-120deg);
+						}
+					</style>
+					<div class="needle" id="value" style=""></div>
+					<div class="needle" id="ptr_l" style="background: #0000AA;" hidden></div>
+					<div class="needle" id="ptr_h" style="background: #AA0000;" hidden></div>
+					<div class="spindle" style="position:absolute;top:50%;left:50%;width:10px;height:10px;background:#222222;border-radius:50%;transform:translate(-50%, -50%);"></div>
+				`
+				this.elem.innerHTML = this.html;
+                //this.container = container;
+                this.min = 0;
+                this.max = 10;
+                this.value = 0;
+                this.pl = 0;
+                this.ph = 10;
+                this.needle = this.elem.querySelector('#value');
+                this.ptrl = this.elem.querySelector('#ptr_l');
+                this.ptrh = this.elem.querySelector('#ptr_h');
+                this.scale = this.elem.querySelector('.scale');
+                this.spindle = this.elem.querySelector('.spindle');
+                this.valstr = this.elem.querySelector('#valstr');
+            }
+
+            setScale(min, max) {
+                this.min = min;
+                this.max = max;
+            }
+
+            setValue(value) {
+                this.value = Math.max(this.min, Math.min(this.max, value));
+                const angle = this.calculateAngle(this.value);
+                this.needle.style.transform = `translate(-50%, -100%) rotate(${angle}deg)`;
+				if((value >= this.pl) && (value <= this.ph)) this.setColor('#4CAF50');
+				else if (value < this.pl) this.setColor('#0000AA');
+				else this.setColor('#AA0000');
+				this.valstr.textContent = value.toFixed(2);
+            }
+
+            setPtr(value1, value2) {
+				if(value1 > value2) {
+					var v = value1;
+					value1 = value2;
+					value2 = v;
+				}
+                this.pl = Math.max(this.min, Math.min(this.max, value1));
+                this.ph = Math.max(this.min, Math.min(this.max, value2));
+                const angle1 = this.calculateAngle(this.pl);
+                const angle2 = this.calculateAngle(this.ph);
+                this.ptrl.style.transform = `translate(-50%, -100%) rotate(${angle1}deg)`;
+                this.ptrh.style.transform = `translate(-50%, -100%) rotate(${angle2}deg)`;
+				//todo: make visible
+            }
+
+            setColor(color) {
+                this.scale.style.stroke = color;
+            }
+
+            calculateAngle(value) {
+                const range = this.max - this.min;
+                const percent = (value - this.min) / range;
+                return -120 + percent * 240;
+            }
+			
+			getElement(){
+				return this.elem;
+			}
+        }
+
+		window.addEventListener('load', onLoad);  
+
+		function onLoad(event) {
+			initWebSocket();
+			//setInterval(poll, 100);
+		}
+
+		var gateway = `ws://${window.location.hostname}/ws`;
+		var websocket;
+		//let modbusPollQueue = new Queue();
+
+		//function modbusPoll() {
+		//  if(modbusPollQueue.isEmpty) {
+		//		modbusPollQueue.enqueue({fnc:"04", adar:"0000", valc:"0007", args:""});
+		//		modbusPollQueue.enqueue({fnc:"04", adar:"0033", valc:"0012", args:""});
+		//		modbusPollQueue.enqueue({fnc:"04", adar:"0052", valc:"0005", args:""});
+		//  }
+		//}
+
+
+		function initWebSocket() {
+		  console.log('Trying to open a WebSocket connection...'+gateway);
+		  websocket = new WebSocket(gateway);
+		  websocket.onopen    = wsOnOpen;
+		  websocket.onclose   = wsOnClose;
+		  websocket.onmessage = wsOnMessage;
+		  websocket.onerror = wsOnError;
+		}
+		
+		function wsOnOpen(event) {
+			//mbPollId = setInterval(modbusPoll, 500);
+			var ts = '[' + Date.now() + ']';
+			console.log(ts + ' Connection opened');
+			websocket.send(`{"FID":3000,"ARG":{"BR":9600}}`); // set uart
+			websocket.send(`{"FID":2000,"ARG":{"AWT":500,"RDL":250,"FN":3,"ADR":"0x01","RA":0,"RVC":8}}`); // Subscribe on status registers 4 times/sec max
+		}
+
+		function wsOnClose(event) {
+			//clearInterval(mbPollId);
+			console.log('Connection closed');
+			setTimeout(initWebSocket, 500);
+		}
+
+		function wsOnMessage(mess) {
+			var obj = JSON.parse(mess.data);
+			var fid = parseInt(obj.FID, 16);
+			switch(fid) {
+				case 0x10650F11: // Log message
+					if(obj.ARG !== undefined && obj.ARG !== null) {
+						if(obj.ARG.LOG !== undefined && obj.ARG.LOG !== null) {
+							console.log(obj.ARG.LOG);
+						}
+						else {
+							console.log("Log event", obj.ARG);
+						}
+					}
+					break;
+				case 3000: // Uart
+					console.log("Uart driver ", obj.ARG);
+				    break;
+				case 2000: // Modbus response
+					modbusHundler(parseInt(obj.SID, 16), obj.ARG);
+					break;
+				case 0xE1F16E10: // Wifi scanner
+					//wifiScanHandler(obj.ARG);
+					break;
+				case 0xE1F15E15:
+					//wifiConnectHandler(obj);
+					break;
+				default:
+					console.log("Bad Fid", mess.ARG);
+					break;
+			}
+		}
+		
+		function wsOnError(event) {
+			console.log("Err", event.data);
+		}
+
+		function mbStateRegisters(data) {
+			gauge1.setValue(data[7]/100);
+			gauge2.setValue(data[4]);
+			gauge3.setValue(data[3]/10);
+			gauge4.setValue(data[5]/10);
+			gauge5.setValue(data[2]/10);
+		}
+
+
+		function modbusHundler(sid, data) {
+			if(data) {
+				//clearTimeout(mbQueueHandlerId);
+				//mbQueueHandlerId = setTimeout(modbusQueueHandler, 0);
+				let err = parseInt(data.CV, 16);
+				if(err) console.log("Modbus error", err);
+				else {
+					let sta = parseInt(data.STA, 16);
+					if(sta) {
+						console.log("Modbus subscription id:",sid, " sta:", sta);
+						return;
+					}
+					let fnc = parseInt(data.FN, 16);
+					let addr = parseInt(data.RA, 16);
+					let count = parseInt(data.RC, 16);
+					let mbdata = Array.from(data.RD, (x) => parseInt(x, 16))
+					switch(fnc) {
+						case 0x01: //Read Discrete Outputs
+							break;
+						case 0x02: //Read Discrete Inputs
+							break;
+						case 0x03: //Read Analog Outputs
+							if(addr == 0) mbStateRegisters(mbdata);
+							break;
+						case 0x04: //Read Analog Inputs
+							break;
+						case 0x05: //Write Discrete
+							break;
+						case 0x06: //Write Analog
+							break;
+						case 0x0F: //Write Discrete Outputs
+							break;
+						case 0x10: //Write Analog Multiple
+							break;
+						default:
+							console.log("Unknown modbus function", fnc);
+							break;
+					}
+				}
+			}
+		}
+
+        const gauge1 = new Gauge("200px", "BAR", "???");
+        const gauge2 = new Gauge("200px", "RPM", "???");
+        const gauge3 = new Gauge("200px", "A", "???");
+        const gauge4 = new Gauge("200px", "V", "???");
+        const gauge5 = new Gauge("200px", "Hz", "???");
+        //const gauge6 = new Gauge("200px", "°C", "???");
+		gauge1.setScale(0, 5);
+        gauge1.setPtr(2, 3);
+		gauge2.setScale(0, 2000);
+        gauge2.setPtr(1000, 1700);
+		gauge3.setScale(0, 10);
+        gauge3.setPtr(0, 7,5);
+		gauge4.setScale(0, 400);
+        gauge4.setPtr(240, 400);
+		gauge5.setScale(0, 100);
+        gauge5.setPtr(0, 100);
+		var container = document.body.querySelector('.main');
+		container.appendChild(gauge1.getElement());
+		container.appendChild(gauge2.getElement());
+		container.appendChild(gauge3.getElement());
+		container.appendChild(gauge4.getElement());
+		container.appendChild(gauge5.getElement());
+		
+        // Test animation
+        //let value = 0;
+        //setInterval(() => {
+        //    value += 0.33;
+		//	if(value > 6) value = 0;
+        //    gauge1.setValue(value);
+		//	gauge2.setValue(1500 + (400 - Math.random() * 800));
+		//	gauge3.setValue(25 + (5 - Math.random() * 10));
+        //}, 1000);
+    </script>
+</body>
+</html>

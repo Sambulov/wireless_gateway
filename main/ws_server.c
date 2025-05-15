@@ -283,8 +283,8 @@ uint8_t bApiCallSendJson(void *pxApiCall, const uint8_t *ucJson, uint32_t ulLen)
 
 uint8_t bApiCallSendStatus(void *pxApiCall, uint32_t ulSta) {
     uint8_t sta[21];
-    sprintf((char *)sta, "{\"STA\":\"0x%08lx\"}", ulSta);
-    return _bApiCallSendJson(pxApiCall, 0, sta, sizeof(sta));
+    uint32_t len = sprintf((char *)sta, "{\"STA\":\"0x%08lx\"}", ulSta);
+    return _bApiCallSendJson(pxApiCall, 0, sta, len);
 }
 
 uint8_t bApiCallSendJsonFidGroup(uint32_t ulFid, const uint8_t *ucJson, uint32_t ulLen) {

@@ -347,7 +347,7 @@ static void vModbusCb(modbus_t *mb, void *context, modbus_frame_t *frame) {
                 offset += sprintf((char *)(response + offset),"\"0x%02x\",", x);
             }
             else {
-                uint16_t x = swap_bytes(*((uint16_t *)&regs[i*2]));
+                uint16_t x = *((uint16_t *)&regs[i*2]);
                 offset += sprintf((char *)(response + offset),"\"0x%04x\",", x);
             }
         }
