@@ -5,6 +5,7 @@
 #include "app.h"
 
 static const char *TAG = "web_server";
+httpd_handle_t server = NULL;
 
 static void httpd_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data) {
     switch (event_id) {
@@ -44,7 +45,6 @@ static void httpd_event_handler(void *arg, esp_event_base_t event_base, int32_t 
 
 httpd_handle_t start_webserver(void)
 {
-    httpd_handle_t server = NULL;
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
 
     config.uri_match_fn = httpd_uri_match_wildcard;

@@ -20,6 +20,7 @@
 #include "app.h"
 
 static const char *TAG = "connection";
+extern httpd_handle_t server;
 
 #define NET_IF_AMOUNT  4
 
@@ -83,11 +84,27 @@ esp_netif_t* pxGetNetIfFromSocket(int sock) {
     return NULL;
 }
 
+static void kill_all_socks(httpd_handle_t server)
+{
+	const int MAX_SOCKS = 128; //hd->config.max_open_sockets
+	size_t try_socks = MAX_SOCKS;
+	int fds[MAX_SOCKS];
+	if (httpd_get_client_list(server, &try_socks, fds) != ESP_OK)
+		goto err;
+	for (int i = 0; i < try_socks; ++i)
+		if (httpd_sess_trigger_close(server, fds[i]) != ESP_OK)
+			goto err;
+err:
+        ESP_LOGI(TAG, "Can't kill socks");
+}
+
 static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data) {
     //app_context_t* app = (app_context_t*) arg;
 
     ESP_LOGI(TAG, "Event id: %ld, base: %ld", event_id, (uint32_t)event_base);
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+	ESP_LOGI(TAG, "Wi-Fi disconnected, kill all sockets...");
+	kill_all_socks(server);
         ESP_LOGI(TAG, "Wi-Fi disconnected, trying to reconnect...");
         esp_wifi_connect();
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
