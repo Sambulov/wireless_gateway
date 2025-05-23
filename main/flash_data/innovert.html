@@ -1,7 +1,31 @@
 <!DOCTYPE html>
 <html>
 <head>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta charset="UTF-8">
     <style>
+		table, th, td {
+			border: 1px solid black;
+			padding: 5px;
+			text-align: left;
+		}
+		button {
+			margin-left: 10px;
+			padding: 3px 10px;
+		}
+		select, input[type="number"] {
+			width: 120px;
+		}
+		label {
+			display: block;
+			margin: 3px 0;
+		}
+		#registers_table td {
+			transition: background-color 0.3s ease;
+		}
+		.updating {
+			background-color: #ffffcc !important;
+		}
 		.main {
 			position: relative;
 			display: flex;
@@ -13,6 +37,619 @@
 	<div class="main">
 	</div>
     <script>
+		class InnovertIDDXXX21E {
+		    constructor(gateway, address) {
+				this.regs = { 
+					GROUPS: [ 
+						{ PA: [
+							{
+								ADR: 0,
+								DESC: "Выбор и установка нужного параметра для его индикации",
+								ACCESS: 2,
+								OPT: {
+									ENUM: [
+										{ VAL: 0, DESC: "Заданная частота" },
+										{ VAL: 1, DESC: "Выходная частота" },
+										{ VAL: 2, DESC: "Выходной ток" },
+										{ VAL: 3, DESC: "Скорость в об/мин" },
+										{ VAL: 4, DESC: "Напряжение в звене постоянного тока" },
+										{ VAL: 5, DESC: "Выходное напряжение" },
+										{ VAL: 7, DESC: "Сигнал обратной связи в ПИД-режиме" },
+										{ VAL: 8, DESC: "Уставка ПИД-режима" }
+									]
+								},
+								VALUE: 0
+							},
+							{
+								ADR: 1,
+								DESC: "Заданная частота",
+								ACCESS: 0,
+								OPT: {
+									DESC: "Герц",
+									SCALE: 10
+								},
+								VOLATILE : 1,
+								VALUE: 0
+							},
+							{
+								ADR: 2,
+								DESC: "Выходная частота",
+								ACCESS: 0,
+								OPT: {
+									DESC: "Герц",
+									SCALE: 10
+								},
+								VOLATILE : 1,
+								VALUE: 0
+							},
+							{
+								ADR: 3,
+								DESC: "Выходной ток",
+								ACCESS: 0,
+								OPT: {
+									DESC: "Ампер",
+									SCALE: 10
+								},
+								VOLATILE : 1,
+								VALUE: 0
+							},
+							{
+								ADR: 4,
+								DESC: "Скорость вращения",
+								ACCESS: 0,
+								OPT: {
+									DESC: "Об./мин",
+									SCALE: 1
+								},
+								VOLATILE : 1,
+								VALUE: 0
+							},
+							{
+								ADR: 5,
+								DESC: "Напряжение на шине постоянного тока",
+								ACCESS: 0,
+								OPT: {
+									DESC: "Вольт",
+									SCALE: 10
+								},
+								VOLATILE : 1,
+								VALUE: 0
+							},
+							{
+								ADR: 7,
+								DESC: "Величина обратной связи при использовании ПИД-режима",
+								ACCESS: 0,
+								OPT: {
+									SCALE: 100
+								},
+								VOLATILE : 1,
+								VALUE: 0
+							},
+							{
+								ADR: 8,
+								DESC: "Счетчик часов эксплуатации",
+								ACCESS: 0,
+								OPT: {
+									DESC: "Час(ов)",
+									SCALE: 1
+								},
+								VOLATILE : 1,
+								VALUE: 0
+							},
+							{
+								ADR: 9,
+								DESC: "Выходное напряжение",
+								ACCESS: 0,
+								OPT: {
+									DESC: "Вольт",
+									SCALE: 1
+								},
+								VOLATILE : 1,
+								VALUE: 0
+							},
+							{
+								ADR: 10,
+								DESC: "Запись об ошибке 1",
+								ACCESS: 0,
+								VALUE: 0
+							},
+							{
+								ADR: 11,
+								DESC: "Запись об ошибке 2",
+								ACCESS: 0,
+								VALUE: 0
+							},
+							{
+								ADR: 12,
+								DESC: "Запись об ошибке 3",
+								ACCESS: 0,
+								VALUE: 0
+							},
+							{
+								ADR: 13,
+								DESC: "Запись об ошибке 4",
+								ACCESS: 0,
+								VALUE: 0
+							},
+							{
+								ADR: 14,
+								DESC: "Заданная частота в момент последней ошибки",
+								ACCESS: 0,
+								OPT: {
+									DESC: "Герц",
+									SCALE: 10
+								},
+								VALUE: 0
+							},
+							{
+								ADR: 15,
+								DESC: "Выходная частота в момент последней ошибки",
+								ACCESS: 0,
+								OPT: {
+									DESC: "Герц",
+									SCALE: 10
+								},
+								VOLATILE : 1,
+								VALUE: 0
+							},
+							{
+								ADR: 16,
+								DESC: "Выходной ток в момент последней ошибки",
+								ACCESS: 0,
+								OPT: {
+									DESC: "Ампер",
+									SCALE: 10
+								},
+								VALUE: 0
+							},
+							{
+								ADR: 17,
+								DESC: "Выходное напряжение в момент последней ошибки",
+								ACCESS: 0,
+								OPT: {
+									DESC: "Вольт",
+									SCALE: 10
+								},
+								VALUE: 0
+							},
+							{
+								ADR: 18,
+								DESC: "Напряжение в звене постоянного тока в момент последней ошибки",
+								ACCESS: 0,
+								OPT: {
+									DESC: "Вольт",
+									SCALE: 10
+								},
+								VALUE: 0
+							},
+							{
+								ADR: 21,
+								DESC: "Состояние программируемых входов",
+								ACCESS: 0,
+								OPT: {
+									MASK: [
+										{ VAL: 1, DESC: "FWD" },
+										{ VAL: 2, DESC: "REV" },
+										{ VAL: 4, DESC: "S1" },
+										{ VAL: 8, DESC: "S2" }
+									]
+								},
+								VOLATILE : 1,
+								VALUE: 0
+							},
+							{
+								ADR: 22,
+								DESC: "Состояние выхода RA-RC",
+								ACCESS: 0,
+								OPT: {
+									ENUM: [
+										{ VAL: 0, DESC: "Не активен" },
+										{ VAL: 1, DESC: "Активен" }
+									]
+								},
+								VOLATILE : 1,
+								VALUE: 0
+							},
+							{
+								ADR: 23,
+								DESC: "Аналоговый сигнал на входе AVI",
+								ACCESS: 0,
+								OPT: {
+									DESC: "Вольт",
+									SCALE: 100,
+								},
+								VOLATILE : 1,
+								VALUE: 0
+							},
+							{
+								ADR: 27,
+								DESC: "Текущий код ошибки",
+								ACCESS: 0,
+								VOLATILE : 1,
+								VALUE: 0
+							},
+							{
+								ADR: 28,
+								DESC: "Текущее состояние",
+								ACCESS: 0,
+								OPT: {
+									ENUM: [
+										{ VAL: 0, DESC: "Остановлен" },
+										{ VAL: 1, DESC: "Вращение вперед" },
+										{ VAL: 2, DESC: "Вращение назад" }
+									],
+								},
+								VOLATILE : 1,
+								VALUE: 0
+							},
+							{
+								ADR: 50,
+								DESC: "Версия программного обеспечения",
+								ACCESS: 0,
+								OPT: {
+									BCD: [2,2]
+								},
+								VALUE: 0
+							}
+						]},
+						{PB: [ ]},
+						{PC: [ ]},
+						{PD: [ ]},
+						{PE: [ ]},
+						{PF: [ ]},
+						{PG: [ ]},
+						{PH: [ ]},
+						{PI: [ ]}
+					]
+				};
+				this.websocket = null;
+				this.gateway = gateway;
+				this.address = address;
+				this.runExchange();
+				this.tableElement = null; // Добавляем ссылку на таблицу
+				this.createRegistersTable();
+			}
+
+			updateRegistersTable() {
+				const paGroup = this.regs.GROUPS.find(g => g.PA);
+				if (!paGroup) return;
+
+				paGroup.PA.forEach(reg => {
+					const valueCell = document.querySelector(`#reg_value_${reg.ADR}`);
+					if (valueCell) {
+						// Обновляем значение
+						valueCell.textContent = reg.VALUE;
+						
+						// Обновляем описание значения
+						const descCell = valueCell.nextElementSibling;
+						if (descCell) {
+							descCell.textContent = this.getRegDescription(reg);
+						}
+					}
+				});
+			}
+
+			getRegDescription(reg) {
+				if (reg.OPT?.ENUM) {
+					return reg.OPT.ENUM.find(e => e.VAL === reg.VALUE)?.DESC || 'Unknown';
+				}
+				if (reg.OPT?.MASK) {
+					return reg.OPT.MASK.map(m => (reg.VALUE & m.VAL) ? m.DESC : null)
+									 .filter(Boolean).join(', ') || 'None';
+				}
+				if (reg.OPT?.BCD) {
+					const parts = [];
+					let remaining = reg.VALUE;
+					// Разбиваем значение на части согласно спецификации BCD
+					for (let i = reg.OPT.BCD.length - 1; i >= 0; i--) {
+						const bits = reg.OPT.BCD[i] * 4; // Каждые 2 цифры = 4 бита
+						const mask = (1 << bits) - 1;
+						const part = (remaining & mask).toString(16).padStart(reg.OPT.BCD[i], '0');
+						parts.unshift(part);
+						remaining >>= bits;
+					}
+					return parts.join('.');
+				}				
+				return reg.OPT?.DESC || '';
+			}
+
+			getBcdPattern(bcdFormat) {
+				const parts = bcdFormat.map(n => `[0-9a-fA-F]{${n}}`);
+				return `^${parts.join('\\.')}$`;
+			}
+
+			getBcdExample(bcdFormat) {
+				return bcdFormat.map(n => '0'.repeat(n)).join('.');
+			}
+
+			updateRegister(addr, inputElement) {
+				const reg = this.getPAReg(addr);
+				if (!reg) {
+					alert('Регистр не найден!');
+					return;
+				}
+
+				let newValue;
+				let validationError = null;
+
+				// Обработка разных типов ввода
+				if (inputElement.tagName === 'SELECT') {
+					newValue = parseInt(inputElement.value);
+				} 
+				else if (inputElement.tagName === 'DIV') {
+					newValue = Array.from(inputElement.querySelectorAll('input'))
+								  .reduce((acc, checkbox) => 
+									  acc | (checkbox.checked ? parseInt(checkbox.value) : 0), 0);
+				}
+				else if (reg.OPT?.BCD) {
+					const inputValue = inputElement.value.toLowerCase().replace(/[^0-9a-f.]/g, '');
+					const parts = inputValue.split('.');
+					
+					// Валидация формата
+					if (parts.length !== reg.OPT.BCD.length) {
+						validationError = `Требуется ${reg.OPT.BCD.join('.')} группы шестнадцатеричных цифр`;
+					} else {
+						newValue = 0;
+						for (let i = 0; i < reg.OPT.BCD.length; i++) {
+							const partStr = parts[i].padStart(reg.OPT.BCD[i], '0');
+							const part = parseInt(partStr, 16);
+							
+							if (partStr.length > reg.OPT.BCD[i] || isNaN(part)) {
+								validationError = `Ошибка в группе ${i+1}: максимум ${reg.OPT.BCD[i]} символов`;
+								break;
+							}
+							newValue = (newValue << (reg.OPT.BCD[i] * 4)) | part;
+						}
+					}
+				}
+				else {
+					newValue = parseFloat(inputElement.value);
+					if (isNaN(newValue)) {
+						validationError = "Некорректное числовое значение";
+					} else if (reg.OPT?.SCALE) {
+						newValue = Math.round(newValue * reg.OPT.SCALE);
+					}
+				}
+
+				// Обработка ошибок
+				if (validationError) {
+					alert(validationError);
+					return;
+				}
+
+				// Отправка команды обновления
+				const req = `{"FID":2000,"ARG":{"FN":6,"ADR":${this.address},"RA":${addr},"RVC":${newValue}}}`;
+				if (this.websocket.readyState === WebSocket.OPEN) {
+					this.websocket.send(req);
+					this.updateRegistersTable();
+				} else {
+					alert("Соединение не установлено!");
+				}
+			}
+
+
+			createRegistersTable() {
+				if (this.tableElement) {
+					this.tableElement.remove(); // Удаляем старую таблицу при пересоздании
+				}
+				
+				const table = document.createElement('table');
+				table.id = 'registers_table';
+				table.style.border = '1px solid black';
+				table.style.borderCollapse = 'collapse';
+				table.style.margin = '20px';
+				
+				// Заголовки таблицы
+				const header = `
+					<tr>
+						<th style="border:1px solid black; padding:5px">Описание</th>
+						<th style="border:1px solid black; padding:5px">Значение</th>
+						<th style="border:1px solid black; padding:5px">Описание значения</th>
+						<th style="border:1px solid black; padding:5px">Управление</th>
+					</tr>
+				`;
+				table.innerHTML = header;
+
+				// Генерируем строки для всех регистров PA
+				const paGroup = this.regs.GROUPS.find(g => g.PA);
+				paGroup.PA.forEach(reg => {
+					const row = table.insertRow();
+					
+					// Описание регистра
+					const descCell = row.insertCell();
+					descCell.style.border = '1px solid black';
+					descCell.textContent = reg.DESC;
+
+					// Текущее значение
+					const valueCell = row.insertCell();
+					valueCell.style.border = '1px solid black';
+					valueCell.id = `reg_value_${reg.ADR}`;
+					valueCell.textContent = reg.VALUE;
+
+					// Описание значения
+					const optCell = row.insertCell();
+					optCell.style.border = '1px solid black';
+					optCell.textContent = this.getRegDescription(reg);
+
+					// Элементы управления
+					const ctrlCell = row.insertCell();
+					ctrlCell.style.border = '1px solid black';
+					
+					if (reg.ACCESS >= 2) {
+						const container = document.createElement('div');
+						let input;
+						
+						// ENUM выбор
+						if (reg.OPT?.ENUM) {
+							input = document.createElement('select');
+							reg.OPT.ENUM.forEach(opt => {
+								const option = document.createElement('option');
+								option.value = opt.VAL;
+								option.text = opt.DESC;
+								input.appendChild(option);
+							});
+						}
+						// MASK флаги
+						else if (reg.OPT?.MASK) {
+							input = document.createElement('div');
+							reg.OPT.MASK.forEach(mask => {
+								const label = document.createElement('label');
+								const checkbox = document.createElement('input');
+								checkbox.type = 'checkbox';
+								checkbox.value = mask.VAL;
+								label.appendChild(checkbox);
+								label.appendChild(document.createTextNode(mask.DESC));
+								input.appendChild(label);
+							});
+						}
+						// BCD
+						else if (reg.OPT?.BCD) {
+							input = document.createElement('input');
+							input.type = 'text';
+							input.pattern = this.getBcdPattern(reg.OPT.BCD);
+							input.placeholder = this.getBcdExample(reg.OPT.BCD);
+							input.title = `Введите значение в формате ${this.getBcdExample(reg.OPT.BCD)}`;
+						}
+						// RANGE или числовое поле
+						else {
+							input = document.createElement('input');
+							input.type = 'number';
+							if (reg.OPT?.RANGE) {
+								input.min = reg.OPT.RANGE.MIN;
+								input.max = reg.OPT.RANGE.MAX;
+							}
+						}
+
+						// Кнопка обновления
+						const btn = document.createElement('button');
+						btn.textContent = 'Обновить';
+						btn.onclick = () => this.updateRegister(reg.ADR, input);
+						
+						container.appendChild(input);
+						container.appendChild(btn);
+						ctrlCell.appendChild(container);
+					}
+				});
+				this.tableElement = table; // Сохраняем ссылку
+				document.querySelector('.main').appendChild(table); // Вставляем таблицу в DOM
+			}
+			
+			getPAReg(addr) {
+				// 1. Находим группу PA
+				const paGroup = this.regs.GROUPS.find(group => group.PA !== undefined);
+				// 2. Если группа не найдена или в ней нет регистров
+				if (!paGroup || !paGroup.PA?.length) return null;
+				// 3. Ищем регистр по точному совпадению адреса
+				return paGroup.PA.find(reg => reg.ADR === addr) || null;
+			}
+			
+			runExchange() {
+				this.websocket = new WebSocket(this.gateway);				
+				this.websocket.onopen    = (event) => {
+					var ts = '[' + Date.now() + ']';
+					console.log(ts + ' Innovert connection opened');
+					this.websocket.send(`{"FID":3000,"ARG":{"BR":9600}}`); // set uart
+					this.subscribeRegs();
+				};
+				this.websocket.onclose   = (event) => {
+					console.log('Innovert connection closed');
+					setTimeout(() => this.runExchange(), 500);
+				};
+				
+				this.websocket.onmessage = (mess) => this.wsMessage(mess);
+				
+				this.websocket.onerror   = (event) => {
+					console.log("Innovert Err", event.data);
+				}
+			}
+			
+			wsMessage(mess) {
+				var obj = JSON.parse(mess.data);
+				var fid = parseInt(obj.FID, 16);
+				switch(fid) {
+					case 3000: // Uart
+						console.log("Uart driver ", obj.ARG);
+						break;
+					case 2000: // Modbus response
+						this.modbusHandler(parseInt(obj.SID, 16), obj.ARG);
+						break;
+					default:
+						break;
+				}
+			}
+			
+			modbusHandler(sid, arg) {
+				if (!arg || !arg.RA || !arg.RC || !arg.RD) return;
+				// Преобразуем адрес и количество регистров в числа
+				const startAddr = parseInt(arg.RA, 16);
+				const regCount = parseInt(arg.RC, 16);
+				const values = arg.RD.map(x => parseInt(x, 16));
+				// Находим группу PA с регистрами
+				const paGroup = this.regs.GROUPS.find(g => g.PA);
+				if (!paGroup) return;
+				// Создаем карту адресов для быстрого поиска
+				const regMap = new Map();
+				paGroup.PA.forEach(reg => regMap.set(reg.ADR, reg));
+				// Обновляем значения регистров
+				for (let i = 0; i < regCount; i++) {
+					const addr = startAddr + i;
+					const reg = regMap.get(addr);
+					if (reg && i < values.length) {
+						reg.VALUE = values[i];
+						
+						// Дополнительная обработка для масок и перечислений (опционально)
+						//if (reg.OPT?.MASK) {
+						//	reg.OPT.MASK.forEach(maskItem => {
+						//		maskItem.STATE = (values[i] & maskItem.VAL) ? 1 : 0;
+						//	});
+						//}
+					}
+				}
+				//console.log("Registers updated:", paGroup.PA);
+				this.updateRegistersTable();
+			}
+			
+			buildSubsriptionReq3(addr, ra, rc) {
+				return `{"FID":2000,"ARG":{"AWT":500,"RDL":250,"FN":3,"ADR":${addr},"RA":${ra},"RVC":${rc}}}`;
+			}
+			
+			subscribeRegs() {
+				// Получаем все регистры из группы PA
+				const paGroup = this.regs.GROUPS.find(group => group.PA !== undefined);
+				if (!paGroup) return;
+
+				const paRegs = paGroup.PA;
+				if (paRegs.length === 0) return;
+
+				// Собираем и сортируем адреса регистров
+				const addresses = paRegs.map(reg => reg.ADR).sort((a, b) => a - b);
+
+				// Группируем адреса в непрерывные диапазоны
+				const ranges = [];
+				let currentStart = addresses[0];
+				let currentEnd = addresses[0];
+
+				for (let i = 1; i < addresses.length; i++) {
+					if ((addresses[i] === currentEnd + 1) && (((currentEnd - currentStart) + 1) < 100)) {
+						currentEnd = addresses[i];
+					} else {
+						ranges.push({ start: currentStart, count: currentEnd - currentStart + 1 });
+						currentStart = addresses[i];
+						currentEnd = addresses[i];
+					}
+				}
+				ranges.push({ start: currentStart, count: currentEnd - currentStart + 1 });
+
+				// Формируем и отправляем запросы для каждого диапазона
+				ranges.forEach(range => {
+					const request = this.buildSubsriptionReq3(this.address, range.start, range.count);
+					if (this.websocket && this.websocket.readyState === WebSocket.OPEN) {
+						this.websocket.send(request);
+					}
+				});
+			}
+		}
+
         class Gauge {
             constructor(element_size, units_name, value_holder) {
 				this.elem = document.createElement("div");
@@ -102,15 +739,9 @@
 			}
         }
 
-		window.addEventListener('load', onLoad);  
-
-		function onLoad(event) {
-			initWebSocket();
-			//setInterval(poll, 100);
-		}
+		//window.addEventListener('load', onLoad);  
 
 		var gateway = `ws://${window.location.hostname}/ws`;
-		var websocket;
 		//let modbusPollQueue = new Queue();
 
 		//function modbusPoll() {
@@ -121,122 +752,12 @@
 		//  }
 		//}
 
-
-		function initWebSocket() {
-		  console.log('Trying to open a WebSocket connection...'+gateway);
-		  websocket = new WebSocket(gateway);
-		  websocket.onopen    = wsOnOpen;
-		  websocket.onclose   = wsOnClose;
-		  websocket.onmessage = wsOnMessage;
-		  websocket.onerror = wsOnError;
-		}
-		
-		function wsOnOpen(event) {
-			//mbPollId = setInterval(modbusPoll, 500);
-			var ts = '[' + Date.now() + ']';
-			console.log(ts + ' Connection opened');
-			websocket.send(`{"FID":3000,"ARG":{"BR":9600}}`); // set uart
-			websocket.send(`{"FID":2000,"ARG":{"AWT":500,"RDL":250,"FN":3,"ADR":"0x01","RA":0,"RVC":8}}`); // Subscribe on status registers 4 times/sec max
-		}
-
-		function wsOnClose(event) {
-			//clearInterval(mbPollId);
-			console.log('Connection closed');
-			setTimeout(initWebSocket, 500);
-		}
-
-		function wsOnMessage(mess) {
-			var obj = JSON.parse(mess.data);
-			var fid = parseInt(obj.FID, 16);
-			switch(fid) {
-				case 0x10650F11: // Log message
-					if(obj.ARG !== undefined && obj.ARG !== null) {
-						if(obj.ARG.LOG !== undefined && obj.ARG.LOG !== null) {
-							console.log(obj.ARG.LOG);
-						}
-						else {
-							console.log("Log event", obj.ARG);
-						}
-					}
-					break;
-				case 3000: // Uart
-					console.log("Uart driver ", obj.ARG);
-				    break;
-				case 2000: // Modbus response
-					modbusHundler(parseInt(obj.SID, 16), obj.ARG);
-					break;
-				case 0xE1F16E10: // Wifi scanner
-					//wifiScanHandler(obj.ARG);
-					break;
-				case 0xE1F15E15:
-					//wifiConnectHandler(obj);
-					break;
-				default:
-					console.log("Bad Fid", mess.ARG);
-					break;
-			}
-		}
-		
-		function wsOnError(event) {
-			console.log("Err", event.data);
-		}
-
-		function mbStateRegisters(data) {
-			gauge1.setValue(data[7]/100);
-			gauge2.setValue(data[4]);
-			gauge3.setValue(data[3]/10);
-			gauge4.setValue(data[5]/10);
-			gauge5.setValue(data[2]/10);
-		}
-
-
-		function modbusHundler(sid, data) {
-			if(data) {
-				//clearTimeout(mbQueueHandlerId);
-				//mbQueueHandlerId = setTimeout(modbusQueueHandler, 0);
-				let err = parseInt(data.CV, 16);
-				if(err) console.log("Modbus error", err);
-				else {
-					let sta = parseInt(data.STA, 16);
-					if(sta) {
-						console.log("Modbus subscription id:",sid, " sta:", sta);
-						return;
-					}
-					let fnc = parseInt(data.FN, 16);
-					let addr = parseInt(data.RA, 16);
-					let count = parseInt(data.RC, 16);
-					let mbdata = Array.from(data.RD, (x) => parseInt(x, 16))
-					switch(fnc) {
-						case 0x01: //Read Discrete Outputs
-							break;
-						case 0x02: //Read Discrete Inputs
-							break;
-						case 0x03: //Read Analog Outputs
-							if(addr == 0) mbStateRegisters(mbdata);
-							break;
-						case 0x04: //Read Analog Inputs
-							break;
-						case 0x05: //Write Discrete
-							break;
-						case 0x06: //Write Analog
-							break;
-						case 0x0F: //Write Discrete Outputs
-							break;
-						case 0x10: //Write Analog Multiple
-							break;
-						default:
-							console.log("Unknown modbus function", fnc);
-							break;
-					}
-				}
-			}
-		}
-
         const gauge1 = new Gauge("200px", "BAR", "???");
         const gauge2 = new Gauge("200px", "RPM", "???");
         const gauge3 = new Gauge("200px", "A", "???");
-        const gauge4 = new Gauge("200px", "V", "???");
-        const gauge5 = new Gauge("200px", "Hz", "???");
+        //const gauge4 = new Gauge("200px", "V", "???");
+        //const gauge5 = new Gauge("200px", "Hz", "???");
+        const gauge6 = new Gauge("200px", "V", "???");
         //const gauge6 = new Gauge("200px", "°C", "???");
 		gauge1.setScale(0, 5);
         gauge1.setPtr(2, 3);
@@ -244,26 +765,48 @@
         gauge2.setPtr(1000, 1700);
 		gauge3.setScale(0, 10);
         gauge3.setPtr(0, 7,5);
-		gauge4.setScale(0, 400);
-        gauge4.setPtr(240, 400);
-		gauge5.setScale(0, 100);
-        gauge5.setPtr(0, 100);
+		//gauge4.setScale(0, 400);
+        //gauge4.setPtr(240, 400);
+		//gauge5.setScale(0, 100);
+        //gauge5.setPtr(0, 100);
+		gauge6.setScale(0, 400);
+        gauge6.setPtr(0, 400);
 		var container = document.body.querySelector('.main');
 		container.appendChild(gauge1.getElement());
 		container.appendChild(gauge2.getElement());
 		container.appendChild(gauge3.getElement());
-		container.appendChild(gauge4.getElement());
-		container.appendChild(gauge5.getElement());
+		container.appendChild(gauge6.getElement());
+		//container.appendChild(gauge4.getElement());
+		//container.appendChild(gauge5.getElement());
 		
-        // Test animation
-        //let value = 0;
-        //setInterval(() => {
-        //    value += 0.33;
-		//	if(value > 6) value = 0;
-        //    gauge1.setValue(value);
-		//	gauge2.setValue(1500 + (400 - Math.random() * 800));
-		//	gauge3.setValue(25 + (5 - Math.random() * 10));
-        //}, 1000);
+		let x = new InnovertIDDXXX21E(gateway,1);
+		
+		function setGauge(gauge, radr) {
+			let reg = x.getPAReg(radr);
+			if (reg) {
+				let val = reg.VALUE;
+				if(reg.OPT && reg.OPT.SCALE) {
+					val = val / reg.OPT.SCALE;
+				}
+				gauge.setValue(val);
+			} else {
+				console.log("Регистр не найден");
+			}
+			
+		}
+		
+		function dataViewHandler() {
+			setGauge(gauge1, 7);
+			setGauge(gauge2, 4);
+			setGauge(gauge3, 3);
+			//setGauge(gauge4, 5);
+			//setGauge(gauge5, 2);
+			setGauge(gauge6, 9);
+			setTimeout(dataViewHandler, 100);
+		}
+
+		setTimeout(dataViewHandler, 0);
+		
     </script>
 </body>
 </html>

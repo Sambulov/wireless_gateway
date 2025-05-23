@@ -77,7 +77,7 @@ static void vRefreshApiCallAliveTsByFd(LinkedListItem_t *item, void *arg) {
     ApiCall_t *call = LinkedListGetObject(ApiCall_t, item);
     uint32_t fd = (uint32_t)arg;
     if(call->pxWsc.fd == fd) {
-        ESP_LOGW(TAG, "Refresh call alive ts; socket:%d", call->pxWsc.fd);
+        //ESP_LOGW(TAG, "Refresh call alive ts; socket:%d", call->pxWsc.fd);
         call->ulAliveTs = xTaskGetTickCount();
     }
 }
@@ -86,7 +86,7 @@ static void vRefreshApiCallPingTsByFd(LinkedListItem_t *item, void *arg) {
     ApiCall_t *call = LinkedListGetObject(ApiCall_t, item);
     uint32_t fd = (uint32_t)arg;
     if(call->pxWsc.fd == fd) {
-        ESP_LOGW(TAG, "Refresh call ping ts; socket:%d", call->pxWsc.fd);
+        //ESP_LOGW(TAG, "Refresh call ping ts; socket:%d", call->pxWsc.fd);
         call->ulPingTs = xTaskGetTickCount();
     }
 }
@@ -134,7 +134,7 @@ static void vServeApiCall(LinkedListItem_t *item, void *arg) {
         uint32_t now = xTaskGetTickCount();
         if(((now - call->ulAliveTs) >= CONFIG_WEB_SOCKET_PING_DELAY) && 
            ((now - call->ulPingTs) >= CONFIG_WEB_SOCKET_PING_DELAY)) {
-            ESP_LOGI(TAG, "Send ping with socket: %d", call->pxWsc.fd);
+            //ESP_LOGI(TAG, "Send ping with socket: %d", call->pxWsc.fd);
             if(httpd_ws_send_frame_async(call->pxWsc.hd, call->pxWsc.fd, &frame) != ESP_OK) {
                 ESP_LOGW(TAG, "Send ping error");
                 vApiCallComplete(call);
@@ -152,7 +152,7 @@ static void vServeApiCall(LinkedListItem_t *item, void *arg) {
 
 static void vWsTransferComplete_cb(esp_err_t err, int socket, void *arg) {
     ApiData_t *apiData = (ApiData_t *)arg;
-    ESP_LOGI(TAG, "Transfer Complete, err: %d, fd: %d", err, socket);
+    //ESP_LOGI(TAG, "Transfer Complete, err: %d, fd: %d", err, socket);
     if(err) vBrakeApiCallsByFd(0, socket);
     if((!apiData->counter) || !(--apiData->counter)) {
         free(arg);
@@ -265,7 +265,7 @@ static uint8_t _bApiCallSendJson(void *pxApiCall, uint32_t ulFid, const uint8_t 
             resp->frame.len = len;
             while (call != NULL) {
                 res = httpd_ws_send_data_async(call->pxWsc.hd, call->pxWsc.fd, &resp->frame, vWsTransferComplete_cb, resp);
-                ESP_LOGI(TAG, "Api call %lu json sending with result: %d", call->ulId, res);
+                //ESP_LOGI(TAG, "Api call %lu json sending with result: %d", call->ulId, res);
                 if(fid_group)
                     call = LinkedListGetObject(ApiCall_t, pxLinkedListFindNextNoOverlap(LinkedListItem(call), bCallFidMatch, (void *)ulFid));
                 else break;
@@ -334,14 +334,14 @@ static void vWsParseApiRequest(uint8_t *payload, int32_t pl_len, httpd_handle_t 
 }
 
 static esp_err_t eWsHandler(httpd_req_t *req) {
-    ESP_LOGI(TAG, "New web request, type: %d, len: %d", req->method, req->content_len);
+    //ESP_LOGI(TAG, "New web request, type: %d, len: %d", req->method, req->content_len);
     if (req->method == HTTP_GET) ESP_LOGI(TAG, "Handshake done, the new connection was opened");
     else {
         httpd_ws_frame_t ws_pkt;
         memset(&ws_pkt, 0, sizeof(httpd_ws_frame_t));
         esp_err_t ret = httpd_ws_recv_frame(req, &ws_pkt, 0); /* max_len = 0 to populate httpd_ws_frame except data */
         if (ret == ESP_OK) {
-            ESP_LOGI(TAG, "New WS request, type: %d", ws_pkt.type);
+            //ESP_LOGI(TAG, "New WS request, type: %d", ws_pkt.type);
             uint32_t fd = httpd_req_to_sockfd(req);
             vRefreshApiCallsAliveTsByFd(0, fd);
             if (ws_pkt.type == HTTPD_WS_TYPE_PING) {
@@ -352,7 +352,7 @@ static esp_err_t eWsHandler(httpd_req_t *req) {
                 httpd_ws_send_frame(req, &frame);
             }
             else if (ws_pkt.type == HTTPD_WS_TYPE_PONG) {
-                ESP_LOGI(TAG, "Pong frame");
+                //ESP_LOGI(TAG, "Pong frame");
             }
             else if (ws_pkt.type == HTTPD_WS_TYPE_CLOSE) {
                 ESP_LOGI(TAG, "Close frame");
@@ -401,7 +401,7 @@ static esp_err_t eWsHandler(httpd_req_t *req) {
         else ESP_LOGW(TAG, "Failed to get WS frame len with err %d", ret);
     }
     uint32_t heap = (uint32_t)heap_caps_get_free_size(MALLOC_CAP_DEFAULT);
-    ESP_LOGI(TAG, "Heap left:%lu", heap);
+    if(heap < 30000) ESP_LOGI(TAG, "Heap left:%lu", heap);
     return ESP_OK; //ignore errors, drop packet;
 }
 
