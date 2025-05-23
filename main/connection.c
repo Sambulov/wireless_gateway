@@ -84,7 +84,7 @@ esp_netif_t* pxGetNetIfFromSocket(int sock) {
     return NULL;
 }
 
-static void kill_all_socks(httpd_handle_t server)
+static void kill_socks_on_dead_interaface(httpd_handle_t server)
 {
 	const int MAX_SOCKS = 128; //hd->config.max_open_sockets
 	size_t try_socks = MAX_SOCKS;
@@ -92,8 +92,9 @@ static void kill_all_socks(httpd_handle_t server)
 	if (httpd_get_client_list(server, &try_socks, fds) != ESP_OK)
 		goto err;
 	for (int i = 0; i < try_socks; ++i)
-		if (httpd_sess_trigger_close(server, fds[i]) != ESP_OK)
-			goto err;
+		if (pxGetNetIfFromSocket(fds[i]) == NULL) //if is dead
+			if (httpd_sess_trigger_close(server, fds[i]) != ESP_OK)
+				goto err;
 err:
         ESP_LOGI(TAG, "Can't kill socks");
 }
@@ -104,7 +105,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
     ESP_LOGI(TAG, "Event id: %ld, base: %ld", event_id, (uint32_t)event_base);
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
 	ESP_LOGI(TAG, "Wi-Fi disconnected, kill all sockets...");
-	kill_all_socks(server);
+	kill_socks_on_dead_interaface(server);
         ESP_LOGI(TAG, "Wi-Fi disconnected, trying to reconnect...");
         esp_wifi_connect();
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
