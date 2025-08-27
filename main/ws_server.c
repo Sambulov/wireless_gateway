@@ -152,7 +152,7 @@ static void vServeApiCall(LinkedListItem_t *item, void *arg) {
 
 static void vWsTransferComplete_cb(esp_err_t err, int socket, void *arg) {
     ApiData_t *apiData = (ApiData_t *)arg;
-    //ESP_LOGI(TAG, "Transfer Complete, err: %d, fd: %d", err, socket);
+    ESP_LOGI(TAG, "Transfer Complete, err: %d, fd: %d", err, socket);
     if(err) vBrakeApiCallsByFd(0, socket);
     if((!apiData->counter) || !(--apiData->counter)) {
         free(arg);
@@ -265,7 +265,7 @@ static uint8_t _bApiCallSendJson(void *pxApiCall, uint32_t ulFid, const uint8_t 
             resp->frame.len = len;
             while (call != NULL) {
                 res = httpd_ws_send_data_async(call->pxWsc.hd, call->pxWsc.fd, &resp->frame, vWsTransferComplete_cb, resp);
-                //ESP_LOGI(TAG, "Api call %lu json sending with result: %d", call->ulId, res);
+                ESP_LOGI(TAG, "Api call %lu json sending with result: %d", call->ulId, res);
                 if(fid_group)
                     call = LinkedListGetObject(ApiCall_t, pxLinkedListFindNextNoOverlap(LinkedListItem(call), bCallFidMatch, (void *)ulFid));
                 else break;
@@ -334,74 +334,90 @@ static void vWsParseApiRequest(uint8_t *payload, int32_t pl_len, httpd_handle_t 
 }
 
 static esp_err_t eWsHandler(httpd_req_t *req) {
-    //ESP_LOGI(TAG, "New web request, type: %d, len: %d", req->method, req->content_len);
-    if (req->method == HTTP_GET) ESP_LOGI(TAG, "Handshake done, the new connection was opened");
-    else {
-        httpd_ws_frame_t ws_pkt;
-        memset(&ws_pkt, 0, sizeof(httpd_ws_frame_t));
-        esp_err_t ret = httpd_ws_recv_frame(req, &ws_pkt, 0); /* max_len = 0 to populate httpd_ws_frame except data */
-        if (ret == ESP_OK) {
-            //ESP_LOGI(TAG, "New WS request, type: %d", ws_pkt.type);
-            uint32_t fd = httpd_req_to_sockfd(req);
-            vRefreshApiCallsAliveTsByFd(0, fd);
-            if (ws_pkt.type == HTTPD_WS_TYPE_PING) {
-                ESP_LOGI(TAG, "Ping frame, sending pong");
-                httpd_ws_frame_t frame;
-                memset(&frame, 0, sizeof(httpd_ws_frame_t));
-                frame.type = HTTPD_WS_TYPE_PONG;
-                httpd_ws_send_frame(req, &frame);
-            }
-            else if (ws_pkt.type == HTTPD_WS_TYPE_PONG) {
-                //ESP_LOGI(TAG, "Pong frame");
-            }
-            else if (ws_pkt.type == HTTPD_WS_TYPE_CLOSE) {
-                ESP_LOGI(TAG, "Close frame");
-                //httpd_ws_send_frame(req, &ws_pkt); /* ?????????? */
-                //httpd_sess_trigger_close(req->handle, fd); /* ?????????? */
-                vBrakeApiCallsByFd(0, fd);
-            }
-            else if ((ws_pkt.type == HTTPD_WS_TYPE_BINARY) || ((ws_pkt.type != HTTPD_WS_TYPE_CONTINUE) && ws_pkt.fragmented)) {
-                #define bin_req  "{\"FID\":\"0x00000000\",\"STA\":\"0x80000000\"}" //API_HANDLER_ID_GENEGAL #API_CALL_ERROR_STATUS_BAD_REQ
-                //#define frag_req  "{\"FID\":\"0x00000000\",\"STA\":\"0x80000001\"}" //API_HANDLER_ID_GENEGAL #API_CALL_ERROR_STATUS_FRAGMENTED
-                httpd_ws_frame_t frame = { 
-                    .final = 1,
-                    .fragmented = 0, 
-                    .payload = (uint8_t *)bin_req,
-                    .len = sizeof(bin_req) - 1,
-                    .type = HTTPD_WS_TYPE_TEXT
-                };
-                //if(ws_pkt.fragmented) frame.payload = (uint8_t *)frag_req;
-                httpd_ws_send_frame(req, &frame);
-                ESP_LOGW(TAG, "Bad frame; len = %d", ws_pkt.len);
-                #undef bad_req
-                //#undef frag_req
-                /* skeep frame */
-            }
-            else if (ws_pkt.type == HTTPD_WS_TYPE_CONTINUE) {
-                ESP_LOGW(TAG, "Fragmented frame part; len = %d", ws_pkt.len);
-                /* skeep frame */
-            }
-            else if(ws_pkt.type == HTTPD_WS_TYPE_TEXT) {
-                ws_pkt.payload = malloc(ws_pkt.len + 1) /* +1 string terminator */;
-                if (ws_pkt.payload != NULL) {
-                    ret = httpd_ws_recv_frame(req, &ws_pkt, ws_pkt.len);
-                    ws_pkt.payload[ws_pkt.len] = '\0';
-                    if (ret == ESP_OK) {
-                        ESP_LOGI(TAG, "Got packet with message: %s", ws_pkt.payload);
-                        vWsParseApiRequest((uint8_t *)ws_pkt.payload, ws_pkt.len, req->handle, httpd_req_to_sockfd(req));
-                    } else ESP_LOGW(TAG, "WS receive failed with %d", ret);
-                    free(ws_pkt.payload);
-                }
-                else ESP_LOGW(TAG, "Failed to malloc memory for payload");
-            }
-            else if(ws_pkt.type != HTTPD_WS_TYPE_TEXT) /* Other types shielding */ {
-                ESP_LOGW(TAG, "Frame type unsupported");
-            }
-        }
-        else ESP_LOGW(TAG, "Failed to get WS frame len with err %d", ret);
+    httpd_ws_frame_t resp = {0};
+    httpd_ws_frame_t ws_pkt = {0};
+
+    ESP_LOGI(TAG, "%s: --> req %p", __func__, req);
+    if (req->method == HTTP_GET) {
+        ESP_LOGI(TAG, "Handshake done, the new connection was opened");
+        return ESP_OK;
     }
+
+    memset(&ws_pkt, 0, sizeof(httpd_ws_frame_t));
+    esp_err_t ret = httpd_ws_recv_frame(req, &ws_pkt, 0);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to read web socket header (err %d)", ret);
+        return ESP_FAIL;
+    }
+
+    uint32_t fd = httpd_req_to_sockfd(req);
+    vRefreshApiCallsAliveTsByFd(0, fd);
+
+    ws_pkt.payload = malloc(ws_pkt.len * sizeof(uint8_t));
+    if (!ws_pkt.payload) {
+        ESP_LOGI(TAG, "%s: can't allocate %u bytes", __func__, ws_pkt.len);
+        return ESP_FAIL;
+    }
+    ret = httpd_ws_recv_frame(req, &ws_pkt, ws_pkt.len);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to read web socket data (err %d)", ret);
+        free(ws_pkt.payload);
+    return ESP_FAIL;
+    }
+
+    switch (ws_pkt.type) {
+        case HTTPD_WS_TYPE_TEXT:
+            ESP_LOGI(TAG, "Got packet with message: %s", ws_pkt.payload);
+            vWsParseApiRequest((uint8_t *)ws_pkt.payload, ws_pkt.len, req->handle, httpd_req_to_sockfd(req));
+            break;
+        case HTTPD_WS_TYPE_PING:
+            ESP_LOGI(TAG, "%s: PING frame received, len = %d", __func__, ws_pkt.len);
+            memset(&resp, 0, sizeof(httpd_ws_frame_t));
+            resp.type = HTTPD_WS_TYPE_PONG;
+            resp.final = true;
+            resp.fragmented = false;
+            resp.payload = ws_pkt.payload;
+            resp.len = ws_pkt.len;
+            if (httpd_ws_send_frame(req, &resp) != ESP_OK) {
+                ESP_LOGI(TAG, "Cannot send PONG frame");
+                free(ws_pkt.payload);
+                return ESP_ERR_INVALID_STATE;
+            }
+            break;
+        case HTTPD_WS_TYPE_PONG:
+            ESP_LOGI(TAG, "%s: PONG frame received, len = %d", __func__, ws_pkt.len);
+            //TODO: update keep alive status
+            break;
+        case HTTPD_WS_TYPE_CLOSE:
+            ESP_LOGI(TAG, "%s: CLOSE frame received, len = %d", __func__, ws_pkt.len);
+            //TODO: works not good when close frame received. Check protocol implementation
+            resp.type = HTTPD_WS_TYPE_CLOSE;
+            if (httpd_ws_send_frame(req, &resp) != ESP_OK) {
+                ESP_LOGI(TAG, "Cannot send CLOSE frame");
+                free(ws_pkt.payload);
+                return ESP_ERR_INVALID_STATE;
+            }
+            break;
+        case HTTPD_WS_TYPE_CONTINUE:
+            ESP_LOGI(TAG, "%s: CONTINUE frame received, len = %d", __func__, ws_pkt.len);
+            break;
+        case HTTPD_WS_TYPE_BINARY:
+            ESP_LOGI(TAG, "%s: BINARY frame received, len = %d", __func__, ws_pkt.len);
+                break;
+        default:
+            ESP_LOGI(TAG, "%s: UNSUPPORTED frame received, type = %d", __func__, ws_pkt.type);
+            break;
+    }
+
+    free(ws_pkt.payload);
+
+#if 1
+    //TODO: add to debug build, remove from release
     uint32_t heap = (uint32_t)heap_caps_get_free_size(MALLOC_CAP_DEFAULT);
-    if(heap < 30000) ESP_LOGI(TAG, "Heap left:%lu", heap);
+    if(heap < 30000)
+        ESP_LOGI(TAG, "Heap left:%lu", heap);
+#endif
+
     return ESP_OK; //ignore errors, drop packet;
 }
 
