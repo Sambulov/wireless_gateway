@@ -6,7 +6,7 @@
 
 import asyncio
 import websockets
-
+import pytest
 
 class Register:
     def __init__(self, number, value):
@@ -47,14 +47,36 @@ class WebApi:
         return req
 
 
+async def send_single_request(url, req: WebApi):
+    req = req.serialize()
+    print("Send to {0} request {1}".format(url, req))
+    async with websockets.connect(url) as ws:
+        try:
+            await ws.send(req)
+            resp = await ws.recv()
+            print("Received from {0} response {1}".format(url, resp))
+            return True
+        except Exception as e:
+            print(e)
+            return False 
+
+
 async def send_request(url, req: WebApi):
     req = req.serialize()
     print("Send to {0} request {1}".format(url, req))
     async with websockets.connect(url) as ws:
         while True:
-            await ws.send(req)
-            resp = await ws.recv()
+            try:
+                #print('send ping')
+                #await ws.ping()
+                #print('send data')
+                await ws.send(req)
+                resp = await ws.recv()
+            except Exception as e:
+                print(e)
+                exit(1)
             print("Received from {0} response {1}".format(url, resp))
+            #await asyncio.sleep(5)
 
 
 class Request:
@@ -104,22 +126,76 @@ class Browser:
         asyncio.run(self.__main_corutine())
 
 
-if __name__ == '__main__':
+
+@pytest.mark.skip
+#@pytest.mark.asyncio
+async def test_ping():
     gw = WirelessGateway("ws://192.168.4.1/ws")
-    browser = Browser()
+    result = True
+    try:
+        sock = await websockets.connect(gw.url())
+        pong_waiter = await sock.ping()
+        latence = await pong_waiter
+        print('ping-pong latency: ' + str(latence))
+    except:
+        print('fault')
+        result = False
 
-    #r1 = Request(gw.url(), WebApi(2000, [("AWT", "500"), ("RDL", 500)]))
-    #r2 = Request(gw.url(), WebApi(2000, [("AWT", "600"), ("RDL", 600)]))
-    #r3 = Request(gw.url(), WebApi(2000, [("AWT", "700"), ("RDL", 700)]))
-    #r4 = Request(gw.url(), WebApi(2000, [("AWT", "800"), ("RDL", 800)]))
-    #r5 = Request(gw.url(), WebApi(2000, [("AWT", "900"), ("RDL", 900)]))
+    await sock.close()
+    assert(result)
 
-    r1 = Request(gw.url(), WebApi(1010))
-    r2 = Request(gw.url(), WebApi(1010))
-    r3 = Request(gw.url(), WebApi(1010))
-    r4 = Request(gw.url(), WebApi(1010))
-    r5 = Request(gw.url(), WebApi(1010))
+    
+@pytest.mark.skip
+#@pytest.mark.asincio
+async def test_stress_2000():
+    gw = WirelessGateway("ws://192.168.4.1/ws")
+
+    r1 = Request(gw.url(), WebApi(1000))
+    r2 = Request(gw.url(), WebApi(1000))
+    r3 = Request(gw.url(), WebApi(1000))
+    r4 = Request(gw.url(), WebApi(1000))
+    r5 = Request(gw.url(), WebApi(1000))
 
     browser.setup([r1, r2, r3, r4, r5])
-
     browser.run()
+
+
+@pytest.mark.skip
+#@pytest.mark.asyncio
+async def test_1000():
+    gw = WirelessGateway("ws://192.168.4.1/ws")
+    result = True
+
+    r1 = Request(gw.url(), WebApi(1000))
+    try:
+        sock = await websockets.connect(gw.url())
+        await sock.send(WebApi(1000).serialize())
+        resp = await sock.recv()
+        sock.close()
+        if not "FID" in resp:
+            result = False
+    except:
+        result = False
+
+    assert(result)
+
+@pytest.mark.skip
+#@pytest.mark.asyncio
+async def test_false_connect():
+    gw = WirelessGateway("ws://192.168.4.2/unexsisting_page")
+    with pytest.raises(Exception):
+        await websockets.connect(gw.url())
+
+@pytest.mark.skip
+#@pytest.mark.asyncio
+async def test_connect():
+    gw = WirelessGateway("ws://192.168.4.1/ws")
+    result = True
+
+    try:
+        ws = await websockets.connect(gw.url())
+        await ws.close()
+    except:
+        result = False
+
+    assert(result)
