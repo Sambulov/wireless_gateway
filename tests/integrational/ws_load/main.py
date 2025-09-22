@@ -7,6 +7,7 @@
 import asyncio
 import websockets
 import pytest
+import time
 
 class Register:
     def __init__(self, number, value):
@@ -144,6 +145,22 @@ async def test_ping():
     await sock.close()
     assert(result)
 
+
+@pytest.mark.skip
+async def test_1000(url, req: WebApi, wait: int):
+    req = req.serialize()
+    print("Send to {0} request {1}".format(url, req))
+    async with websockets.connect(url) as ws:
+        try:
+            await ws.send(req)
+            resp = await ws.recv()
+            print("Received from {0} response {1}".format(url, resp))
+            await asyncio.sleep(wait)
+            return True
+        except Exception as e:
+            print(e)
+            return False
+
     
 @pytest.mark.skip
 #@pytest.mark.asincio
@@ -179,12 +196,14 @@ async def test_1000():
 
     assert(result)
 
+
 @pytest.mark.skip
 #@pytest.mark.asyncio
 async def test_false_connect():
     gw = WirelessGateway("ws://192.168.4.2/unexsisting_page")
     with pytest.raises(Exception):
         await websockets.connect(gw.url())
+
 
 @pytest.mark.skip
 #@pytest.mark.asyncio
@@ -199,3 +218,33 @@ async def test_connect():
         result = False
 
     assert(result)
+
+async def echo_thread(time_sec, url):
+    result = False
+    echo_req = WebApi(1000)
+    start = time.time()
+    async with websockets.connect(url) as ws:
+        while time.time() - start < time_sec:   
+            try:
+                await ws.send(echo_req.serialize())
+                resp = await ws.recv()
+                if not "FID" in resp:
+                    result = False
+                    break
+                result = True
+            except Exception as e:
+                print(e)
+                result = False
+                break
+
+            if not result:
+                break
+
+    assert(result) 
+
+@pytest.mark.asyncio
+async def test_echo():
+    gw = WirelessGateway("ws://192.168.4.1/ws")
+    lst = [echo_thread(10, gw.url()) for x in range(10)]
+    
+    await asyncio.gather(*lst)
