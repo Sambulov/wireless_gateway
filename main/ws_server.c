@@ -40,7 +40,6 @@ typedef struct {
     ApiHandler_t fHandler;
     uint32_t ulFid;
     uint32_t ulCallPending;
-    uint8_t ucStatus;
 } ApiCall_t;
 
 typedef struct {
@@ -201,7 +200,8 @@ uint8_t bApiCallUnregister(uint32_t ulFid) {
 void vApiCallComplete(void *pxApiCall) {
     xSemaphoreTakeRecursive(xWsApiMutex, portMAX_DELAY);
     ApiCall_t *call = (ApiCall_t *)pxApiCall;
-    if((bLinkedListContains(pxWsApiCall, LinkedListItem(call))) && call->ulCallPending) call->ulCallPending--;
+    if((bLinkedListContains(pxWsApiCall, LinkedListItem(call))) && call->ulCallPending)
+        call->ulCallPending--;
     xSemaphoreGiveRecursive(xWsApiMutex);
 }
 
@@ -339,36 +339,44 @@ static esp_err_t eWsHandler(httpd_req_t *req) {
 
     ESP_LOGI(TAG, "%s: --> req %p", __func__, req);
     if (req->method == HTTP_GET) {
-        ESP_LOGI(TAG, "Handshake done, the new connection was opened");
+        ESP_LOGI(TAG, "%s: Handshake done, the new connection was opened", __func__);
         return ESP_OK;
     }
 
     memset(&ws_pkt, 0, sizeof(httpd_ws_frame_t));
     esp_err_t ret = httpd_ws_recv_frame(req, &ws_pkt, 0);
     if (ret != ESP_OK) {
-        ESP_LOGW(TAG, "Failed to read web socket header (err %d)", ret);
+        ESP_LOGW(TAG, "%s: Failed to read web socket header (err %d)", __func__, ret);
         return ESP_FAIL;
     }
 
     uint32_t fd = httpd_req_to_sockfd(req);
     vRefreshApiCallsAliveTsByFd(0, fd);
 
-    ws_pkt.payload = malloc(ws_pkt.len * sizeof(uint8_t));
-    if (!ws_pkt.payload) {
-        ESP_LOGI(TAG, "%s: can't allocate %u bytes", __func__, ws_pkt.len);
-        return ESP_FAIL;
-    }
-    ret = httpd_ws_recv_frame(req, &ws_pkt, ws_pkt.len);
-    if (ret != ESP_OK) {
-        ESP_LOGW(TAG, "Failed to read web socket data (err %d)", ret);
-        free(ws_pkt.payload);
-    return ESP_FAIL;
+    ws_pkt.payload = NULL;
+    if(ws_pkt.len) {
+        uint32_t size = ws_pkt.len * sizeof(uint8_t) + 1; /* packet data +1 '\0' */
+        ws_pkt.payload = malloc(size); 
+        if (!ws_pkt.payload) {
+            ESP_LOGI(TAG, "%s: Can't allocate %u bytes", __func__, ws_pkt.len);
+            return ESP_FAIL;
+        }
+        ((uint8_t *)ws_pkt.payload)[size - 1] = '\0';
+        ret = httpd_ws_recv_frame(req, &ws_pkt, ws_pkt.len);
+        if (ret != ESP_OK) {
+            ESP_LOGW(TAG, "Failed to read web socket data (err %d)", ret);
+            free(ws_pkt.payload);
+            return ESP_FAIL;
+        }
     }
 
     switch (ws_pkt.type) {
         case HTTPD_WS_TYPE_TEXT:
-            ESP_LOGI(TAG, "Got packet with message: %s", ws_pkt.payload);
-            vWsParseApiRequest((uint8_t *)ws_pkt.payload, ws_pkt.len, req->handle, httpd_req_to_sockfd(req));
+            if(ws_pkt.payload)
+                ESP_LOGI(TAG, "%s: Got packet with message: %s", __func__, ws_pkt.payload);
+            else 
+                ESP_LOGI(TAG, "%s: Got packet with empty message", __func__);
+            vWsParseApiRequest((uint8_t *)ws_pkt.payload, ws_pkt.len, req->handle, fd);
             break;
         case HTTPD_WS_TYPE_PING:
             ESP_LOGI(TAG, "%s: PING frame received, len = %d", __func__, ws_pkt.len);
@@ -379,7 +387,7 @@ static esp_err_t eWsHandler(httpd_req_t *req) {
             resp.payload = ws_pkt.payload;
             resp.len = ws_pkt.len;
             if (httpd_ws_send_frame(req, &resp) != ESP_OK) {
-                ESP_LOGI(TAG, "Cannot send PONG frame");
+                ESP_LOGI(TAG, "%s: Cannot send PONG frame", __func__);
                 free(ws_pkt.payload);
                 return ESP_ERR_INVALID_STATE;
             }
@@ -393,7 +401,7 @@ static esp_err_t eWsHandler(httpd_req_t *req) {
             //TODO: works not good when close frame received. Check protocol implementation
             resp.type = HTTPD_WS_TYPE_CLOSE;
             if (httpd_ws_send_frame(req, &resp) != ESP_OK) {
-                ESP_LOGI(TAG, "Cannot send CLOSE frame");
+                ESP_LOGI(TAG, "%s: Cannot send CLOSE frame", __func__);
                 free(ws_pkt.payload);
                 return ESP_ERR_INVALID_STATE;
             }
@@ -460,7 +468,8 @@ static void vWsApiCallWorker(void *pvParameters) {
             }
             if(call->fHandler != NULL) {
                 uint8_t res = call->fHandler(call, &call->pxHandlerContext, call->ulCallPending, call->pucReqData, call->ulReqDataLen);
-                if(res && (call->ulCallPending > 0)) call->ulCallPending--;
+                if(res && (call->ulCallPending > 0)) 
+                    call->ulCallPending--;
             }
             if(call->pucReqData != NULL) free(call->pucReqData);
             call->ulReqDataLen = 0;
