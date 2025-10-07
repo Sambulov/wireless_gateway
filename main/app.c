@@ -27,6 +27,8 @@ static const uint8_t json_null[] = "\"null\"";
 
 #define ESP_WS_API_ECHO_ID    1000
 uint8_t bApiHandlerEcho(void *pxApiCall, void **ppxContext, uint32_t ulPending, uint8_t *pucData, uint32_t ulDataLen) {
+    if(!ulPending) 
+        return 1;
     if(pucData == NULL) {
         pucData = (uint8_t *)json_null;
         ulDataLen = sizeof(json_null) - 1 /* length of "Null" except terminator */;
@@ -45,17 +47,18 @@ uint8_t bApiHandlerEcho(void *pxApiCall, void **ppxContext, uint32_t ulPending, 
 
 #define ESP_WS_API_CONT_ID    1001
 uint8_t bApiHandlerCont(void *pxApiCall, void **ppxContext, uint32_t ulPending, uint8_t *pucData, uint32_t ulDataLen) {
+    if(!ulPending) 
+        return 1;
     if(pucData == NULL) pucData = (uint8_t *)json_null;
     uint32_t ulCallId;
     bApiCallGetId(pxApiCall, &ulCallId);
-    uint32_t *tmp = (uint32_t *)ppxContext;
-    if(*tmp == 0) {
+    if(ulPending == 1) {
         ESP_LOGI(TAG, "WS first cont handler call %lu, with arg:%s", ulCallId, pucData);
         bApiCallSendStatus(pxApiCall, API_CALL_STATUS_EXECUTING);
-        *tmp = 1;
     }
     else {
         bApiCallSendStatus(pxApiCall, API_CALL_STATUS_CANCELED);
+        vApiCallComplete(pxApiCall);
         ESP_LOGI(TAG, "WS cont handler canceled call %lu, with arg:%s", ulCallId, pucData);
         return 1;
     }
@@ -74,17 +77,18 @@ static void vAsyncTestWorker( void * pvParameters ) {
 }
 
 uint8_t bApiHandlerSubs(void *pxApiCall, void **ppxContext, uint32_t ulPending, uint8_t *pucData, uint32_t ulDataLen) {
+    if(!ulPending) 
+        return 1;
     uint32_t ulCallId; 
     bApiCallGetId(pxApiCall, &ulCallId);
-    uint32_t *tmp = (uint32_t *)ppxContext;
     if(pucData == NULL) pucData = (uint8_t *)json_null;
-    if(*tmp == 0) {
+    if(ulPending == 1) {
         ESP_LOGI(TAG, "WS subscribtion handler call %lu, with arg:%s", ulCallId, pucData);
         bApiCallSendStatus(pxApiCall, API_CALL_STATUS_EXECUTING);
-        *tmp = 1;
     }
     else {
-        bApiCallSendStatus(pxApiCall, API_CALL_STATUS_COMPLETE);
+        bApiCallSendStatus(pxApiCall, API_CALL_STATUS_CANCELED);
+        vApiCallComplete(pxApiCall);
         ESP_LOGI(TAG, "WS subscribtion handler canceled call %lu, with arg:%s", ulCallId, pucData);
         return 1;
     }
@@ -127,6 +131,8 @@ typedef struct {
 #define ESP_WS_API_MODBUS_ID    2000
 
 uint8_t bApiHandlerModbus(void *pxApiCall, void **ppxContext, uint32_t ulPending, uint8_t *pucData, uint32_t ulDataLen) {
+    if(!ulPending) 
+        return 1; /* todo: stop modbus polling */
     static uint32_t taskId = 0;
     if(!ulPending || (pucData == NULL)) return 1;
     ApiContextModbus_t *context = (ApiContextModbus_t *)*ppxContext;
@@ -241,6 +247,8 @@ typedef struct {
 #define ESP_WS_API_UART_ID    3000
 
 uint8_t bApiHandlerUart(void *pxApiCall, void **ppxContext, uint32_t ulPending, uint8_t *pucData, uint32_t ulDataLen) {
+    if(!ulPending) 
+        return 1;
     static uint32_t taskId = 0;
     if(!ulPending) return 1;
     if(pucData == NULL) {
@@ -339,8 +347,10 @@ static void vModbusCb(modbus_t *mb, void *context, modbus_frame_t *frame) {
     if(response == NULL) {
         uint8_t buf[40];
         uint32_t len = sprintf((char *)buf, "{\"STA\":\"0x%08x\",\"TID\":\"0x%08lx\"}", API_CALL_ERROR_STATUS_NO_MEM, task->ulTaskID);
-        if(!bApiCallSendJson(task->pxApiCall, buf, len)) task->ulTransferError++;
-        else task->ulTransferError = 0;
+        if(!bApiCallSendJson(task->pxApiCall, buf, len)) 
+            task->ulTransferError++;
+        else 
+            task->ulTransferError = 0;
         return;
     }
     uint32_t offset = sprintf((char *)response, 
@@ -362,8 +372,10 @@ static void vModbusCb(modbus_t *mb, void *context, modbus_frame_t *frame) {
     response[offset++] = ']';
     response[offset++] = '}';
     response[offset] = '\0';
-    if(!bApiCallSendJson(task->pxApiCall, response, offset)) task->ulTransferError++;
-    else task->ulTransferError = 0;
+    if(!bApiCallSendJson(task->pxApiCall, response, offset)) 
+        task->ulTransferError++;
+    else 
+        task->ulTransferError = 0;
     free(response);
 }
 
@@ -530,7 +542,8 @@ void app_main(void)
                 if(pxCmdCurrentModbus != NULL) {
                     vLinkedListUnlink(pxCmdCurrentModbus);
                     pxCmdMb = LinkedListGetObject(ApiCmdModbus_t, pxCmdCurrentModbus);
-                    if((!pxCmdMb->ulRepeatDelay) || (pxCmdMb->ulTransferError)) vCmdModbusFree(pxCmdMb);
+                    if((!pxCmdMb->ulRepeatDelay) || (pxCmdMb->ulTransferError)) 
+                        vCmdModbusFree(pxCmdMb);
                     else {
                         pxCmdMb->ulTimestamp += pxCmdMb->ulRepeatDelay;
                         if((now - pxCmdMb->ulTimestamp) > pxCmdMb->ulRepeatDelay) pxCmdMb->ulTimestamp = now - pxCmdMb->ulRepeatDelay;
