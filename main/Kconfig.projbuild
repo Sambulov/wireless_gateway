@@ -5,6 +5,11 @@ menu "Project Configuration"
         default 80
         help
             Set server port number used by web serer.
+    config WEB_SOCKET_MAX_CLIENTS
+        int "Web server port"
+        default 10
+        help
+            Maximum allowed websocket clients.
     config WEB_SOCKET_PING_DELAY
         int "Web-socket ping delay"
         default 1000

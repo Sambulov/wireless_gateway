@@ -19,7 +19,6 @@
 
 #include "app.h"
 
-static const char *TAG = "connection";
 extern httpd_handle_t server;
 
 #define NET_IF_AMOUNT  4
@@ -101,7 +100,7 @@ err:
 
 static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data) {
     //app_context_t* app = (app_context_t*) arg;
-
+    /* todo AP client disconnected kill all sockets by client */
     ESP_LOGI(TAG, "Event id: %ld, base: %ld", event_id, (uint32_t)event_base);
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
 	ESP_LOGI(TAG, "Wi-Fi disconnected, kill all sockets...");

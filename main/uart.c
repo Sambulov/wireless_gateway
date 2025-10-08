@@ -6,8 +6,6 @@
 #include "app.h"
 #include "uart.h"
 
-static const char *TAG = "uart";
-
 typedef struct {
     QueueHandle_t uart_queue;
     int port; // UART_NUM_0, UART_NUM_1, UART_NUM_2

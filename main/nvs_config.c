@@ -12,8 +12,6 @@
 #define NVS_KEY_STA_SSID "sta_ssid"
 #define NVS_KEY_STA_PASS "sta_pass"
 
-static const char *TAG = "nvs_config";
-
 
 void save_wifi_sta_config(const char *ssid, const char *password) {
     nvs_handle_t nvs_handle;

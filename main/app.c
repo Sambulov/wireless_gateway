@@ -21,8 +21,6 @@
 
 #include "CodeLib.h"
 
-static const char *TAG = "app";
-
 static const uint8_t json_null[] = "\"null\"";
 
 #define ESP_WS_API_ECHO_ID    1000
@@ -511,6 +509,13 @@ void app_main(void)
     //uint32_t timer = xTaskGetTickCount();
     //uint32_t cycles_count = 0;
     while (1) {
+// #if 1
+//     //TODO: add to debug build, remove from release
+//     uint32_t heap = (uint32_t)heap_caps_get_free_size(MALLOC_CAP_DEFAULT);
+//     if(heap < 30000)
+//         ESP_LOGE(TAG, "Heap left:%lu", heap);
+// #endif
+
         uint8_t rep = 100;
         while (rep--) {
             uint32_t now = xTaskGetTickCount();

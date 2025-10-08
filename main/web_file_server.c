@@ -13,8 +13,6 @@
 
 #include "app.h"
 
-static const char *TAG = "http_server_handlers";
-
 #define FILE_PATH_MAX  256
 
 #define MAX_FILE_SIZE   (200*1024) // 200 KB

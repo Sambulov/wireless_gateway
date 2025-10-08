@@ -15,8 +15,7 @@
 #include <esp_http_server.h>
 #include <stdio.h>
 
-static const char *TAG = "file_system_helpers";
-
+#include "app.h"
 
 
 /* Littlefs */

@@ -11,6 +11,10 @@
 #include "esp_wifi_types_generic.h"
 #include "esp_wifi_types.h"
 
+#define TAG_S(x)  #x
+#define TAG_SX(x) TAG_S(x)
+#define TAG  TAG_SX(__FILE__) " " TAG_SX(__LINE__)
+
 #ifdef __cplusplus
 extern "C" {
 #endif
