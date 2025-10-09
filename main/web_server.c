@@ -6,7 +6,8 @@
 
 httpd_handle_t server = NULL;
 
-static uint32_t ws_connections = CONFIG_WEB_SOCKET_MAX_CLIENTS;
+//static uint32_t ws_connections_left = CONFIG_WEB_SERVER_MAX_CLIENTS;
+static uint32_t ws_connections_left = 3; /* internally limited */
 
 static void httpd_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data) {
     switch (event_id) {
@@ -17,8 +18,15 @@ static void httpd_event_handler(void *arg, esp_event_base_t event_base, int32_t 
           ESP_LOGW(TAG, "started");
           break;
         case HTTP_SERVER_EVENT_ON_CONNECTED : //int
-          ws_connections--;
-          ESP_LOGW(TAG, "new connection: '%08lx'; connections left %lu", (uint32_t)event_data, ws_connections);
+
+          /* todo: unsafe, use mutex */
+          //if (!ws_connections_left) {
+          //  httpd_sess_trigger_close((httpd_handle_t)arg, *(int*)event_data);
+          //  ESP_LOGI(TAG, "Connection rejected (limit reached)");
+          //} else {
+            ws_connections_left--;
+            ESP_LOGW(TAG, "new connection: '%08lx'; connections left %lu", (uint32_t)event_data, ws_connections_left);
+          //}
           break;
         case HTTP_SERVER_EVENT_ON_HEADER : //int
           ESP_LOGW(TAG, "on header: '%08lx'", (uint32_t)event_data);
@@ -35,7 +43,7 @@ static void httpd_event_handler(void *arg, esp_event_base_t event_base, int32_t 
             ((esp_http_server_event_data *)event_data)->fd, ((esp_http_server_event_data *)event_data)->data_len);
           break;
         case HTTP_SERVER_EVENT_DISCONNECTED : //int
-          ws_connections++;
+          ws_connections_left++;
           ESP_LOGW(TAG, "disconnected: '%08lx'", (uint32_t)event_data);
           break;
         case HTTP_SERVER_EVENT_STOP : //NULL
@@ -57,6 +65,10 @@ httpd_handle_t start_webserver(void)
     config.keep_alive_idle = 30;
     config.keep_alive_interval = 5;
     config.keep_alive_count = 3;
+
+    /* max allowed 7, 3 sockets used by HTTP server internally */
+    //config.max_open_sockets = CONFIG_WEB_SERVER_MAX_CLIENTS;
+
     //config.open_fn = ws_open_fd;
     //config.close_fn = ws_close_fd;
 

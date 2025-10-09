@@ -5,11 +5,16 @@ menu "Project Configuration"
         default 80
         help
             Set server port number used by web serer.
-    config WEB_SOCKET_MAX_CLIENTS
-        int "Web server port"
+    config WEB_SERVER_MAX_CLIENTS
+        int "Web server connections"
         default 10
         help
-            Maximum allowed websocket clients.
+            Maximum allowed web clients connections.
+    config WEB_SOCKET_MAX_PENDING_API
+        int "Pending number"
+        default 20
+        help
+            Maximum queue length of incoming API requests.
     config WEB_SOCKET_PING_DELAY
         int "Web-socket ping delay"
         default 1000
