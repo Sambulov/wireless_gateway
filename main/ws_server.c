@@ -26,6 +26,7 @@ typedef struct {
     int32_t pending_api;
     uint32_t ulAliveTs;
     uint32_t ulPingTs;
+    delegate_t delegate;
 } ApiSession_t;
 
 typedef struct {
@@ -50,6 +51,8 @@ static SemaphoreHandle_t xWsNewApiReqSem = NULL;
 static LinkedList_t pxWsApiHandlers = NULL;
 static LinkedList_t pxWsApiCall = NULL;
 static LinkedList_t pxWsApiNewCall = NULL;
+
+extern httpd_handle_t server;
 
 static uint8_t bHandlerFidMatch(LinkedListItem_t *item, void *arg) {
     uint32_t fid = (uint32_t)arg;
@@ -281,6 +284,7 @@ uint8_t bApiCallSendJsonFidGroup(uint32_t ulFid, const uint8_t *ucJson, uint32_t
 
 void free_ctx_func(void *ctx) {
     ESP_LOGI(TAG, "Free session: %p", ctx);
+    event_unsubscribe(&((ApiSession_t *)ctx)->delegate);
     vBreakApiCallsByFd(10, ((ApiSession_t *)ctx)->fd);
     free(ctx);
 }
@@ -392,6 +396,11 @@ static inline void frame_cleanup(httpd_ws_frame_t *ws_pkt) {
     free(ws_pkt->payload);
 }
 
+void link_event_handler(void *event_trigger, void *sender, void *context) {
+    ESP_LOGI(TAG, "Trigger FD close %p", context);
+    httpd_sess_trigger_close(server, (int)context);
+}
+
 static esp_err_t frame_receive(httpd_req_t *req, httpd_ws_frame_t *ws_pkt, uint32_t fd) {
     ESP_LOGI(TAG, "--> req %p, meth: %x", req->handle, req->method);
     ApiSession_t *sess;
@@ -402,8 +411,12 @@ static esp_err_t frame_receive(httpd_req_t *req, httpd_ws_frame_t *ws_pkt, uint3
             sess->fd = fd;
             sess->hd = req->handle;
             sess->ulPingTs = sess->ulAliveTs = xTaskGetTickCount();
+            sess->delegate.context = (void *)fd;
+            sess->delegate.handler = &link_event_handler;
+            socket_link_subscribe(fd, &sess->delegate);
             req->sess_ctx = sess;
             req->free_ctx = free_ctx_func;
+
             ESP_LOGI(TAG, "Handshake done, the new connection was opened, session %p", sess);
             return ESP_OK;
         }

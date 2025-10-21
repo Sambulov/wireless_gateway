@@ -33,13 +33,13 @@ uint8_t bApiHandlerEcho(void *pxApiCall, void **ppxContext, uint32_t ulPending, 
     }
     ESP_LOGI(TAG, "WS echo handler call with arg: %s", pucData);
     bApiCallSendJson(pxApiCall, pucData, ulDataLen);
-    int fd;
-    if(bApiCallGetSockFd(pxApiCall, &fd)) {
-        esp_netif_t *nif = pxGetNetIfFromSocket(fd);
-        if(nif != NULL) {
-            ESP_LOGI(TAG, "Echo api call from: %s", esp_netif_get_ifkey(nif));
-        }
-    }
+    //int fd;
+    //if(bApiCallGetSockFd(pxApiCall, &fd)) {
+        //esp_netif_t *nif = pxGetNetIfFromSocket(fd);
+        //if(nif != NULL) {
+        //    ESP_LOGI(TAG, "Echo api call from: %s", esp_netif_get_ifkey(nif));
+        //}
+    //}
     return 1;
 }
 
