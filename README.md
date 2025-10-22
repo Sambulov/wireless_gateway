@@ -49,15 +49,39 @@ Response: `{"FID":"0x000007d0","SID":"0x00000006","ARG":{"TID":"0x0000000A","ADR
 Request: `{"FID":2000,"ARG":{"TIDC":10}}`\
 Response: `{"FID":"0x000007d0","SID":"0x00000006","ARG":{"STA":"0x00000002"}`
 
-### UART (3000)
+### UART 
+
+#### (0x1010) Config port1
+#### (0x1020) Config port2
 BR(optional) {dword} - boudrate\
 PAR(optional) {byte} - parity (0 - none; 1 - odd; 2 - even)\
-WL(optional) {byte} - word length (0 - 7bits; 1 - 8bits)\
-SB(optional) {byte} - stop bits (0 - 1sb; 1 - 2sb; 2 - unsupported; 3 - 1,5sb)\
+WL(optional) {byte} - word length (7 - 7bits; 8 - 8bits)\
+SB(optional) {byte} - stop bits (0 - 0.5sb unsupported; 1 - 1sb; 2 - 2sb; 3 - 1,5sb)\
 no arg - subscription on uart notifications (e.g. config change)\
 #### Example:
-Request: `{"FID":3000,"ARG":{"BR":115200}}` set boudrate and left untouched other options\
-Response(public): `{"FID":"0x00000bb8","SID":"0x00037053","ARG":{"BR":"0x0001c200","WL":"0x01","PAR":"0x00","SB":"0x00"}}`
+Request: `{"FID":"1001","ARG":{"BR":115200}}` set boudrate and left untouched other options\
+Response(public): `{"FID":"0x00001001","SID":"0x00037053","ARG":{"BR":"0x0001c200","WL":"0x08","PAR":"0x00","SB":"0x01"}}`
+
+#### (0x1011) Subscribe on port1 data receive 
+#### (0x1021) Subscribe on port2 data receive
+No args
+#### Example:
+Request `{"FID":"1011"}`\
+Response(personal) `{"FID":"0x00001002","SID":"0x00000224","ARG":{"STA":"0x00000001"}}`\
+Response(public) `{"FID":"0x00001011","SID":"0x0010e525","ARG":"313233343536373839300d"}`\
+...\
+Secondary request `{"FID":"1011"}`\
+Response(personal) `{"FID":"0x000003e9","SID":"0x00000224","ARG":{"STA":"0x00000002"}}`\
+User subscription cancelled
+
+There is port hex encoded raw data string in public responces.
+
+#### (0x1012) Transmit data with port1 
+#### (0x1022) Transmit data with port2
+Arg is hex encoded raw data string
+#### Example:
+Request `{"FID":"1012", "ARG":"30313233343536373839"}`\
+Response(personal) `{"FID":"0x000003e9","SID":"0x00000225","ARG":{"STA":"0x00000001"}}`\
 
 ## Firmware side
 

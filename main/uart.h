@@ -13,9 +13,9 @@ typedef enum {
 } gw_uart_parity_t;
 
 typedef enum {
-  GW_UART_STOP_BITS1      = 0,
-  GW_UART_STOP_BITS2      = 1,
-  GW_UART_STOP_BITS0_5    = 2, /* unsupported */
+  GW_UART_STOP_BITS0_5    = 0, /* unsupported */
+  GW_UART_STOP_BITS1      = 1,
+  GW_UART_STOP_BITS2      = 2,
   GW_UART_STOP_BITS1_5    = 3
 } gw_uart_stop_bits_t;
 
@@ -27,7 +27,7 @@ typedef enum {
 
 #define GW_UART_PRIVATE(size)    uint32_t __private[(size + sizeof(void *) - 1) >> 2]
 
-#define GW_UART_PRIVATE_SIZE     8
+#define GW_UART_PRIVATE_SIZE     40
 
 typedef struct {
   GW_UART_PRIVATE(GW_UART_PRIVATE_SIZE);
@@ -46,4 +46,4 @@ uint8_t gw_uart_init(void *desc, gw_uart_port_t port, uint32_t buffer_size);
 int32_t gw_uart_read(void *desc, uint8_t *buf, uint16_t size);
 int32_t gw_uart_write(void *desc, const uint8_t *buf, uint16_t size);
 uint8_t gw_uart_set(void *desc, const gw_uart_config_t *cnf);
-
+uint8_t gw_uart_get(void *desc, gw_uart_config_t *out_cnf);

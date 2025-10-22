@@ -137,7 +137,7 @@ static void vWsTransferComplete_cb(esp_err_t err, int socket, void *arg) {
     ApiData_t *apiData = (ApiData_t *)arg;
     ESP_LOGI(TAG, "Transfer Complete, err: %d, fd: %x", err, socket);
     if(err) 
-        vBreakApiCallsByFd(0, socket);
+        vBreakApiCallsByFd(100, socket);
     if((!apiData->counter) || !(--apiData->counter)) {
         free(arg);
     }
@@ -188,9 +188,9 @@ void vApiCallComplete(void *pxApiCall) {
     if(bLinkedListContains(pxWsApiCall, LinkedListItem(call))) {
         if(call->ulCallPending)
             call->ulCallPending--;
-        else 
+        if(!call->ulCallPending) 
             call->session = NULL;
-    };
+    }
     xSemaphoreGiveRecursive(xWsApiMutex);
 }
 
@@ -200,19 +200,6 @@ uint8_t bApiCallGetId(void *pxApiCall, uint32_t *pulOutId) {
     ApiCall_t *call = (ApiCall_t *)pxApiCall;
     if(bLinkedListContains(pxWsApiCall, LinkedListItem(call)) && call->session) {
         *pulOutId = call->ulId;
-        xSemaphoreGiveRecursive(xWsApiMutex);
-        return 1;
-    }
-    xSemaphoreGiveRecursive(xWsApiMutex);
-    return 0;
-}
-
-uint8_t bApiCallGetSockFd(void *pxApiCall, int *pxOutFd) {
-    if((pxApiCall == NULL) || (pxOutFd == NULL)) return 0;
-    xSemaphoreTakeRecursive(xWsApiMutex, portMAX_DELAY);
-    ApiCall_t *call = (ApiCall_t *)pxApiCall;
-    if(bLinkedListContains(pxWsApiCall, LinkedListItem(call)) && call->session) {
-        *pxOutFd = call->session->fd;
         xSemaphoreGiveRecursive(xWsApiMutex);
         return 1;
     }
@@ -542,3 +529,14 @@ httpd_uri_t *pxWsServerInit(char *uri) {
     }
     return ws_h;
 }
+
+
+uint8_t api_call_register(api_handler_t, uint32_t, void *) __attribute__ ((alias ("bApiCallRegister")));
+uint8_t api_call_unregister(uint32_t) __attribute__ ((alias ("bApiCallUnregister")));
+
+uint8_t api_call_get_id(void *, uint32_t *) __attribute__ ((alias ("bApiCallGetId")));
+void api_call_complete(void *) __attribute__ ((alias ("vApiCallComplete")));
+
+uint8_t api_call_send_status(void *, uint32_t) __attribute__ ((alias ("bApiCallSendStatus")));
+uint8_t api_call_send_json(void *, const uint8_t *, uint32_t) __attribute__ ((alias ("bApiCallSendJson")));
+uint8_t api_call_send_json_fid_group(uint32_t, const uint8_t *, uint32_t) __attribute__ ((alias ("bApiCallSendJsonFidGroup")));

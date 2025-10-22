@@ -27,21 +27,30 @@
 */
 typedef uint8_t (*ApiHandler_t)(void *pxApiCall, void **ppxContext, uint32_t ulPending, uint8_t *pucData, uint32_t ulDataLen);
 
-//typedef void (*ApiDataSerializer_t)(uint8_t *pucBuf, uint32_t *ulInOutSize, void *pxArg);
-
 uint8_t bApiCallRegister(ApiHandler_t fHandler, uint32_t ulFid, void *pxContext);
 uint8_t bApiCallUnregister(uint32_t ulFid);
 
-//uint8_t bApiCallGetData(void *pxApiCall, uint8_t **ppucData, uint32_t *ulOutDataLen);
 uint8_t bApiCallGetId(void *pxApiCall, uint32_t *ulOutId);
-uint8_t bApiCallGetSockFd(void *pxApiCall, int *pxOutFd);
 void vApiCallComplete(void *pxApiCall);
 
 uint8_t bApiCallSendStatus(void *pxApiCall, uint32_t ulSta);
 uint8_t bApiCallSendJson(void *pxApiCall, const uint8_t *ucJson, uint32_t ulLen);
 uint8_t bApiCallSendJsonFidGroup(uint32_t ulFid, const uint8_t *ucData, uint32_t ulLen);
 
-//uint8_t bApiCallSendFidGroupSerializer(uint32_t ulFid, ApiDataSerializer_t fSerializer, void *pxArg);
-//uint8_t bApiCallSendSerializer(void *pxApiCall, ApiDataSerializer_t fSerializer, void *pxArg);
+/*
+	Snake notation
+*/
+
+typedef ApiHandler_t api_handler_t;
+
+uint8_t api_call_register(api_handler_t handler, uint32_t fid, void *context);
+uint8_t api_call_unregister(uint32_t fid);
+
+uint8_t api_call_get_id(void *call, uint32_t *out_id);
+void api_call_complete(void *call);
+
+uint8_t api_call_send_status(void *call, uint32_t staus);
+uint8_t api_call_send_json(void *call, const uint8_t *json, uint32_t len);
+uint8_t api_call_send_json_fid_group(uint32_t fid, const uint8_t *json, uint32_t len);
 
 #endif /* NWWEB_H_INCLUDED */ 

@@ -9,6 +9,7 @@
 typedef struct {
     QueueHandle_t uart_queue;
     int port; // UART_NUM_0, UART_NUM_1, UART_NUM_2
+    uart_config_t cnf;
 } gw_uart_private_t;
 
 #define ASSERRT_STRUCTURE_CAST(private_type, public_type, prv_size_def, def_file)   _Static_assert(sizeof(private_type) == sizeof(public_type), "In "def_file" data structure size of "#public_type" doesn't match, check "#prv_size_def)
@@ -83,6 +84,39 @@ static void uart_event_task(void *pvParameters)
     vTaskDelete(NULL);
 }
 
+uint8_t gw_uart_get(void *desc, gw_uart_config_t *out_cnf) {
+    gw_uart_private_t *uart = (gw_uart_private_t *) desc;
+    gw_uart_word_t bits;
+    uint32_t boud = uart->cnf.baud_rate;
+    gw_uart_parity_t parity;
+    gw_uart_stop_bits_t stop;
+    switch (uart->cnf.data_bits) {
+        case UART_DATA_7_BITS: bits = GW_UART_WORD_7BIT; break;
+        case UART_DATA_8_BITS: bits = GW_UART_WORD_8BIT; break;
+        default: return 0;
+    }
+    switch (uart->cnf.parity) {
+        case UART_PARITY_DISABLE: parity = GW_UART_PARITY_NONE; break;
+        case UART_PARITY_ODD: parity = GW_UART_PARITY_ODD; break;
+        case UART_PARITY_EVEN: parity = GW_UART_PARITY_EVEN; break;
+        default: return 0;
+    }
+    switch (uart->cnf.stop_bits) {
+        case UART_STOP_BITS_1: stop = GW_UART_STOP_BITS1; break;
+        case UART_STOP_BITS_1_5: stop = GW_UART_STOP_BITS1_5; break;
+        case UART_STOP_BITS_2: stop = GW_UART_STOP_BITS2; break;
+        default: return 0;
+    }
+    if(out_cnf != NULL) {
+        out_cnf->boud = boud;
+        out_cnf->bits = bits;
+        out_cnf->parity = parity;
+        out_cnf->stop = stop;
+        return 1;
+    }
+    return 0;
+}
+
 uint8_t gw_uart_set(void *desc, const gw_uart_config_t *cnf) {
     gw_uart_private_t *uart = (gw_uart_private_t *) desc;
     gw_uart_word_t bits = cnf->bits;
@@ -108,14 +142,30 @@ uint8_t gw_uart_set(void *desc, const gw_uart_config_t *cnf) {
         case GW_UART_STOP_BITS0_5:
         default: return 0;
     }
-    const uart_config_t new_config = {
-        .baud_rate = boud,
-        .data_bits = bits,
-        .parity = parity,
-        .stop_bits = stop,
-        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
-        .rx_flow_ctrl_thresh = 122,
-    };
+    uart->cnf.baud_rate = boud;
+    uart->cnf.data_bits = bits;
+    uart->cnf.parity = parity;
+    uart->cnf.stop_bits = stop;
+    uart->cnf.flow_ctrl = UART_HW_FLOWCTRL_DISABLE;
+    uart->cnf.rx_flow_ctrl_thresh = 122;
+    if (uart_param_config(uart->port, &uart->cnf) == ESP_OK) {
+        ESP_LOGI(TAG, "UART configured: port %d, boud: %lu", uart->port, boud);
+        return 1;
+    }
+    ESP_LOGW(TAG, "UART config failed");
+    return 0;
+}
+
+uint8_t gw_uart_init(void *desc, gw_uart_port_t port, uint32_t buffer_size) {
+    gw_uart_private_t *uart = (gw_uart_private_t *) desc;
+    switch (port) {
+        case GW_UART_PORT_0: port = UART_NUM_0; break;
+        case GW_UART_PORT_1: port = UART_NUM_1; break;
+        case GW_UART_PORT_2: port = UART_NUM_2; break;
+        default: return 0;
+    }
+    uart->port = port;
+    uint8_t result = gw_uart_set(desc, &gw_uart_config_default);
     int rxp, txp, rts, cts = UART_PIN_NO_CHANGE;
     /*  
     UART0      RX TX RTS CTS
@@ -130,27 +180,12 @@ uint8_t gw_uart_set(void *desc, const gw_uart_config_t *cnf) {
         /* fall through */
         default: return 0;
     }
-    uint8_t result = 1;
     result = result && (uart_set_pin(uart->port, txp, rxp, rts, cts) == ESP_OK);
-    result = result && (uart_param_config(uart->port, &new_config) == ESP_OK);
-    ESP_LOGI(TAG, "UART configured: port %d, tx_pin: %d, rx_pin: %d, boud: %lu", uart->port, txp, rxp, boud);
-    return result;
-}
-
-uint8_t gw_uart_init(void *desc, gw_uart_port_t port, uint32_t buffer_size) {
-    gw_uart_private_t *uart = (gw_uart_private_t *) desc;
-    switch (port) {
-        case GW_UART_PORT_0: port = UART_NUM_0; break;
-        case GW_UART_PORT_1: port = UART_NUM_1; break;
-        case GW_UART_PORT_2: port = UART_NUM_2; break;
-        default: return 0;
-    }
-    uart->port = port;
-    uint8_t result = gw_uart_set(desc, &gw_uart_config_default);
     result = result && (uart_driver_install(port, buffer_size, buffer_size, 10, &uart->uart_queue, 0) == ESP_OK);
     result = result && (uart_set_mode(uart->port, UART_MODE_RS485_HALF_DUPLEX) == ESP_OK);
-    //ESP_ERROR_CHECK(uart_enable_rx_intr(uart->port));
     result = result && (xTaskCreate(uart_event_task, "uart_event", 4096, uart, tskIDLE_PRIORITY, NULL) == pdPASS);
+    if(result)
+        ESP_LOGI(TAG, "UART port %d init OK", uart->port);
     return result;
 }
 
