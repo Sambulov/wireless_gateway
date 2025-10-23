@@ -200,12 +200,12 @@ void api_handler_uart_work(app_context_t *app) {
         }
     } while (cmd);
     uint32_t now = task_get_tick_count();
-    if(CL_TIME_ELAPSED(app->uart.raw_sent_ts, 50, now)) {
+    if(CL_TIME_ELAPSED(app->uart.raw_sent_ts, 10, now)) {
         app->uart.raw_sent_ts = now;
-        uint8_t raw_data[512];
+        uint8_t raw_data[1024];
         for(uint8_t no = 0; no < 2; no++) {
             if(app->uart.port[no].mode == UART_PORT_MODE_RAW) {
-                int32_t len = gw_uart_read(&app->uart.port[no].desc, raw_data, 512);
+                int32_t len = gw_uart_read(&app->uart.port[no].desc, raw_data, 1024);
                 if(len > 0) {
                     uint8_t buf[len * 2 + 2];
                     buf[0] = buf[len * 2 + 1] = '\"';
