@@ -460,13 +460,12 @@ static void vWsApiCallWorker(void *pvParameters) {
         xSemaphoreTakeRecursive(xWsApiMutex, portMAX_DELAY);
         ulLinkedListDoForeach(pxWsApiCall, vServeApiCall, NULL);
         xSemaphoreGiveRecursive(xWsApiMutex);
-        if(pxWsApiNewCall || (xSemaphoreTake(xWsNewApiReqSem, pdMS_TO_TICKS(10)) == pdPASS)) {
-            xSemaphoreTake(xWsNewApiReqSem, 0);
+        if(xSemaphoreTake(xWsNewApiReqSem, pdMS_TO_TICKS(10)) == pdPASS) {
+            xSemaphoreTakeRecursive(xWsApiMutex, portMAX_DELAY);
             ApiCall_t *call = LinkedListGetObject(ApiCall_t, pxWsApiNewCall);
             call->fHandler = NULL;
             call->pxHandlerContext = NULL;
             call->ulId = call_id++;
-            xSemaphoreTakeRecursive(xWsApiMutex, portMAX_DELAY);
             call->session->pending_api--;
             if(call->session) {
                 ApiCall_t *call_prev = LinkedListGetObject(ApiCall_t,
@@ -524,7 +523,7 @@ httpd_uri_t *pxWsServerInit(char *uri) {
         static StaticSemaphore_t xSemBuffer;
         static StaticSemaphore_t xReqSemBuffer;
         xWsApiMutex = xSemaphoreCreateRecursiveMutexStatic( &xSemBuffer );
-        xWsNewApiReqSem = xSemaphoreCreateBinaryStatic( &xReqSemBuffer );
+        xWsNewApiReqSem = xSemaphoreCreateCountingStatic(-1, 0, &xReqSemBuffer);
         xTaskCreate(vWsApiCallWorker, "ApiCallWork", 8192, NULL, uxTaskPriorityGet(NULL), NULL); /* todo add context */
     }
     return ws_h;
