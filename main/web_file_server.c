@@ -225,7 +225,7 @@ static esp_err_t common_http_handler(httpd_req_t *req)
     set_content_type_from_file(req, path);
 
     /* Retrieve the pointer to scratch buffer for temporary storage */
-    const size_t chunksize = 512;
+    const size_t chunksize = 4096;
     char *chunk = malloc(chunksize);
     if(chunk == NULL) {
         fclose(fd);

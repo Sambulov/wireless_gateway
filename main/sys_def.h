@@ -23,6 +23,10 @@ static inline tick_type_t task_get_tick_count( void ) {
     return xTaskGetTickCount();
 }
 
+static inline void task_delay(const TickType_t ticks_to_delay) {
+    vTaskDelay(ticks_to_delay);
+}
+
 #ifdef __cplusplus
 }
 #endif

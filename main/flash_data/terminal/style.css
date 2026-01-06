@@ -1,0 +1,228 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+html, body {
+    height: 100%;
+    overflow: hidden;
+}
+
+body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+    color: #e0e0e0;
+    padding: 0;
+    margin: 0;
+}
+
+.container {
+    max-width: 1400px;
+    margin: 0 auto;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+    padding: 20px;
+}
+
+.header {
+    background: rgba(25, 25, 35, 0.9);
+    padding: 15px 20px;
+    border-radius: 10px;
+    border: 1px solid #3a3a5d;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    flex-shrink: 0;
+}
+
+.header h1 {
+    color: #4fc3f7;
+    margin-bottom: 15px;
+    font-size: 1.8em;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.controls {
+    display: flex;
+    gap: 15px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+#ws-url {
+    flex: 1;
+    min-width: 300px;
+    padding: 10px 15px;
+    background: rgba(40, 40, 60, 0.8);
+    border: 1px solid #5c6bc0;
+    border-radius: 6px;
+    color: #fff;
+    font-family: monospace;
+}
+
+button {
+    padding: 10px 20px;
+    background: linear-gradient(135deg, #5c6bc0 0%, #3949ab 100%);
+    color: white;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 600;
+    transition: all 0.3s;
+    flex-shrink: 0;
+}
+
+button:hover {
+    background: linear-gradient(135deg, #3949ab 0%, #283593 100%);
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+}
+
+button:active {
+    transform: translateY(0);
+}
+
+#clear-btn {
+    background: linear-gradient(135deg, #ef5350 0%, #d32f2f 100%);
+}
+
+#clear-btn:hover {
+    background: linear-gradient(135deg, #d32f2f 0%, #b71c1c 100%);
+}
+
+.status {
+    padding: 8px 15px;
+    border-radius: 6px;
+    font-weight: 600;
+    background: rgba(244, 67, 54, 0.2);
+    border: 1px solid #f44336;
+    flex-shrink: 0;
+}
+
+.status.connected {
+    background: rgba(76, 175, 80, 0.2);
+    border-color: #4caf50;
+}
+
+#terminal-container {
+    flex: 1;
+    min-height: 0; /* Критически важно для flexbox */
+    background: rgba(10, 10, 15, 0.95);
+    border-radius: 10px;
+    overflow: hidden;
+    border: 1px solid #3a3a5d;
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.4);
+    display: flex;
+    flex-direction: column;
+}
+
+#terminal {
+    flex: 1;
+    width: 100%;
+    padding: 10px;
+    overflow: hidden; /* Добавлено */
+}
+
+.xterm {
+    height: 100% !important;
+    padding: 0 !important;
+}
+
+.xterm-viewport {
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+}
+
+.footer {
+    background: rgba(25, 25, 35, 0.9);
+    padding: 12px 20px;
+    border-radius: 10px;
+    border: 1px solid #3a3a5d;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 15px;
+    flex-shrink: 0;
+}
+
+.info {
+    display: flex;
+    gap: 20px;
+    font-size: 0.9em;
+}
+
+.info span {
+    color: #bb86fc;
+}
+
+#connection-status {
+    color: #ff5252;
+}
+
+#connection-status.connected {
+    color: #69f0ae;
+}
+
+.help {
+    display: flex;
+    gap: 10px;
+    font-size: 0.85em;
+    color: #b0b0b0;
+}
+
+kbd {
+    background: rgba(60, 60, 80, 0.8);
+    padding: 3px 6px;
+    border-radius: 4px;
+    border: 1px solid #5c6bc0;
+    font-family: monospace;
+}
+
+/* Адаптивность */
+@media (max-width: 768px) {
+    .container {
+        padding: 10px;
+        gap: 10px;
+    }
+    
+    .controls {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    
+    #ws-url {
+        min-width: unset;
+    }
+    
+    .footer {
+        flex-direction: column;
+        text-align: center;
+        gap: 10px;
+    }
+    
+    .info {
+        justify-content: center;
+        flex-wrap: wrap;
+    }
+    
+    .header {
+        padding: 10px 15px;
+    }
+    
+    .header h1 {
+        font-size: 1.5em;
+    }
+}
+
+/* Специфические стили для xterm.js */
+.xterm-screen {
+    width: 100% !important;
+}
+
+.xterm-rows {
+    width: 100% !important;
+}

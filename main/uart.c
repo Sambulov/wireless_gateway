@@ -10,14 +10,15 @@ typedef struct {
     QueueHandle_t uart_queue;
     int port; // UART_NUM_0, UART_NUM_1, UART_NUM_2
     uart_config_t cnf;
+    event_t on_receive;
 } gw_uart_private_t;
 
 #define ASSERRT_STRUCTURE_CAST(private_type, public_type, prv_size_def, def_file)   _Static_assert(sizeof(private_type) == sizeof(public_type), "In "def_file" data structure size of "#public_type" doesn't match, check "#prv_size_def)
 
 ASSERRT_STRUCTURE_CAST(gw_uart_private_t, gw_uart_t, GW_UART_PRIVATE_SIZE, "uart.h");
 
-static void uart_event_task(void *pvParameters)
-{
+static void uart_event_task(void *pvParameters) {
+    static uint8_t buf[128];
     uart_event_t event;
     gw_uart_private_t *uart = (gw_uart_private_t *)pvParameters;
 
@@ -28,10 +29,20 @@ static void uart_event_task(void *pvParameters)
         /*We'd better handler data event fast, there would be much more data events than
         other types of events. If we take too much time on data event, the queue might
         be full.*/
-        case UART_DATA:
-            //uart_read_bytes(UART_PORT, dtmp, event.size, portMAX_DELAY);
-            //uart_write_bytes(UART_PORT, (const char*) dtmp, event.size);
+        case UART_DATA: {
+            gw_uart_event_data_t ev_trig;
+            ev_trig.buf = buf;
+            size_t size = event.size;
+            while (size) {
+                ev_trig.size = CL_MIN(size, 128);
+                int sz = uart_read_bytes(uart->port, ev_trig.buf, ev_trig.size, 0);
+                if(sz < 0) break;
+                ev_trig.size = sz;
+                event_raise(&uart->on_receive, uart, &ev_trig);
+                size -= sz;
+            }
             break;
+        }
         //Event of HW FIFO overflow detected
         case UART_FIFO_OVF:
             ESP_LOGI(TAG, "hw fifo overflow");
@@ -183,7 +194,7 @@ uint8_t gw_uart_init(void *desc, gw_uart_port_t port, uint32_t buffer_size) {
     result = result && (uart_set_pin(uart->port, txp, rxp, rts, cts) == ESP_OK);
     result = result && (uart_driver_install(port, buffer_size, buffer_size, 10, &uart->uart_queue, 0) == ESP_OK);
     result = result && (uart_set_mode(uart->port, UART_MODE_RS485_HALF_DUPLEX) == ESP_OK);
-    result = result && (xTaskCreate(uart_event_task, "uart_event", 4096, uart, tskIDLE_PRIORITY, NULL) == pdPASS);
+    result = result && (xTaskCreate(uart_event_task, "uart_event", 4096, uart, tskIDLE_PRIORITY + 4, NULL) == pdPASS);
     if(result)
         ESP_LOGI(TAG, "UART port %d init OK", uart->port);
     return result;
@@ -196,12 +207,33 @@ const gw_uart_config_t gw_uart_config_default = {
     .boud = 115200
 };
 
-int32_t gw_uart_read(void *desc, uint8_t *buf, uint16_t size) {
-    gw_uart_private_t *uart = (gw_uart_private_t *) desc;
-	return uart_read_bytes(uart->port, buf, size, 0);
-}
+// int32_t gw_uart_read(void *desc, uint8_t *buf, uint16_t size) {
+//     gw_uart_private_t *uart = (gw_uart_private_t *) desc;
+// 	return uart_read_bytes(uart->port, buf, size, 0);
+// }
 
 int32_t gw_uart_write(void *desc, const uint8_t *buf, uint16_t size) {
     gw_uart_private_t *uart = (gw_uart_private_t *) desc;
 	return uart_write_bytes(uart->port, buf, size);
+}
+
+// int32_t gw_uart_available_read(void *desc) {
+//     gw_uart_private_t *uart = (gw_uart_private_t *) desc;
+//     size_t size;
+//     if(uart_get_buffered_data_len(uart->port, &size) == ESP_OK)
+//         return (int32_t)size;
+//     return -1;
+// }
+
+int32_t gw_uart_available_write(void *desc) {
+    gw_uart_private_t *uart = (gw_uart_private_t *) desc;
+    size_t size;
+    if(uart_get_tx_buffer_free_size(uart->port, &size) == ESP_OK)
+        return (int32_t)size;
+    return -1;
+}
+
+void gw_uart_on_receive_subscribe(void *desc, delegate_t *delegate) {
+    gw_uart_private_t *uart = (gw_uart_private_t *) desc;
+    event_subscribe(&uart->on_receive, delegate);
 }

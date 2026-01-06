@@ -293,7 +293,7 @@ static esp_err_t frame_handle_text(httpd_req_t *req, httpd_ws_frame_t *ws_pkt, u
                     cJSON *arg_json = cJSON_GetObjectItem(json, "ARG");
                     if(arg_json != NULL) {
                         wscd->pucReqData = (uint8_t *)cJSON_PrintUnformatted(arg_json);
-                        wscd->ulReqDataLen = lStrLen(wscd->pucReqData);
+                        wscd->ulReqDataLen = lStrLen((char *)wscd->pucReqData);
                         ESP_LOGI(TAG, "Api arg %s", wscd->pucReqData);
                     }
                     wscd->ulCallPending = 1;

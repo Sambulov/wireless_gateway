@@ -6,7 +6,6 @@
 
 static const uint8_t json_null[] = "\"null\"";
 
-#define ESP_WS_API_ECHO_ID    1000
 uint8_t bApiHandlerEcho(void *pxApiCall, void **ppxContext, uint32_t ulPending, uint8_t *pucData, uint32_t ulDataLen) {
     if(!ulPending) 
         return 1;

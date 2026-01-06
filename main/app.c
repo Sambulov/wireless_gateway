@@ -69,8 +69,6 @@ void app_main(void)
         ESP_LOGI("app", "Uart0 ok");
     if(gw_uart_init(&(app_context.uart.port[1].desc), GW_UART_PORT_2, 2048))
         ESP_LOGI("app", "Uart2 ok");
-    app_context.uart.port[0].mode = UART_PORT_MODE_RAW;
-    app_context.uart.port[1].mode = UART_PORT_MODE_RAW;
 
     setup_littlefs();
 
@@ -91,11 +89,11 @@ void app_main(void)
     ESP_LOGI(TAG, "Run");
 
     while (1) {
-        xTaskCreatePinnedToCore(vDallasSensorTask, "DallasSensorTask", 4096, NULL, 5, NULL, tskNO_AFFINITY);
+        //xTaskCreatePinnedToCore(vDallasSensorTask, "DallasSensorTask", 4096, NULL, 5, NULL, tskNO_AFFINITY);
         api_handler_system_work(&app_context);
         api_handler_uart_work(&app_context);
         //api_handler_modbus_work(&app_context);
         /* give other tasks to work, also idle task to reset wdt */
-        vTaskDelay(pdMS_TO_TICKS(1));
+        task_delay(pdMS_TO_TICKS(1));
     }
 }

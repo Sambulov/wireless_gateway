@@ -24,7 +24,6 @@ static uint8_t _api_handler_uart_cnf(void *call, void **context, uint32_t pendin
         return 1;
     if(arg == NULL) { /* If call with no args, do public subscription on uarts config change */
         if(pending == 1) { /* If first time call, subscribe. We will notyfy all clients by FID */
-            /* TODO: trigger notifycation */
             api_call_send_status(call, API_CALL_STATUS_EXECUTING);
             return 0;
         }
@@ -97,36 +96,34 @@ static uint8_t _api_handler_uart2_cnf(void *call, void **context, uint32_t pendi
 static uint8_t _api_handler_uart_raw_tx(void *call, void **context, uint32_t pending, uint8_t *arg, uint32_t arg_len, uint8_t port_no) {
     uint32_t status = API_CALL_ERROR_STATUS_BAD_ARG;
     uint8_t *data = NULL;
-    uint8_t valid_arg = arg && (arg_len > 3) && ((arg_len & 1) == 0) && (arg[0] == '"') && ((arg[arg_len - 1] == '"'));
+    uint8_t valid_arg = arg && (arg_len > 5) && (arg[0] == '"') && ((arg[arg_len - 1] == '"'));
     arg_len -= 2;
     arg++;
-    for(uint32_t i = 0; valid_arg && (i < arg_len); i++)
-        valid_arg = IS_HEX(arg[i]);
-    if(valid_arg) {
+    do {
+        if(!valid_arg) break;
+        int32_t buf_size = base64_decode_buffer_required(arg, arg_len);
+        if(buf_size <= 0) break;
         status = API_CALL_ERROR_STATUS_NO_MEM;
-        uint32_t buf_size = arg_len / 2;
         data = malloc(sizeof(api_cmd_uart_t) + buf_size);
-        if(data) {
-            api_cmd_uart_t *cmd = (api_cmd_uart_t *)data;
-            memset(cmd, 0, sizeof(api_cmd_uart_t));
-            uint8_t *buf = &data[sizeof(api_cmd_uart_t)];
-            for(uint32_t i = 0, j = 0; i < buf_size; i++, j += 2)
-                buf[i] = (CHAR_TO_HEX(arg[j]) << 4) | CHAR_TO_HEX(arg[j + 1]);
-            cmd->call = call;
-            cmd->data = buf;
-            cmd->size = buf_size;
-            cmd->port_no = port_no;
-            status = API_CALL_STATUS_BUSY;
-            queue_handle_t queue = (queue_handle_t)*context;
-            if(queue_send(queue, (void *)&cmd, pdMS_TO_TICKS(0)) != pdPASS) {
-                ESP_LOGI(TAG, "Uart data dropped");
-            }
-            else {
-                ESP_LOGI(TAG, "Uart data enqueued");
-                status = API_CALL_STATUS_EXECUTING;
-            }
+        if(!data) break;
+        api_cmd_uart_t *cmd = (api_cmd_uart_t *)data;
+        status = API_CALL_ERROR_STATUS_BAD_ARG;
+        uint8_t *buf = &data[sizeof(api_cmd_uart_t)];
+        if(base64_decode(buf, buf_size, arg, arg_len) < 0) break;
+        cmd->call = call;
+        cmd->data = buf;
+        cmd->size = buf_size;
+        cmd->port_no = port_no;
+        status = API_CALL_STATUS_BUSY;
+        queue_handle_t queue = (queue_handle_t)*context;
+        if(queue_send(queue, (void *)&cmd, pdMS_TO_TICKS(0)) != pdPASS) {
+            ESP_LOGI(TAG, "Uart data dropped");
+            break;
         }
-    }
+        ESP_LOGI(TAG, "Uart data enqueued");
+        status = API_CALL_STATUS_EXECUTING;
+        break;
+    } while (1);
     if(status != API_CALL_STATUS_EXECUTING) {
         api_call_send_status(call, status);
         free(data);
@@ -155,9 +152,36 @@ static uint8_t _api_handler_uart2_raw_tx(void *call, void **context, uint32_t pe
     return _api_handler_uart_raw_tx(call, context, pending, arg, arg_len, 1);
 }
 
+typedef struct {
+    uint32_t amount;
+    uint32_t size;
+    uint8_t *buf;
+} uart_subscription_context_t;
+
+
+#define UART_MAX_SPEED        500000
+#define UART_API_SEND_DELAY   20
+#define UART_TMP_BUF_SIZE     CL_SIZE_ALIGN4((UART_MAX_SPEED / 10) / (1000 / UART_API_SEND_DELAY))
+
+static void uart_event_on_rx(void *event_trigger, void *sender, void *context) {
+    (void)sender;
+    uart_subscription_context_t *buf_desc = (uart_subscription_context_t *)context;
+    gw_uart_event_data_t *data = (gw_uart_event_data_t *)event_trigger;
+    size_t sz = buf_desc->size - buf_desc->amount;
+    if(sz > data->size) sz = data->size;
+    mem_cpy(&buf_desc->buf[buf_desc->amount], data->buf, sz);
+    buf_desc->amount += sz;
+}
+
 void api_handler_uart_work(app_context_t *app) {
     static uint8_t init = 0;
     static queue_handle_t cmd_queue;
+    static uint8_t uart1_buf[UART_TMP_BUF_SIZE];
+    static uint8_t uart2_buf[UART_TMP_BUF_SIZE];
+    static uart_subscription_context_t uart_context[2];
+    static delegate_t uart1_delegate;
+    static delegate_t uart2_delegate;
+
     if(!init) {
         cmd_queue = queue_create(10, sizeof(void *));
         api_call_register(&_api_handler_uart1_cnf, ESP_WS_API_UART1_CNF, cmd_queue);
@@ -166,6 +190,22 @@ void api_handler_uart_work(app_context_t *app) {
         api_call_register(&_api_handler_uart_raw_rx, ESP_WS_API_UART2_RAW_RX, cmd_queue);
         api_call_register(&_api_handler_uart1_raw_tx, ESP_WS_API_UART1_RAW_TX, cmd_queue);
         api_call_register(&_api_handler_uart2_raw_tx, ESP_WS_API_UART2_RAW_TX, cmd_queue);
+
+        uart_context[0].buf = uart1_buf;
+        uart_context[0].amount = 0;
+        uart_context[0].size = sizeof(uart1_buf);
+        uart1_delegate.handler = &uart_event_on_rx;
+        uart1_delegate.context = &uart_context[0];
+
+        uart_context[1].buf = uart2_buf;
+        uart_context[1].amount = 0;
+        uart_context[1].size = sizeof(uart2_buf);
+        uart2_delegate.context = &uart_context[1];
+        uart2_delegate.handler = &uart_event_on_rx;
+
+        gw_uart_on_receive_subscribe(&app->uart.port[0].desc, &uart1_delegate);
+        gw_uart_on_receive_subscribe(&app->uart.port[1].desc, &uart2_delegate);
+
         init = 1;
     }
     api_cmd_uart_t *cmd = NULL;
@@ -175,18 +215,18 @@ void api_handler_uart_work(app_context_t *app) {
         cmd = NULL;
         queue_receive(cmd_queue, &cmd, pdMS_TO_TICKS(0));
         if(cmd != NULL) {
-            gw_uart_t *uart = &app->uart.port[cmd->port_no].desc;
+            struct app_uart_t *app_uart = &app->uart.port[cmd->port_no];
             if(cmd->data) {
-                gw_uart_write(uart, cmd->data, cmd->size);
+                gw_uart_write(&app_uart->desc, cmd->data, cmd->size);
             }
             else {
                 gw_uart_config_t cnf;
-                gw_uart_get(uart ,&cnf);
+                gw_uart_get(&app_uart->desc ,&cnf);
                 if(cmd->boud_set) cnf.boud = cmd->boud;
                 if(cmd->par_set) cnf.parity = cmd->par;
                 if(cmd->sb_set) cnf.stop = cmd->sb;
                 if(cmd->wl_set) cnf.bits = cmd->wl;
-                gw_uart_set(uart, &cnf);
+                gw_uart_set(&app_uart->desc, &cnf);
                 uint8_t tmpbuf[64];
                 uint32_t len = sprintf((char *)tmpbuf, 
                     "{\"BR\":\"0x%08lx\",\"WL\":\"0x%02x\",\"PAR\":\"0x%02x\",\"SB\":\"0x%02x\"}", 
@@ -200,24 +240,17 @@ void api_handler_uart_work(app_context_t *app) {
         }
     } while (cmd);
     uint32_t now = task_get_tick_count();
-    if(CL_TIME_ELAPSED(app->uart.raw_sent_ts, 10, now)) {
+    if(CL_TIME_ELAPSED(app->uart.raw_sent_ts, UART_API_SEND_DELAY, now)) {
         app->uart.raw_sent_ts = now;
-        uint8_t raw_data[1024];
         for(uint8_t no = 0; no < 2; no++) {
-            if(app->uart.port[no].mode == UART_PORT_MODE_RAW) {
-                int32_t len = gw_uart_read(&app->uart.port[no].desc, raw_data, 1024);
-                if(len > 0) {
-                    uint8_t buf[len * 2 + 2];
-                    buf[0] = buf[len * 2 + 1] = '\"';
-                    for(int i = 0, j = 1; i < len; i++, j += 2) {
-                        uint8_t q = ((raw_data[i] >> 4) & 0xf);
-                        buf[j] = HEX_TO_CHAR(q);
-                        q = (raw_data[i] & 0xf);
-                        buf[j + 1] = HEX_TO_CHAR(q);
-                    }
-                    api_call_send_json_fid_group(port_rx_fid[no], buf, 2 + len * 2);
-                }
+            if(uart_context[no].amount) {
+                int32_t tmp_buf_len = lBase64EncodeBufferRequired(uart_context[no].amount);
+                uint8_t buf[tmp_buf_len + 2];
+                buf[0] = buf[tmp_buf_len + 1] = '\"';
+                base64_encode(&buf[1], tmp_buf_len, uart_context[no].buf, uart_context[no].amount);
+                api_call_send_json_fid_group(port_rx_fid[no], buf, 2 + tmp_buf_len);
             }
+            uart_context[no].amount = 0;
         }
     }
 }

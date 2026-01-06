@@ -1,0 +1,34 @@
+<!doctype html>
+  <html>
+    <head>
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <meta charset="UTF-8">
+      <link rel="stylesheet" href="xterm.css" />
+      <script src="xterm.js"></script>
+    </head>
+    <body>
+    <div class="controls">
+        <input type="text" id="ws-url" 
+                value="ws://192.168.4.1/ws" 
+                placeholder="WebSocket URL">
+        <button id="connect-btn">Подключиться</button>
+        <button id="clear-btn">Очистить</button>
+        <div class="status" id="status">❌ Не подключено</div>
+    </div>
+    <div id="terminal"></div>
+
+    <div class="footer">
+        <div class="info">
+            <span>Состояние: <span id="connection-status">Отключено</span></span>
+            <span>Пакетов получено: <span id="packet-count">0</span></span>
+            <span>Активность: <span id="last-activity">-</span></span>
+        </div>
+        <div class="help">
+            <kbd>Ctrl+C</kbd> - Отправить Break | 
+            <kbd>Ctrl+U</kbd> - Очистить строку | 
+            <kbd>Ctrl+L</kbd> - Очистить экран
+        </div>
+    </div>
+      <script src="script.js"></script>
+    </body>
+  </html>

@@ -33,13 +33,6 @@
 #include "uart.h"
 #include "connection.h"
 
-
-
-
-
-
-
-
 #define TAG_S(x)  #x
 #define TAG_SX(x) TAG_S(x)
 #define TAG  TAG_SX(__FILE__) " " TAG_SX(__LINE__)
@@ -77,25 +70,16 @@ extern httpd_uri_t file_delete;
 
 /*========================*/
 
-typedef enum {
-  UART_PORT_MODE_RAW,
-  UART_PORT_MODE_MODBUS
-} uart_port_mode_t;
-
 typedef struct {
     wifi_config_t ap_cnf;
     wifi_config_t sta_cnf;
-
-
     httpd_handle_t web_server;
-
-
     struct {
       uint32_t raw_sent_ts;
-      struct {
+      struct app_uart_t {
         gw_uart_t desc;
         gw_uart_config_t cnf;
-        uart_port_mode_t mode;
+        void *proto_context; /* holds upstanding proto descriptor */
       } port[2];
     } uart;
 } app_context_t;
@@ -108,23 +92,33 @@ bool load_config(app_context_t *app);
 
 /*==========================*/
 
-#define ESP_WS_API_UART1_CNF     0x1010
-#define ESP_WS_API_UART1_RAW_RX  0x1011
-#define ESP_WS_API_UART1_RAW_TX  0x1012
-#define ESP_WS_API_UART2_CNF     0x1020
-#define ESP_WS_API_UART2_RAW_RX  0x1021
-#define ESP_WS_API_UART2_RAW_TX  0x1022
+#define ESP_WS_API_ECHO_ID           0x0001
+#define ESP_WS_API_CONT_ID           0x0002
+#define ESP_WS_API_ASYNC_ID          0x0003
+void api_handler_system_work(app_context_t *app);
 
+#define ESP_WS_API_UART1_CNF         0x1010
+#define ESP_WS_API_UART1_RAW_RX      0x1011
+#define ESP_WS_API_UART1_RAW_TX      0x1012
+#define ESP_WS_API_UART2_CNF         0x1020
+#define ESP_WS_API_UART2_RAW_RX      0x1021
+#define ESP_WS_API_UART2_RAW_TX      0x1022
 void api_handler_uart_work(app_context_t *app);
 
-// #define ESP_WS_API_MODBUS_ID        2000
-// void api_handler_modbus_work(app_context_t *app);
+#define ESP_WS_API_UART1_MODBUS_CNF  0x1110
+#define ESP_WS_API_UART1_MODBUS_SERV 0x1111
+#define ESP_WS_API_UART1_MODBUS_RESP 0x1112
+#define ESP_WS_API_UART1_MODBUS_REQ  0x1113
+//#define ESP_WS_API_UART1_MODBUS_TCP  0x1114
+//#define ESP_WS_API_UART1_MODBUS_UDP  0x1116
+#define ESP_WS_API_UART2_MODBUS_CNF  0x1120
+#define ESP_WS_API_UART2_MODBUS_SERV 0x1121
+#define ESP_WS_API_UART2_MODBUS_RESP 0x1122
+#define ESP_WS_API_UART2_MODBUS_REQ  0x1123
+//#define ESP_WS_API_UART2_MODBUS_TCP  0x1124
+//#define ESP_WS_API_UART2_MODBUS_UDP  0x1126
+void api_handler_modbus_work(app_context_t *app);
 
-#define ESP_WS_API_ECHO_ID          1000
-#define ESP_WS_API_CONT_ID          1001
-#define ESP_WS_API_ASYNC_ID         1002
-
-void api_handler_system_work(app_context_t *app);
 
 #ifdef __cplusplus
 }
