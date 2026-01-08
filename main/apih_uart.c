@@ -53,7 +53,7 @@ static uint8_t _api_handler_uart_cnf(void *call, void **context, uint32_t pendin
             }
             cmd->boud_set = json_parse_int(json, "BR", &val);
             if(cmd->boud_set) {
-                if(val > 1000000) { break; }
+                if(val > UART_MAX_SPEED) { break; }
                 cmd->boud = val;
             }
             cmd->par_set = json_parse_int(json, "PAR", &val);
@@ -159,7 +159,6 @@ typedef struct {
 } uart_subscription_context_t;
 
 
-#define UART_MAX_SPEED        500000
 #define UART_API_SEND_DELAY   20
 #define UART_TMP_BUF_SIZE     CL_SIZE_ALIGN4((UART_MAX_SPEED / 10) / (1000 / UART_API_SEND_DELAY))
 
@@ -244,7 +243,7 @@ void api_handler_uart_work(app_context_t *app) {
         app->uart.raw_sent_ts = now;
         for(uint8_t no = 0; no < 2; no++) {
             if(uart_context[no].amount) {
-                int32_t tmp_buf_len = lBase64EncodeBufferRequired(uart_context[no].amount);
+                int32_t tmp_buf_len = base64_encode_buffer_required(uart_context[no].amount);
                 uint8_t buf[tmp_buf_len + 2];
                 buf[0] = buf[tmp_buf_len + 1] = '\"';
                 base64_encode(&buf[1], tmp_buf_len, uart_context[no].buf, uart_context[no].amount);

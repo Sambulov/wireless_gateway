@@ -15,8 +15,8 @@
 
 #define FILE_PATH_MAX  256
 
-#define MAX_FILE_SIZE   (200*1024) // 200 KB
-#define MAX_FILE_SIZE_STR "200KB"
+#define MAX_FILE_SIZE   (500*1024) // 200 KB
+#define MAX_FILE_SIZE_STR "500KB"
 
 #define BASE_PATH  "/lfs"
 
@@ -182,7 +182,6 @@ static esp_err_t dir_http_handler(httpd_req_t *req)
     /* Send empty chunk to signal HTTP response completion */
     httpd_resp_sendstr_chunk(req, NULL);
     return ESP_OK;
-
 }
 
 static esp_err_t common_http_handler(httpd_req_t *req)

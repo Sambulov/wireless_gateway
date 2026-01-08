@@ -128,7 +128,7 @@ typedef struct {
 } link_t;
 
 
-#define LINKS_MAX_AMOUNT  20
+#define LINKS_MAX_AMOUNT  1
 link_t links_pool[LINKS_MAX_AMOUNT];
 linked_list_t links_free = NULL;
 linked_list_t links_active = NULL;
@@ -240,10 +240,50 @@ uint8_t socket_link_subscribe(int sock, delegate_t *delegate) {
     return false;
 }
 
+esp_err_t disconnect_sta_by_mac(uint8_t *mac_addr) {
+    uint16_t aid;
+    esp_err_t err = esp_wifi_ap_get_sta_aid(mac_addr, &aid);
+    if (err != ESP_OK) return err;
+    err = esp_wifi_deauth_sta(aid);
+    return err;
+}
+
+static void ip_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data) {
+    if ((event_base == IP_EVENT) && (event_id == IP_EVENT_AP_STAIPASSIGNED)) {
+        ip_event_ap_staipassigned_t *data= (ip_event_ap_staipassigned_t *)event_data;
+        ESP_LOGI(TAG, "Wi-Fi AP client assigned IP: " IPSTR " MAC: " MACSTR, IP2STR(&data->ip), MAC2STR(data->mac));
+        linked_list_t item = linked_list_find_first(links_active, &link_mac_match, data->mac);
+        if(!item) {
+            if(links_free) {
+                link_t *link = linked_list_get_object(link_t, links_free);
+                link->netif = data->esp_netif;
+                mem_cpy(&link->ip, &data->ip, sizeof(esp_ip4_addr_t));
+                mem_cpy(link->mac, data->mac, 6);
+                linked_list_insert_last(&links_active, linked_list_item(link));
+            }
+            else {
+                /* we must never get here */
+                ESP_LOGI(TAG, "Drop Wi-Fi AP client MAC: " MACSTR, MAC2STR(data->mac));
+                disconnect_sta_by_mac(data->mac);
+            }
+        }
+        else { /* update IP if changed */
+            link_t *link = linked_list_get_object(link_t, item);
+            if(mem_cmp(&link->ip, &data->ip, sizeof(esp_ip4_addr_t))) {
+                ESP_LOGI(TAG, "Wi-Fi AP client new IP assignned");
+                mem_cpy(&link->ip, &data->ip, sizeof(esp_ip4_addr_t));
+                event_raise_clear(&link->event, NULL, NULL); /* drop connections */
+            }
+        }
+    }
+}
+
 static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data) {
     //app_context_t* app = (app_context_t*) arg;
     /* todo AP client disconnected kill all sockets by client */
+
     ESP_LOGI(TAG, "Event id: %ld, base: %ld", event_id, (uint32_t)event_base);
+
     if ((event_base == WIFI_EVENT) && (event_id == WIFI_EVENT_AP_STADISCONNECTED)) {
         wifi_event_ap_stadisconnected_t *data = (wifi_event_ap_stadisconnected_t *)event_data;
         ESP_LOGI(TAG, "Wi-Fi AP client disconnect MAC: " MACSTR, MAC2STR(data->mac));
@@ -256,21 +296,15 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
         }
     }
 
-    if ((event_base == IP_EVENT) && (event_id == IP_EVENT_AP_STAIPASSIGNED)) {
-        ip_event_ap_staipassigned_t *data= (ip_event_ap_staipassigned_t *)event_data;
-        ESP_LOGI(TAG, "Wi-Fi AP client assigned IP: " IPSTR " MAC: " MACSTR, IP2STR(&data->ip), MAC2STR(data->mac));
-        linked_list_item_t *item = links_free;
-        if(item != NULL) {
-            link_t *link = linked_list_get_object(link_t, item);
-            link->netif = data->esp_netif;
-            mem_cpy(&link->ip, &data->ip, sizeof(esp_ip4_addr_t));
-            mem_cpy(link->mac, data->mac, 6);
-            linked_list_insert_last(&links_active, item);
+    if ((event_base == WIFI_EVENT) && (event_id == WIFI_EVENT_AP_STACONNECTED)) {
+        wifi_event_ap_staconnected_t *data = (wifi_event_ap_staconnected_t *)event_data;
+        if(!links_free || 
+           linked_list_find_first(links_active, &link_mac_match, data->mac)) {
+            ESP_LOGI(TAG, "Reject Wi-Fi AP client MAC: " MACSTR, MAC2STR(data->mac));
+            esp_wifi_deauth_sta(data->aid);
         }
-        //else {
-        // TODO: drop STA client
-        //}
     }
+
 
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
 	    ESP_LOGI(TAG, "Wi-Fi STA disconnected, kill all sockets...");
@@ -285,6 +319,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
 }
 
 void wifi_init_ap_sta(wifi_config_t *ap_cnf, wifi_config_t *sta_cnf) {
+
     for(uint8_t i = 0; i < LINKS_MAX_AMOUNT; i++)
         linked_list_insert_last(&links_free, linked_list_item(&links_pool[i]));
 
@@ -301,12 +336,13 @@ void wifi_init_ap_sta(wifi_config_t *ap_cnf, wifi_config_t *sta_cnf) {
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
 
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL));
-    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL));
+    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, ESP_EVENT_ANY_ID, &ip_event_handler, NULL));
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
 
     if ((sta_cnf != NULL) && (sta_cnf->sta.ssid[0] != '\0') && (sta_cnf->sta.password[0] != '\0')) {
         ESP_LOGI(TAG, "Station connecting: SSID=%s, Password=%s", sta_cnf->sta.ssid, sta_cnf->sta.password);
+
         ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_STA, sta_cnf));
     }
 

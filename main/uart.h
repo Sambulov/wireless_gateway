@@ -1,5 +1,7 @@
 #pragma once
 
+#define UART_MAX_SPEED        500000
+
 typedef enum {
   GW_UART_WORD_7BIT = 0,
   GW_UART_WORD_8BIT = 1,

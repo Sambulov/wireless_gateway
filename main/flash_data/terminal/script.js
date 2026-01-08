@@ -5,7 +5,6 @@ class ESP32Terminal {
         //this.fitAddon = null;
         this.isConnected = false;
         this.packetCount = 0;
-        
         this.initTerminal();
         this.bindEvents();
     }
@@ -40,8 +39,8 @@ class ESP32Terminal {
         });
         
         // Инициализация аддона для авто-подгонки размера
-        //this.fitAddon = new FitAddon.FitAddon();
-        //this.term.loadAddon(this.fitAddon);
+        this.fitAddon = new FitAddon.FitAddon();
+        this.term.loadAddon(this.fitAddon);
         
         // КРИТИЧЕСКИ ВАЖНО: Правильное открытие терминала
         const terminalElement = document.getElementById('terminal');
@@ -53,21 +52,21 @@ class ESP32Terminal {
         this.term.open(terminalElement);
         
         // Даем время на рендеринг DOM
-        //setTimeout(() => {
-        //    try {
-                //this.fitAddon.fit();
-        //        this.term.focus();
+        setTimeout(() => {
+           try {
+                this.fitAddon.fit();
+               this.term.focus();
                 
-                // Форсируем пересчет размеров
-        //        this.term.refresh(0, this.term.rows - 1);
-        //    } catch (error) {
-        //        console.error('Ошибка при инициализации терминала:', error);
-        //    }
-        //}, 100);
+               // Форсируем пересчет размеров
+               this.term.refresh(0, this.term.rows - 1);
+           } catch (error) {
+               console.error('Ошибка при инициализации терминала:', error);
+           }
+        }, 100);
     
         // Открытие терминала в контейнере
         this.term.open(document.getElementById('terminal'));
-        //this.fitAddon.fit();
+        this.fitAddon.fit();
         
         // Обработка ввода пользователя
         this.term.onData((data) => {
@@ -118,9 +117,9 @@ class ESP32Terminal {
         });
         
         // Автоматическая подгонка размера при изменении окна
-        //window.addEventListener('resize', () => {
-        //    if (this.fitAddon) this.fitAddon.fit();
-        //});
+        window.addEventListener('resize', () => {
+            if (this.fitAddon) this.fitAddon.fit();
+        });
     }
     
     async connect() {
@@ -202,8 +201,6 @@ class ESP32Terminal {
             
         } catch (error) {
             console.error('Ошибка обработки сообщения:', error);
-            // Если не JSON, пытаемся вывести как текст
-            this.term.write(data);
         }
     }
     
@@ -212,18 +209,14 @@ class ESP32Terminal {
             // Декодирование из Base64
             const binaryString = atob(base64Data);
             const bytes = new Uint8Array(binaryString.length);
-            
             for (let i = 0; i < binaryString.length; i++) {
                 bytes[i] = binaryString.charCodeAt(i);
             }
-            
             // Преобразование в текст
             const decoder = new TextDecoder();
             const text = decoder.decode(bytes);
-            
             // Вывод в терминал
             this.term.write(text);
-            
         } catch (error) {
             console.error('Ошибка декодирования Base64:', error);
             this.term.write(`\x1b[31m[Ошибка декодирования]\x1b[0m `);
@@ -235,32 +228,10 @@ class ESP32Terminal {
             this.showError('Не подключено к серверу');
             return;
         }
-        
-        // Обработка специальных символов
-        let processedData = data;
-        
-        // Backspace и Delete
-        if (data === '\x7f') { // Backspace
-            processedData = '\b \b';
-        } else if (data === '\x1b[3~') { // Delete
-            // Обработка Delete
-            processedData = '\x1b[P';
-        }
-        
-        // Вывод в локальный терминал
-        //this.term.write(processedData);
-        
-        // Подготовка данных для отправки
-        let dataToSend = data;
-        
-        // Преобразование специальных символов
-        if (data === '\r') {
-            dataToSend = '\n'; // Преобразование Enter в newline
-        }
-        
+                
         // Кодирование в Base64
         const encoder = new TextEncoder();
-        const encodedData = encoder.encode(dataToSend);
+        const encodedData = encoder.encode(data);
         const base64String = btoa(String.fromCharCode(...encodedData));
         
         // Формирование команды для отправки
@@ -324,8 +295,3 @@ class ESP32Terminal {
         this.term.writeln(`\x1b[1;31m[ОШИБКА] ${message}\x1b[0m`);
     }
 }
-
-// Инициализация при загрузке страницы
-document.addEventListener('DOMContentLoaded', () => {
-    window.espTerminal = new ESP32Terminal();
-});

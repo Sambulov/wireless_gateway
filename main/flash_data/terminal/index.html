@@ -1,34 +1,291 @@
 <!doctype html>
-  <html>
-    <head>
-      <meta name="viewport" content="width=device-width, initial-scale=1">
-      <meta charset="UTF-8">
-      <link rel="stylesheet" href="xterm.css" />
-      <script src="xterm.js"></script>
-    </head>
-    <body>
-    <div class="controls">
-        <input type="text" id="ws-url" 
-                value="ws://192.168.4.1/ws" 
-                placeholder="WebSocket URL">
-        <button id="connect-btn">Подключиться</button>
-        <button id="clear-btn">Очистить</button>
-        <div class="status" id="status">❌ Не подключено</div>
-    </div>
-    <div id="terminal"></div>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="xterm.css">
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    body {
+      background: #000;
+      color: #fff;
+      font-family: monospace;
+      font-size: 14px;
+      overflow: hidden;
+      opacity: 0;
+      transition: opacity 0.5s ease;
+    }
+    
+    body.fully-loaded {
+      opacity: 1;
+    }
+    
+    #app-container {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      width: 100vw;
+    }
+    
+    .control-panel {
+      background: #1e1e1e;
+      padding: 10px;
+      border-bottom: 1px solid #333;
+      flex-shrink: 0;
+    }
+    
+    .control-row {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      margin-bottom: 5px;
+      flex-wrap: wrap;
+    }
+    
+    #ws-url {
+      flex: 1;
+      min-width: 300px;
+      padding: 8px;
+      background: #2d2d2d;
+      border: 1px solid #444;
+      color: #fff;
+      font-family: monospace;
+    }
+    
+    .button {
+      padding: 8px 16px;
+      background: #0a84ff;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-family: sans-serif;
+      font-weight: bold;
+    }
+    
+    .status-indicator {
+      padding: 8px 12px;
+      background: #333;
+      border-radius: 4px;
+      margin-left: auto;
+    }
+    
+    #terminal-container {
+      flex: 1;
+      position: relative;
+      background: #000;
+      overflow: hidden;
+      min-height: 400px;
+    }
 
-    <div class="footer">
-        <div class="info">
-            <span>Состояние: <span id="connection-status">Отключено</span></span>
-            <span>Пакетов получено: <span id="packet-count">0</span></span>
-            <span>Активность: <span id="last-activity">-</span></span>
-        </div>
-        <div class="help">
-            <kbd>Ctrl+C</kbd> - Отправить Break | 
-            <kbd>Ctrl+U</kbd> - Очистить строку | 
-            <kbd>Ctrl+L</kbd> - Очистить экран
-        </div>
+    .footer-panel {
+      background: #1a1a1a;
+      padding: 10px;
+      border-top: 1px solid #333;
+      flex-shrink: 0;
+    }
+    
+    .stats {
+      display: flex;
+      gap: 20px;
+      margin-bottom: 5px;
+      flex-wrap: wrap;
+    }
+    
+    .shortcuts {
+      color: #888;
+      font-size: 12px;
+    }
+    
+    /* Загрузочный экран */
+    #loading-screen {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: #000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 9999;
+      transition: opacity 0.3s ease;
+    }
+    
+    #loading-screen.hidden {
+      opacity: 0;
+      pointer-events: none;
+    }
+    
+    .loading-spinner {
+      color: #0a84ff;
+      font-size: 20px;
+    }
+  </style>
+</head>
+<body>
+  <div id="loading-screen">
+    <div class="loading-spinner">Загрузка терминала...</div>
+  </div>
+  
+  <div id="app-container">
+    <div class="control-panel">
+      <div class="control-row">
+        <input type="text" id="ws-url" 
+               value="ws://192.168.4.1/ws" 
+               placeholder="WebSocket URL">
+        <button id="connect-btn" class="button">Подключиться</button>
+        <button id="clear-btn" class="button">Очистить</button>
+        <div class="status-indicator" id="status">❌ Не подключено</div>
+      </div>
     </div>
-      <script src="script.js"></script>
-    </body>
-  </html>
+    
+    <div id="terminal-container">
+      <div id="terminal"></div>
+    </div>
+    
+    <div class="footer-panel">
+      <div class="stats">
+        <span>Состояние: <span id="connection-status">Отключено</span></span>
+        <span>Пакетов: <span id="packet-count">0</span></span>
+        <span>Активность: <span id="last-activity">-</span></span>
+      </div>
+      <div class="shortcuts">
+        <kbd>Ctrl+C</kbd> - Break | 
+        <kbd>Ctrl+U</kbd> - Очистить строку | 
+        <kbd>Ctrl+L</kbd> - Очистить экран
+      </div>
+    </div>
+  </div>
+
+  <script src="xterm.js"></script>
+  <script src="xterm-addon-fit.js"></script>
+  <script src="script.js"></script>
+  <script>
+    function forceReflow(element) {
+      element.offsetHeight;
+    }
+    function ensureTerminalStyles() {
+      const terminalEl = document.getElementById('terminal');
+      if (!terminalEl) return false;
+      const computedStyle = window.getComputedStyle(terminalEl);
+      const hasXtermStyles = computedStyle.fontFamily && 
+                             computedStyle.fontFamily.includes('monospace');
+      return hasXtermStyles;
+    }
+    
+    function initializeApplication() {
+      console.log('Начало инициализации приложения');
+      if (typeof Terminal === 'undefined') {
+        console.error('xterm.js не загружен');
+        showError('Ошибка: Библиотека xterm.js не загружена');
+        return;
+      }
+      if (typeof ESP32Terminal === 'undefined') {
+        console.error('ESP32Terminal не определен');
+        showError('Ошибка: script.js не загружен или содержит ошибки');
+        return;
+      }
+      requestAnimationFrame(() => {
+        try {
+          window.espTerminal = new ESP32Terminal();
+          console.log('Терминал создан');
+        } catch (error) {
+          console.error('Ошибка создания терминала:', error);
+          showError('Ошибка создания терминала: ' + error.message);
+          return;
+        }
+        setTimeout(() => {
+          const terminalContainer = document.getElementById('terminal-container');
+          const terminalEl = document.getElementById('terminal');
+          if (terminalContainer && terminalEl) {
+            forceReflow(terminalContainer);
+            forceReflow(terminalEl);
+            const xtermElements = terminalEl.querySelectorAll('.xterm, .xterm-viewport, .xterm-screen');
+            xtermElements.forEach(el => forceReflow(el));
+            terminalContainer.style.display = 'none';
+            requestAnimationFrame(() => {
+              terminalContainer.style.display = 'block';
+              if (ensureTerminalStyles()) {
+                finalizeLoading();
+              } else {
+                setTimeout(finalizeLoading, 100);
+              }
+            });
+          } else {
+            finalizeLoading();
+          }
+        }, 100);
+      });
+    }
+    
+    function finalizeLoading() {
+      console.log('Финальная стадия загрузки');
+      const loadingScreen = document.getElementById('loading-screen');
+      if (loadingScreen) {
+        loadingScreen.classList.add('hidden');
+        setTimeout(() => {
+          loadingScreen.style.display = 'none';
+        }, 300);
+      }
+      
+      document.body.classList.add('fully-loaded');
+      
+      forceReflow(document.body);
+      
+      if (window.espTerminal && window.espTerminal.terminal) {
+        setTimeout(() => {
+          if (typeof window.espTerminal.terminal.fit === 'function') {
+            window.espTerminal.terminal.fit();
+            console.log('Размер терминала скорректирован');
+          }
+        }, 50);
+      }
+      
+      console.log('Приложение полностью загружено и отрисовано');
+    }
+    
+    function showError(message) {
+      const loadingScreen = document.getElementById('loading-screen');
+      if (loadingScreen) {
+        loadingScreen.innerHTML = `
+          <div style="text-align: center; color: #ff453a; max-width: 500px; padding: 20px;">
+            <h2>Ошибка загрузки</h2>
+            <p>${message}</p>
+            <button onclick="location.reload()" 
+                    style="padding: 10px 20px; margin-top: 20px; background: #0a84ff; color: white; border: none; border-radius: 4px;">
+              Перезагрузить страницу
+            </button>
+          </div>
+        `;
+      }
+    }
+    
+    window.addEventListener('load', function() {
+      console.log('Все ресурсы загружены, начинаем инициализацию...');
+      setTimeout(initializeApplication, 50);
+    });
+    
+    setTimeout(function() {
+      if (!document.body.classList.contains('fully-loaded')) {
+        console.warn('Инициализация по таймауту');
+        initializeApplication();
+      }
+    }, 5000);
+    
+    window.addEventListener('resize', function() {
+      if (window.espTerminal && window.espTerminal.terminal) {
+        setTimeout(() => {
+          const terminalEl = document.getElementById('terminal');
+          if (terminalEl) forceReflow(terminalEl);
+        }, 100);
+      }
+    });
+  </script>
+</body>
+</html>

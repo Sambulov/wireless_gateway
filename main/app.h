@@ -89,12 +89,15 @@ httpd_uri_t *pxWsServerInit(char *uri);
 /*==========================*/
 
 bool load_config(app_context_t *app);
+void save_wifi_sta_config(const char *ssid, const char *password);
+void save_wifi_ap_config(const char *ssid, const char *password);
 
 /*==========================*/
 
 #define ESP_WS_API_ECHO_ID           0x0001
-#define ESP_WS_API_CONT_ID           0x0002
-#define ESP_WS_API_ASYNC_ID          0x0003
+//#define ESP_WS_API_CONT_ID           0x0002
+//#define ESP_WS_API_ASYNC_ID          0x0003
+#define ESP_WS_API_SYS_WIFI_STA      0x0010
 void api_handler_system_work(app_context_t *app);
 
 #define ESP_WS_API_UART1_CNF         0x1010
