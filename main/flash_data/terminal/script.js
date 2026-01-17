@@ -5,6 +5,7 @@ class ESP32Terminal {
         //this.fitAddon = null;
         this.isConnected = false;
         this.packetCount = 0;
+        this.echoEnabled = false;
         this.initTerminal();
         this.bindEvents();
     }
@@ -86,6 +87,11 @@ class ESP32Terminal {
         // Кнопка очистки
         document.getElementById('clear-btn').addEventListener('click', () => {
             this.term.clear();
+        });
+
+        // Кнопка Echo (loopback)
+        document.getElementById('echo-btn').addEventListener('click', () => {
+            this.toggleEcho();
         });
         
         // Автоподключение при нажатии Enter в поле URL
@@ -173,6 +179,10 @@ class ESP32Terminal {
             this.socket = null;
         }
         this.isConnected = false;
+        this.echoEnabled = false;
+        const echoBtn = document.getElementById('echo-btn');
+        echoBtn.textContent = 'Echo: OFF';
+        echoBtn.style.background = '';
         this.updateStatus('Отключено', 'red');
         this.updateConnectionStatus('disconnected');
     }
@@ -217,6 +227,15 @@ class ESP32Terminal {
             const text = decoder.decode(bytes);
             // Вывод в терминал
             this.term.write(text);
+
+            // Echo back to UART if enabled
+            if (this.echoEnabled && this.isConnected && this.socket) {
+                const command = {
+                    FID: "0x00001022",
+                    ARG: base64Data
+                };
+                this.socket.send(JSON.stringify(command));
+            }
         } catch (error) {
             console.error('Ошибка декодирования Base64:', error);
             this.term.write(`\x1b[31m[Ошибка декодирования]\x1b[0m `);
@@ -258,6 +277,16 @@ class ESP32Terminal {
             this.socket.send(JSON.stringify(breakCommand));
             this.term.writeln('\x1b[33m[Отправлен Break]\x1b[0m');
         }
+    }
+
+    toggleEcho() {
+        this.echoEnabled = !this.echoEnabled;
+
+        const btn = document.getElementById('echo-btn');
+        btn.textContent = this.echoEnabled ? 'Echo: ON' : 'Echo: OFF';
+        btn.style.background = this.echoEnabled ? '#4caf50' : '';
+
+        this.term.writeln(`\x1b[33m[Echo ${this.echoEnabled ? 'включен' : 'выключен'}]\x1b[0m`);
     }
     
     updateStatus(message, color = 'white') {

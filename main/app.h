@@ -103,9 +103,11 @@ void api_handler_system_work(app_context_t *app);
 #define ESP_WS_API_UART1_CNF         0x1010
 #define ESP_WS_API_UART1_RAW_RX      0x1011
 #define ESP_WS_API_UART1_RAW_TX      0x1012
+#define ESP_WS_API_UART1_ECHO        0x1013
 #define ESP_WS_API_UART2_CNF         0x1020
 #define ESP_WS_API_UART2_RAW_RX      0x1021
 #define ESP_WS_API_UART2_RAW_TX      0x1022
+#define ESP_WS_API_UART2_ECHO        0x1023
 void api_handler_uart_work(app_context_t *app);
 
 #define ESP_WS_API_UART1_MODBUS_CNF  0x1110

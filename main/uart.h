@@ -29,7 +29,7 @@ typedef enum {
 
 #define GW_UART_PRIVATE(size)    uint32_t __private[(size + sizeof(void *) - 1) >> 2]
 
-#define GW_UART_PRIVATE_SIZE     44
+#define GW_UART_PRIVATE_SIZE     48
 
 typedef struct {
   GW_UART_PRIVATE(GW_UART_PRIVATE_SIZE);
@@ -56,3 +56,6 @@ uint8_t gw_uart_get(void *desc, gw_uart_config_t *out_cnf);
 int32_t gw_uart_available_write(void *desc);
 
 void gw_uart_on_receive_subscribe(void *desc, delegate_t *delegate);
+
+void gw_uart_set_echo(void *desc, uint8_t enabled);
+uint8_t gw_uart_get_echo(void *desc);

@@ -11,6 +11,7 @@ typedef struct {
     int port; // UART_NUM_0, UART_NUM_1, UART_NUM_2
     uart_config_t cnf;
     event_t on_receive;
+    uint8_t echo_enabled;
 } gw_uart_private_t;
 
 #define ASSERRT_STRUCTURE_CAST(private_type, public_type, prv_size_def, def_file)   _Static_assert(sizeof(private_type) == sizeof(public_type), "In "def_file" data structure size of "#public_type" doesn't match, check "#prv_size_def)
@@ -38,6 +39,9 @@ static void uart_event_task(void *pvParameters) {
                 int sz = uart_read_bytes(uart->port, ev_trig.buf, ev_trig.size, 0);
                 if(sz < 0) break;
                 ev_trig.size = sz;
+                if(uart->echo_enabled) {
+                    uart_write_bytes(uart->port, ev_trig.buf, ev_trig.size);
+                }
                 event_raise(&uart->on_receive, uart, &ev_trig);
                 size -= sz;
             }
@@ -236,4 +240,14 @@ int32_t gw_uart_available_write(void *desc) {
 void gw_uart_on_receive_subscribe(void *desc, delegate_t *delegate) {
     gw_uart_private_t *uart = (gw_uart_private_t *) desc;
     event_subscribe(&uart->on_receive, delegate);
+}
+
+void gw_uart_set_echo(void *desc, uint8_t enabled) {
+    gw_uart_private_t *uart = (gw_uart_private_t *) desc;
+    uart->echo_enabled = enabled ? 1 : 0;
+}
+
+uint8_t gw_uart_get_echo(void *desc) {
+    gw_uart_private_t *uart = (gw_uart_private_t *) desc;
+    return uart->echo_enabled;
 }

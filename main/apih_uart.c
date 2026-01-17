@@ -152,6 +152,50 @@ static uint8_t _api_handler_uart2_raw_tx(void *call, void **context, uint32_t pe
     return _api_handler_uart_raw_tx(call, context, pending, arg, arg_len, 1);
 }
 
+static uint8_t _api_handler_uart_echo(void *call, void **context, uint32_t pending, uint8_t *arg, uint32_t arg_len, uint8_t port_no) {
+    if(!pending)
+        return 1;
+    app_context_t *app = (app_context_t *)*context;
+    struct app_uart_t *app_uart = &app->uart.port[port_no];
+    uint32_t status = API_CALL_STATUS_COMPLETE;
+
+    if(arg == NULL) {
+        /* If called with no args, return current echo status */
+    }
+    else {
+        cJSON *json = json_parse_with_length_opts((char *)arg, arg_len, 0, 0);
+        if(json) {
+            uint32_t val;
+            if(json_parse_int(json, "E", &val)) {
+                gw_uart_set_echo(&app_uart->desc, val ? 1 : 0);
+            }
+            json_delete(json);
+        }
+        else {
+            status = API_CALL_ERROR_STATUS_BAD_ARG;
+        }
+    }
+
+    /* Send response with current echo state */
+    if(status == API_CALL_STATUS_COMPLETE) {
+        uint8_t echo_state = gw_uart_get_echo(&app_uart->desc);
+        uint8_t tmpbuf[16];
+        uint32_t len = sprintf((char *)tmpbuf, "{\"E\":%d}", echo_state);
+        api_call_send_json(call, tmpbuf, len);
+    }
+    api_call_send_status(call, status);
+    api_call_complete(call);
+    return 1;
+}
+
+static uint8_t _api_handler_uart1_echo(void *call, void **context, uint32_t pending, uint8_t *arg, uint32_t arg_len) {
+    return _api_handler_uart_echo(call, context, pending, arg, arg_len, 0);
+}
+
+static uint8_t _api_handler_uart2_echo(void *call, void **context, uint32_t pending, uint8_t *arg, uint32_t arg_len) {
+    return _api_handler_uart_echo(call, context, pending, arg, arg_len, 1);
+}
+
 typedef struct {
     uint32_t amount;
     uint32_t size;
@@ -189,6 +233,8 @@ void api_handler_uart_work(app_context_t *app) {
         api_call_register(&_api_handler_uart_raw_rx, ESP_WS_API_UART2_RAW_RX, cmd_queue);
         api_call_register(&_api_handler_uart1_raw_tx, ESP_WS_API_UART1_RAW_TX, cmd_queue);
         api_call_register(&_api_handler_uart2_raw_tx, ESP_WS_API_UART2_RAW_TX, cmd_queue);
+        api_call_register(&_api_handler_uart1_echo, ESP_WS_API_UART1_ECHO, app);
+        api_call_register(&_api_handler_uart2_echo, ESP_WS_API_UART2_ECHO, app);
 
         uart_context[0].buf = uart1_buf;
         uart_context[0].amount = 0;
