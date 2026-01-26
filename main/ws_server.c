@@ -244,6 +244,13 @@ static uint8_t _bApiCallSendJson(void *pxApiCall, uint32_t ulFid, const uint8_t 
             while (call != NULL) {
                 res = httpd_ws_send_data_async(call->session->hd, call->session->fd, &resp->frame, vWsTransferComplete_cb, resp);
                 ESP_LOGI(TAG, "Api call %lu json sending with result: %d", call->ulId, res);
+                if(res != ESP_OK) {
+                    /* Async send failed - callback won't be called so free it here */
+                    if((!resp->counter) || !(--resp->counter)) {
+                        free(resp);
+                        resp = NULL;
+                    }
+                }
                 if(fid_group)
                     call = LinkedListGetObject(ApiCall_t, pxLinkedListFindNextNoOverlap(LinkedListItem(call), bCallFidMatch, (void *)ulFid));
                 else break;
