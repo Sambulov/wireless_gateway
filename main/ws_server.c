@@ -312,12 +312,16 @@ static esp_err_t frame_handle_text(httpd_req_t *req, httpd_ws_frame_t *ws_pkt, u
                     xSemaphoreGiveRecursive(xWsApiMutex);
                     ESP_LOGI(TAG, "New api call %lu enqueued with id:%lu", wscd->ulFid, wscd->ulId);
                 }
-                else 
+                else {
                     ESP_LOGW(TAG, "Api call bad FID property");
+                    free(wscd);
+                }
                 cJSON_Delete(json);
             }
-            else 
+            else {
                 ESP_LOGW(TAG, "Invalid JSON");
+                free(wscd);
+            }
         }
         else 
             ESP_LOGW(TAG, "Failed to malloc memory for ws api call");
