@@ -1,0 +1,11 @@
+{
+  "name": "terminal-tests",
+  "version": "1.0.0",
+  "description": "xterm.js terminal UI tests",
+  "scripts": {
+    "test": "node test_terminal.js"
+  },
+  "devDependencies": {
+    "puppeteer": "^21.11.0"
+  }
+}
