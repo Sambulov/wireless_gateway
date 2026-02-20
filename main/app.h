@@ -135,6 +135,7 @@ typedef struct webapi_msg
 }webapi_msg_t;
 
 queue_handle_t get_uart_worker_queue(void);
+queue_handle_t get_ws_worker_queue(void);
 
 
 #ifdef __cplusplus

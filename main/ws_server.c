@@ -51,6 +51,11 @@ static SemaphoreHandle_t xWsNewApiReqSem = NULL;
 static LinkedList_t pxWsApiHandlers = NULL;
 static LinkedList_t pxWsApiCall = NULL;
 static LinkedList_t pxWsApiNewCall = NULL;
+static queue_handle_t xWsWorkerQueue = NULL;
+
+queue_handle_t get_ws_worker_queue(void) {
+    return xWsWorkerQueue;
+}
 
 extern httpd_handle_t server;
 
@@ -64,6 +69,11 @@ static uint8_t bCallClientMatch(LinkedListItem_t *item, void *arg) {
     uint32_t fid = cl_tuple_get(arg, 1, uint32_t);
     ApiCall_t *call = LinkedListGetObject(ApiCall_t, item);
     return call->session && (call->session->fd == fd) && (call->ulFid == fid);
+}
+
+static uint8_t bCallIdMatch(LinkedListItem_t *item, void *arg) {
+    ApiCall_t *call = LinkedListGetObject(ApiCall_t, item);
+    return (call->ulId == (uint32_t)arg) && call->session;
 }
 
 static uint8_t bCallFidMatch(LinkedListItem_t *item, void *arg) {
@@ -549,6 +559,21 @@ static void vWsApiCallWorker(void *pvParameters) {
             call->pucReqData = NULL;
             xSemaphoreGiveRecursive(xWsApiMutex);
         }
+        webapi_msg_t *periph_msg = NULL;
+        while(queue_receive(xWsWorkerQueue, &periph_msg, pdMS_TO_TICKS(0)) == pdPASS) {
+            xSemaphoreTakeRecursive(xWsApiMutex, portMAX_DELAY);
+            if(periph_msg->id) {
+                ApiCall_t *call = LinkedListGetObject(ApiCall_t,
+                    pxLinkedListFindFirst(pxWsApiCall, bCallIdMatch, (void *)periph_msg->id));
+                if(call)
+                    _bApiCallSendJson(call, 0, periph_msg->data, periph_msg->len);
+            } else {
+                _bApiCallSendJson(NULL, periph_msg->fid, periph_msg->data, periph_msg->len);
+            }
+            xSemaphoreGiveRecursive(xWsApiMutex);
+            free(periph_msg->data);
+            free(periph_msg);
+        }
     }
     vTaskDelete(NULL);
 }
@@ -567,6 +592,7 @@ httpd_uri_t *pxWsServerInit(char *uri) {
         static StaticSemaphore_t xReqSemBuffer;
         xWsApiMutex = xSemaphoreCreateRecursiveMutexStatic( &xSemBuffer );
         xWsNewApiReqSem = xSemaphoreCreateCountingStatic(-1, 0, &xReqSemBuffer);
+        xWsWorkerQueue = queue_create(10, sizeof(void *));
         xTaskCreate(vWsApiCallWorker, "ApiCallWork", 8192, NULL, uxTaskPriorityGet(NULL), NULL); /* todo add context */
     }
     return ws_h;
