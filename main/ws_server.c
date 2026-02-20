@@ -465,8 +465,11 @@ static esp_err_t eWsHandler(httpd_req_t *req) {
     return result;
 }
 
+
 static void vWsApiCallWorker(void *pvParameters) {
     static uint32_t call_id = 0;    
+    queue_handle_t uart_worker_queue = get_uart_worker_queue();
+
     for(;;) {
         xSemaphoreTakeRecursive(xWsApiMutex, portMAX_DELAY);
         ulLinkedListDoForeach(pxWsApiCall, vServeApiCall, NULL);

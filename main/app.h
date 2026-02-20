@@ -108,7 +108,8 @@ void api_handler_system_work(app_context_t *app);
 #define ESP_WS_API_UART2_RAW_RX      0x1021
 #define ESP_WS_API_UART2_RAW_TX      0x1022
 #define ESP_WS_API_UART2_ECHO        0x1023
-void api_handler_uart_work(app_context_t *app);
+//TODO: move to apih_uart.h
+esp_err_t ws_uart_run(app_context_t *app);
 
 #define ESP_WS_API_UART1_MODBUS_CNF  0x1110
 #define ESP_WS_API_UART1_MODBUS_SERV 0x1111
@@ -123,6 +124,17 @@ void api_handler_uart_work(app_context_t *app);
 //#define ESP_WS_API_UART2_MODBUS_TCP  0x1124
 //#define ESP_WS_API_UART2_MODBUS_UDP  0x1126
 void api_handler_modbus_work(app_context_t *app);
+
+/* Is used to send "short" ApiCall_t from ws_server to peripheral workers (uart, modbus) */
+typedef struct webapi_msg
+{
+	int fid;
+	int id;
+	uint8_t *data;
+	size_t len;
+}webapi_msg_t;
+
+queue_handle_t get_uart_worker_queue(void);
 
 
 #ifdef __cplusplus
