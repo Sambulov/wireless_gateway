@@ -466,8 +466,22 @@ static esp_err_t eWsHandler(httpd_req_t *req) {
 }
 
 
+static uint8_t is_uart_fid(uint32_t fid) {
+    switch(fid) {
+    case ESP_WS_API_UART1_CNF:
+    case ESP_WS_API_UART1_RAW_RX:
+    case ESP_WS_API_UART1_RAW_TX:
+    case ESP_WS_API_UART2_CNF:
+    case ESP_WS_API_UART2_RAW_RX:
+    case ESP_WS_API_UART2_RAW_TX:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
 static void vWsApiCallWorker(void *pvParameters) {
-    static uint32_t call_id = 0;    
+    static uint32_t call_id = 0;
     queue_handle_t uart_worker_queue = get_uart_worker_queue();
 
     for(;;) {
@@ -507,13 +521,28 @@ static void vWsApiCallWorker(void *pvParameters) {
                 }
                 if(call->fHandler != NULL) {
                     uint8_t res = call->fHandler(call, &call->pxHandlerContext, call->ulCallPending, call->pucReqData, call->ulReqDataLen);
-                    if(res && call->ulCallPending) 
+                    if(res && call->ulCallPending)
                         call->ulCallPending--;
                     if(!call->ulCallPending)
                         call->session = NULL;
                 }
+                if(is_uart_fid(call->ulFid)) {
+                    webapi_msg_t *msg = malloc(sizeof(webapi_msg_t));
+                    if(msg) {
+                        msg->fid  = call->ulFid;
+                        msg->id   = call->ulId;
+                        msg->data = call->pucReqData;
+                        msg->len  = call->ulReqDataLen;
+                        if(queue_send(uart_worker_queue, &msg, pdMS_TO_TICKS(0)) == pdPASS)
+                            call->pucReqData = NULL; /* ownership transferred to msg */
+                        else {
+                            ESP_LOGW(TAG, "UART queue full, FID 0x%lx dropped", call->ulFid);
+                            free(msg);
+                        }
+                    }
+                }
             }
-            else 
+            else
                 vLinkedListInsertLast(&pxWsApiCall, pxWsApiNewCall);
             call->ulReqDataLen = 0;
             free(call->pucReqData);
