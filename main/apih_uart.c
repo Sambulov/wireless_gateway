@@ -364,16 +364,6 @@ void ws_uart_task(void *param) {
                     }
                 }
             }
-            if (ctx->amount) {
-                    int32_t tmp_buf_len = base64_encode_buffer_required(ctx->amount);
-                    uint8_t buf[tmp_buf_len + 2];
-
-                    buf[0] = buf[tmp_buf_len + 1] = '\"';
-                    base64_encode(&buf[1], tmp_buf_len, ctx->buf, ctx->amount);
-
-                    ctx->amount = 0;
-            }
-            //TODO: send response
 	        break;
         default:
             ESP_LOGI(TAG, "UART have no FID (%d) handler\n", in_msg->fid);
