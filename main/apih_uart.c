@@ -351,6 +351,19 @@ void ws_uart_task(void *param) {
 	        if (!ctx)
                 ctx = &uart_context[1];
 
+            if (in_msg->data && in_msg->len > 2) {
+                uint8_t *b64 = in_msg->data + 1;        /* skip leading '"' */
+                size_t b64_len = in_msg->len - 2;        /* strip both '"' */
+                int32_t buf_size = base64_decode_buffer_required(b64, b64_len);
+                if (buf_size > 0) {
+                    uint8_t buf[buf_size];
+                    int32_t decoded = base64_decode(buf, buf_size, b64, b64_len);
+                    if (decoded > 0) {
+                        int port = (ctx == &uart_context[0]) ? 0 : 1;
+                        gw_uart_write(&app->uart.port[port].desc, buf, decoded);
+                    }
+                }
+            }
             if (ctx->amount) {
                     int32_t tmp_buf_len = base64_encode_buffer_required(ctx->amount);
                     uint8_t buf[tmp_buf_len + 2];
