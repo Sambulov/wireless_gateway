@@ -330,7 +330,13 @@ void ws_uart_task(void *param) {
                     int32_t decoded = base64_decode(buf, buf_size, b64, b64_len);
                     if (decoded > 0) {
                         int port = (ctx == &uart_context[0]) ? 0 : 1;
-                        gw_uart_write(&app->uart.port[port].desc, buf, decoded);
+                        int32_t written = gw_uart_write(&app->uart.port[port].desc, buf, decoded);
+                        cJSON *resp_json = cJSON_CreateObject();
+                        if (resp_json) {
+                            cJSON_AddNumberToObject(resp_json, "written", written);
+                            send_uart_response(in_msg->id, in_msg->fid, resp_json);
+                            json_delete(resp_json);
+                        }
                     }
                 }
             }
