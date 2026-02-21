@@ -278,73 +278,77 @@ static uint8_t parse_uart_params(const uint8_t *data, size_t len,
 	return 1;
 }
 
+static void handle_msg(app_context_t *app, webapi_msg_t *in_msg)
+{
+	struct app_uart_t *app_uart = NULL;
+	uart_subscription_context_t *ctx = NULL;
+	gw_uart_config_t new_cfg;
+
+	switch (in_msg->fid) {
+	case ESP_WS_API_UART1_CNF:
+		app_uart = &app->uart.port[0];
+	case ESP_WS_API_UART2_CNF:
+		if (!app_uart)
+			app_uart = &app->uart.port[1];
+
+		if (!in_msg->data)
+			break;
+		api_cmd_uart_t cmd = {0};
+		if (parse_uart_params(in_msg->data, in_msg->len, &cmd)) {
+			new_cfg = uart_config(app_uart, &cmd, sizeof(cmd));
+			cJSON *resp_json = format_uart_resp(&new_cfg);
+			if (resp_json) {
+				send_uart_response(in_msg->id, in_msg->fid, resp_json);
+				json_delete(resp_json);
+			}
+		}
+		break;
+	case ESP_WS_API_UART1_RAW_RX:
+	case ESP_WS_API_UART2_RAW_RX:
+		break;
+	case ESP_WS_API_UART1_RAW_TX:
+		ctx = &uart_context[0];
+	case ESP_WS_API_UART2_RAW_TX:
+		if (!ctx)
+			ctx = &uart_context[1];
+
+		if (in_msg->data && in_msg->len > 2) {
+			uint8_t *b64 = in_msg->data + 1;       /* skip leading '"' */
+			size_t b64_len = in_msg->len - 2;       /* strip both '"' */
+			int32_t buf_size = base64_decode_buffer_required(b64, b64_len);
+
+			if (buf_size > 0) {
+				uint8_t buf[buf_size];
+				int32_t decoded = base64_decode(buf, buf_size, b64, b64_len);
+
+				if (decoded > 0) {
+					int port = (ctx == &uart_context[0]) ? 0 : 1;
+					int32_t written = gw_uart_write(&app->uart.port[port].desc, buf, decoded);
+
+					cJSON *resp_json = cJSON_CreateObject();
+					if (resp_json) {
+						cJSON_AddNumberToObject(resp_json, "written", written);
+						send_uart_response(in_msg->id, in_msg->fid, resp_json);
+						json_delete(resp_json);
+					}
+				}
+			}
+		}
+		break;
+	default:
+		ESP_LOGI(TAG, "UART have no FID (%d) handler\n", in_msg->fid);
+		break;
+	}
+}
+
 //void api_handler_uart_work(app_context_t *app) {
 void ws_uart_task(void *param) {
-    api_cmd_uart_t *cmd = NULL;
     webapi_msg_t *in_msg = NULL;
-    const uint32_t port_rx_fid[2] = {ESP_WS_API_UART1_RAW_RX, ESP_WS_API_UART2_RAW_RX};
-    const uint32_t port_cnf_fid[2] = {ESP_WS_API_UART1_CNF, ESP_WS_API_UART2_CNF};
     app_context_t *app = param;
-    struct app_uart_t *app_uart = NULL;
-    gw_uart_config_t new_cfg;
-    uart_subscription_context_t *ctx;
 
     for (;;) {
         queue_receive(cmd_queue, &in_msg, pdMS_TO_TICKS(0));
-        app_uart = NULL;
-        ctx = NULL;
-
-	    switch (in_msg->fid) {
-	    case ESP_WS_API_UART1_CNF:
-            app_uart = &app->uart.port[0];
-	    case ESP_WS_API_UART2_CNF:
-            if (!app_uart)
-                app_uart = &app->uart.port[1];
-
-            if (!in_msg->data) break;
-            api_cmd_uart_t cmd = {0};
-            if (parse_uart_params(in_msg->data, in_msg->len, &cmd)) {
-                new_cfg = uart_config(app_uart, &cmd, sizeof(cmd));
-                cJSON *resp_json = format_uart_resp(&new_cfg);
-                if (resp_json) {
-                    send_uart_response(in_msg->id, in_msg->fid, resp_json);
-                    json_delete(resp_json);
-                }
-            }
-		    break;
-	    case ESP_WS_API_UART1_RAW_RX:
-	    case ESP_WS_API_UART2_RAW_RX:
-		    break;
-	    case ESP_WS_API_UART1_RAW_TX:
-	        ctx = &uart_context[0];
-        case ESP_WS_API_UART2_RAW_TX:
-	        if (!ctx)
-                ctx = &uart_context[1];
-
-            if (in_msg->data && in_msg->len > 2) {
-                uint8_t *b64 = in_msg->data + 1;        /* skip leading '"' */
-                size_t b64_len = in_msg->len - 2;        /* strip both '"' */
-                int32_t buf_size = base64_decode_buffer_required(b64, b64_len);
-                if (buf_size > 0) {
-                    uint8_t buf[buf_size];
-                    int32_t decoded = base64_decode(buf, buf_size, b64, b64_len);
-                    if (decoded > 0) {
-                        int port = (ctx == &uart_context[0]) ? 0 : 1;
-                        int32_t written = gw_uart_write(&app->uart.port[port].desc, buf, decoded);
-                        cJSON *resp_json = cJSON_CreateObject();
-                        if (resp_json) {
-                            cJSON_AddNumberToObject(resp_json, "written", written);
-                            send_uart_response(in_msg->id, in_msg->fid, resp_json);
-                            json_delete(resp_json);
-                        }
-                    }
-                }
-            }
-	        break;
-        default:
-            ESP_LOGI(TAG, "UART have no FID (%d) handler\n", in_msg->fid);
-            break;
-	    }
+        handle_msg(app, in_msg);
     }
 }
 
