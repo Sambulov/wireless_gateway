@@ -227,13 +227,17 @@ static void uart_event_on_rx(void *event_trigger, void *sender, void *context) {
 }
 
 
-static int format_uart_resp(const gw_uart_config_t *cnf, uint8_t *buf, size_t buf_len)
+static cJSON *format_uart_resp(const gw_uart_config_t *cnf)
 {
-    uint32_t len = snprintf((char *)buf, buf_len,
-            "{\"BR\":\"0x%08lx\",\"WL\":\"0x%02x\",\"PAR\":\"0x%02x\",\"SB\":\"0x%02x\"}", 
-            cnf->boud, cnf->bits, cnf->parity, cnf->stop);
+	cJSON *json = cJSON_CreateObject();
 
-    return len;
+	if (!json)
+		return NULL;
+	cJSON_AddNumberToObject(json, "BR",  cnf->boud);
+	cJSON_AddNumberToObject(json, "WL",  cnf->bits);
+	cJSON_AddNumberToObject(json, "PAR", cnf->parity);
+	cJSON_AddNumberToObject(json, "SB",  cnf->stop);
+	return json;
 }
 
 static uint8_t uart1_buf[UART_TMP_BUF_SIZE];
@@ -263,17 +267,54 @@ static gw_uart_config_t uart_config(struct app_uart_t *uart, void *new_cfg, size
     return gw_cfg;
 }
 
+static void send_uart_response(int id, int fid, cJSON *json)
+{
+	webapi_msg_t *msg = malloc(sizeof(webapi_msg_t));
+
+	if (!msg)
+		return;
+	msg->data = (uint8_t *)cJSON_PrintUnformatted(json);
+	if (!msg->data) {
+		free(msg);
+		return;
+	}
+	msg->len = strlen((char *)msg->data);
+	msg->id  = id;
+	msg->fid = fid;
+	queue_send(get_ws_worker_queue(), &msg, pdMS_TO_TICKS(0));
+}
+
+static uint8_t parse_uart_params(const uint8_t *data, size_t len,
+				 api_cmd_uart_t *cmd)
+{
+	cJSON *json = json_parse_with_length_opts((char *)data, len, 0, 0);
+	uint32_t val;
+
+	if (!json)
+		return 0;
+	cmd->wl_set = json_parse_int(json, "WL", &val);
+	if (cmd->wl_set)
+		cmd->wl = val;
+	cmd->boud_set = json_parse_int(json, "BR", &val);
+	if (cmd->boud_set)
+		cmd->boud = val;
+	cmd->par_set = json_parse_int(json, "PAR", &val);
+	if (cmd->par_set)
+		cmd->par = val;
+	cmd->sb_set = json_parse_int(json, "SB", &val);
+	if (cmd->sb_set)
+		cmd->sb = val;
+	json_delete(json);
+	return 1;
+}
+
 //void api_handler_uart_work(app_context_t *app) {
 void ws_uart_task(void *param) {
     api_cmd_uart_t *cmd = NULL;
     webapi_msg_t *in_msg = NULL;
     const uint32_t port_rx_fid[2] = {ESP_WS_API_UART1_RAW_RX, ESP_WS_API_UART2_RAW_RX};
     const uint32_t port_cnf_fid[2] = {ESP_WS_API_UART1_CNF, ESP_WS_API_UART2_CNF};
-    gw_uart_config_t cnf;
     app_context_t *app = param;
-    uint8_t resp[64];
-    uint32_t now;
-    size_t len;
     struct app_uart_t *app_uart = NULL;
     gw_uart_config_t new_cfg;
     uart_subscription_context_t *ctx;
@@ -290,10 +331,16 @@ void ws_uart_task(void *param) {
             if (!app_uart)
                 app_uart = &app->uart.port[1];
 
-            new_cfg = uart_config(app_uart, in_msg->data, in_msg->len);
-            len = format_uart_resp(&new_cfg, resp, sizeof(resp));
-
-            //TODO: send back the response
+            if (!in_msg->data) break;
+            api_cmd_uart_t cmd = {0};
+            if (parse_uart_params(in_msg->data, in_msg->len, &cmd)) {
+                new_cfg = uart_config(app_uart, &cmd, sizeof(cmd));
+                cJSON *resp_json = format_uart_resp(&new_cfg);
+                if (resp_json) {
+                    send_uart_response(in_msg->id, in_msg->fid, resp_json);
+                    json_delete(resp_json);
+                }
+            }
 		    break;
 	    case ESP_WS_API_UART1_RAW_RX:
 	    case ESP_WS_API_UART2_RAW_RX:
