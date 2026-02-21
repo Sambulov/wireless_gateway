@@ -101,39 +101,9 @@ static uint8_t _api_handler_uart2_cnf(void *call, void **context, uint32_t pendi
 }
 
 static uint8_t _api_handler_uart_raw_tx(void *call, void **context, uint32_t pending, uint8_t *arg, uint32_t arg_len, uint8_t port_no) {
-    uint32_t status = API_CALL_ERROR_STATUS_BAD_ARG;
-    uint8_t *data = NULL;
-    uint8_t valid_arg = arg && (arg_len > 5) && (arg[0] == '"') && ((arg[arg_len - 1] == '"'));
-    arg_len -= 2;
-    arg++;
-    do {
-        if(!valid_arg) break;
-        int32_t buf_size = base64_decode_buffer_required(arg, arg_len);
-        if(buf_size <= 0) break;
-        status = API_CALL_ERROR_STATUS_NO_MEM;
-        data = malloc(sizeof(api_cmd_uart_t) + buf_size);
-        if(!data) break;
-        api_cmd_uart_t *cmd = (api_cmd_uart_t *)data;
-        status = API_CALL_ERROR_STATUS_BAD_ARG;
-        uint8_t *buf = &data[sizeof(api_cmd_uart_t)];
-        if(base64_decode(buf, buf_size, arg, arg_len) < 0) break;
-        cmd->call = call;
-        cmd->data = buf;
-        cmd->size = buf_size;
-        cmd->port_no = port_no;
-        status = API_CALL_STATUS_BUSY;
-        queue_handle_t queue = (queue_handle_t)*context;
-        if(queue_send(queue, (void *)&cmd, pdMS_TO_TICKS(0)) != pdPASS) {
-            ESP_LOGI(TAG, "Uart data dropped");
-            break;
-        }
-        ESP_LOGI(TAG, "Uart data enqueued");
-        status = API_CALL_STATUS_EXECUTING;
-        break;
-    } while (1);
-    if(status != API_CALL_STATUS_EXECUTING) {
-        api_call_send_status(call, status);
-        free(data);
+    uint8_t valid_arg = arg && (arg_len > 2) && (arg[0] == '"') && (arg[arg_len - 1] == '"');
+    if (!valid_arg) {
+        api_call_send_status(call, API_CALL_ERROR_STATUS_BAD_ARG);
         return 1;
     }
     return 0;
