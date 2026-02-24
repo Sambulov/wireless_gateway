@@ -92,6 +92,8 @@ void app_main(void)
     if (!ret)
 	ESP_LOGI("app", "can't run ws_uart task");
 
+    ws_uart_integrational_test_run(&app_context);
+
     
     while (1) {
         api_handler_system_work(&app_context);

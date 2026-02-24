@@ -110,6 +110,7 @@ void api_handler_system_work(app_context_t *app);
 #define ESP_WS_API_UART2_ECHO        0x1023
 //TODO: move to apih_uart.h
 esp_err_t ws_uart_run(app_context_t *app);
+void ws_uart_integrational_test_run(app_context_t *app);
 
 #define ESP_WS_API_UART1_MODBUS_CNF  0x1110
 #define ESP_WS_API_UART1_MODBUS_SERV 0x1111
