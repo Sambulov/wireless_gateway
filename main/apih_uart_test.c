@@ -32,8 +32,8 @@ static void vUartRawTxTest(void *pvParameters)
         const char *label;
         const char *data; /* JSON string value: "base64payload" */
     } ports[] = {
-        { ESP_WS_API_UART1_RAW_TX, 1, "UART1", "\"SGVsbG8=\"" },
-        { ESP_WS_API_UART2_RAW_TX, 2, "UART2", "\"SGVsbG8=\"" },
+        { ESP_WS_API_UART1_RAW_TX, 1, "UART1", "\"SGVsbG8NCg==\"" },
+        { ESP_WS_API_UART2_RAW_TX, 2, "UART2", "\"SGVsbG8NCg==\"" },
     };
 
     uint32_t sent = 0, ok = 0, tout = 0, drop = 0;
