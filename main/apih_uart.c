@@ -347,8 +347,12 @@ void ws_uart_task(void *param) {
     app_context_t *app = param;
 
     for (;;) {
-        queue_receive(cmd_queue, &in_msg, pdMS_TO_TICKS(0));
-        handle_msg(app, in_msg);
+        if (queue_receive(cmd_queue, &in_msg, portMAX_DELAY) == pdPASS) {
+            handle_msg(app, in_msg);
+            free(in_msg->data);
+            free(in_msg);
+            in_msg = NULL;
+        }
     }
 }
 
