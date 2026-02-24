@@ -92,7 +92,10 @@ void app_main(void)
     if (!ret)
 	ESP_LOGI("app", "can't run ws_uart task");
 
+#if 0
+    //TOOD: move test to other place.
     ws_uart_integrational_test_run(&app_context);
+#endif
 
     
     while (1) {
