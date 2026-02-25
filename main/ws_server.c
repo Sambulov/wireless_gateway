@@ -492,7 +492,6 @@ static uint8_t is_uart_fid(uint32_t fid) {
 
 static void vWsApiCallWorker(void *pvParameters) {
     static uint32_t call_id = 0;
-    queue_handle_t uart_worker_queue = get_uart_worker_queue();
 
     for(;;) {
         xSemaphoreTakeRecursive(xWsApiMutex, portMAX_DELAY);
@@ -544,6 +543,7 @@ static void vWsApiCallWorker(void *pvParameters) {
 //                        call->session = NULL;
 //                }
                 if(is_uart_fid(call->ulFid)) {
+                    queue_handle_t uart_worker_queue = get_uart_worker_queue();
                     webapi_msg_t *msg = malloc(sizeof(webapi_msg_t));
                     if(msg) {
                         msg->fid  = call->ulFid;
@@ -555,7 +555,7 @@ static void vWsApiCallWorker(void *pvParameters) {
                         } else {
                             ESP_LOGW(TAG, "UART queue full, FID 0x%lx dropped", call->ulFid);
                             free(msg);
-                            bApiCallSendStatus(call, API_CALL_ERROR_STATUS_BUSY);
+                            bApiCallSendStatus(call, API_CALL_STATUS_BUSY);
                             call->session = NULL;
                         }
                     }
