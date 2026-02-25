@@ -100,13 +100,11 @@ static uint8_t _api_handler_uart2_cnf(void *call, void **context, uint32_t pendi
     return _api_handler_uart_cnf(call, context, pending, arg, arg_len, 1);
 }
 
-static uint8_t _api_handler_uart_raw_tx(void *call, void **context, uint32_t pending, uint8_t *arg, uint32_t arg_len, uint8_t port_no) {
-    uint8_t valid_arg = arg && (arg_len > 2) && (arg[0] == '"') && (arg[arg_len - 1] == '"');
-    if (!valid_arg) {
-        api_call_send_status(call, API_CALL_ERROR_STATUS_BAD_ARG);
-        return 1;
-    }
-    return 0;
+static uint8_t _api_handler_uart_raw_tx(void *call, void **context, uint32_t pending, uint8_t *arg, uint32_t arg_len, uint8_t port_no)
+{
+    int delete = 1;
+
+    return delete;
 }
 
 static uint8_t _api_handler_uart_raw_rx(void *call, void **context, uint32_t pending, uint8_t *arg, uint32_t arg_len) {
