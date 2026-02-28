@@ -175,6 +175,7 @@ typedef struct {
     uint32_t amount;
     uint32_t size;
     uint8_t *buf;
+    SemaphoreHandle_t lock;
 } uart_subscription_context_t;
 
 
@@ -185,13 +186,14 @@ static void uart_event_on_rx(void *event_trigger, void *sender, void *context) {
     (void)sender;
     uart_subscription_context_t *buf_desc = (uart_subscription_context_t *)context;
     gw_uart_event_data_t *data = (gw_uart_event_data_t *)event_trigger;
-    size_t sz = buf_desc->size - buf_desc->amount;
 
+    xSemaphoreTake(buf_desc->lock, portMAX_DELAY);
+    size_t sz = buf_desc->size - buf_desc->amount;
     if(sz > data->size)
         sz = data->size;
-
     mem_cpy(&buf_desc->buf[buf_desc->amount], data->buf, sz);
     buf_desc->amount += sz;
+    xSemaphoreGive(buf_desc->lock);
 }
 
 
@@ -302,7 +304,33 @@ static void handle_msg(app_context_t *app, webapi_msg_t *in_msg)
 		}
 		break;
 	case ESP_WS_API_UART1_RAW_RX:
+		ctx = &uart_context[0];
 	case ESP_WS_API_UART2_RAW_RX:
+		if (!ctx)
+			ctx = &uart_context[1];
+
+		xSemaphoreTake(ctx->lock, portMAX_DELAY);
+		uint32_t amount = ctx->amount;
+		uint8_t tmp[amount];
+		if (amount > 0) {
+			mem_cpy(tmp, ctx->buf, amount);
+			ctx->amount = 0;
+		}
+		xSemaphoreGive(ctx->lock);
+
+		if (amount > 0) {
+			int32_t b64_size = base64_encode_buffer_required(amount);
+			uint8_t b64_buf[b64_size + 1];
+			int32_t b64_len = base64_encode(b64_buf, b64_size, tmp, amount);
+			if (b64_len > 0) {
+				b64_buf[b64_len] = '\0';
+				cJSON *json = cJSON_CreateString((char *)b64_buf);
+				if (json) {
+					send_uart_response(in_msg->id, in_msg->fid, json);
+					json_delete(json);
+				}
+			}
+		}
 		break;
 	case ESP_WS_API_UART1_RAW_TX:
 		ctx = &uart_context[0];
@@ -369,12 +397,14 @@ esp_err_t ws_uart_run(app_context_t *app)
         uart_context[0].buf = uart1_buf;
         uart_context[0].amount = 0;
         uart_context[0].size = sizeof(uart1_buf);
+        uart_context[0].lock = xSemaphoreCreateMutex();
         uart1_delegate.handler = &uart_event_on_rx;
         uart1_delegate.context = &uart_context[0];
 
         uart_context[1].buf = uart2_buf;
         uart_context[1].amount = 0;
         uart_context[1].size = sizeof(uart2_buf);
+        uart_context[1].lock = xSemaphoreCreateMutex();
         uart2_delegate.context = &uart_context[1];
         uart2_delegate.handler = &uart_event_on_rx;
 
