@@ -137,7 +137,6 @@ static void vServeApiCall(LinkedListItem_t *item, void *arg) {
     }
     else {
         ESP_LOGI(TAG, "Api call complete, id: %lu", call->ulId);
-        if(call->fHandler != NULL) call->fHandler(call, &call->pxHandlerContext, 0, NULL, 0);
         vLinkedListUnlink(item);
         free(call);
     }
@@ -550,6 +549,7 @@ static void vWsApiCallWorker(void *pvParameters) {
                         msg->id   = call->ulId;
                         msg->data = call->pucReqData;
                         msg->len  = call->ulReqDataLen;
+
                         if(queue_send(uart_worker_queue, &msg, pdMS_TO_TICKS(0)) == pdPASS) {
                             call->pucReqData = NULL; /* ownership transferred to msg */
                         } else {
@@ -560,10 +560,10 @@ static void vWsApiCallWorker(void *pvParameters) {
                         }
                     }
                 }
-            }
-            else {
+            } else {
                 vLinkedListInsertLast(&pxWsApiCall, pxWsApiNewCall);
 	    }
+
             call->ulReqDataLen = 0;
             free(call->pucReqData);
             call->pucReqData = NULL;
