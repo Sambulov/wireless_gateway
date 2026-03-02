@@ -108,15 +108,16 @@ static uint8_t _api_handler_uart_raw_tx(void *call, void **context, uint32_t pen
 }
 
 static uint8_t _api_handler_uart_raw_rx(void *call, void **context, uint32_t pending, uint8_t *arg, uint32_t arg_len) {
-    if(pending == 1) { /* If first time call, subscribe. We will feed data to all clients by FID */
-        api_call_send_status(call, API_CALL_STATUS_EXECUTING);
-        return 0;
-    }
-    else if(pending) { /* unsubscribe */
-        api_call_send_status(call, API_CALL_STATUS_CANCELED);
-        api_call_complete(call);
-    }
-    return 1;
+    return 0;
+//    if(pending == 1) { /* If first time call, subscribe. We will feed data to all clients by FID */
+//        api_call_send_status(call, API_CALL_STATUS_EXECUTING);
+//        return 0;
+//    }
+//    else if(pending) { /* unsubscribe */
+//        api_call_send_status(call, API_CALL_STATUS_CANCELED);
+//        api_call_complete(call);
+//    }
+//    return 1;
 }
 
 static uint8_t _api_handler_uart1_raw_tx(void *call, void **context, uint32_t pending, uint8_t *arg, uint32_t arg_len) {
@@ -239,18 +240,24 @@ static gw_uart_config_t uart_config(struct app_uart_t *uart, void *new_cfg, size
 
 static void send_uart_response(int id, int fid, cJSON *json)
 {
-	webapi_msg_t *msg = malloc(sizeof(webapi_msg_t));
+	webapi_msg_t msg;
 
-	if (!msg)
-		return;
-	msg->data = (uint8_t *)cJSON_PrintUnformatted(json);
-	if (!msg->data) {
-		free(msg);
-		return;
-	}
-	msg->len = strlen((char *)msg->data);
-	msg->id  = id;
-	msg->fid = fid;
+    //todo: refactor
+    if (json) {
+    	msg.data = (uint8_t *)cJSON_PrintUnformatted(json);
+    	if (!msg.data) {
+            msg.data = NULL;
+            msg.len = 0; 
+        } else {
+	        msg.len = strlen((char *)msg.data);
+        }
+    } else {
+        msg.data = NULL;
+        msg.len = 0; 
+    }
+
+	msg.id  = id;
+	msg.fid = fid;
 	queue_send(get_ws_worker_queue(), &msg, pdMS_TO_TICKS(0));
 }
 
@@ -283,6 +290,8 @@ static void handle_msg(app_context_t *app, webapi_msg_t *in_msg)
 	struct app_uart_t *app_uart = NULL;
 	uart_subscription_context_t *ctx = NULL;
 	gw_uart_config_t new_cfg;
+	uint32_t amount = 0;
+	uint8_t tmp[UART_TMP_BUF_SIZE];
 
 	switch (in_msg->fid) {
 	case ESP_WS_API_UART1_CNF:
@@ -310,8 +319,7 @@ static void handle_msg(app_context_t *app, webapi_msg_t *in_msg)
 			ctx = &uart_context[1];
 
 		xSemaphoreTake(ctx->lock, portMAX_DELAY);
-		uint32_t amount = ctx->amount;
-		uint8_t tmp[amount];
+		amount = ctx->amount;
 		if (amount > 0) {
 			mem_cpy(tmp, ctx->buf, amount);
 			ctx->amount = 0;
@@ -320,6 +328,7 @@ static void handle_msg(app_context_t *app, webapi_msg_t *in_msg)
 
 		if (amount > 0) {
 			int32_t b64_size = base64_encode_buffer_required(amount);
+            //todo: fix. use malloc
 			uint8_t b64_buf[b64_size + 1];
 			int32_t b64_len = base64_encode(b64_buf, b64_size, tmp, amount);
 			if (b64_len > 0) {
@@ -330,7 +339,9 @@ static void handle_msg(app_context_t *app, webapi_msg_t *in_msg)
 					json_delete(json);
 				}
 			}
-		}
+		} else {
+       	    send_uart_response(in_msg->id, in_msg->fid, NULL);
+        }
 		break;
 	case ESP_WS_API_UART1_RAW_TX:
 		ctx = &uart_context[0];
