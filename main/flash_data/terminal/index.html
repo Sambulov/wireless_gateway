@@ -201,27 +201,7 @@
           showError('Ошибка создания терминала: ' + error.message);
           return;
         }
-        setTimeout(() => {
-          const terminalContainer = document.getElementById('terminal-container');
-          const terminalEl = document.getElementById('terminal');
-          if (terminalContainer && terminalEl) {
-            forceReflow(terminalContainer);
-            forceReflow(terminalEl);
-            const xtermElements = terminalEl.querySelectorAll('.xterm, .xterm-viewport, .xterm-screen');
-            xtermElements.forEach(el => forceReflow(el));
-            terminalContainer.style.display = 'none';
-            requestAnimationFrame(() => {
-              terminalContainer.style.display = 'block';
-              if (ensureTerminalStyles()) {
-                finalizeLoading();
-              } else {
-                setTimeout(finalizeLoading, 100);
-              }
-            });
-          } else {
-            finalizeLoading();
-          }
-        }, 100);
+        finalizeLoading();
       });
     }
     
@@ -239,13 +219,8 @@
       
       forceReflow(document.body);
       
-      if (window.espTerminal && window.espTerminal.terminal) {
-        setTimeout(() => {
-          if (typeof window.espTerminal.terminal.fit === 'function') {
-            window.espTerminal.terminal.fit();
-            console.log('Размер терминала скорректирован');
-          }
-        }, 50);
+      if (window.espTerminal && window.espTerminal.fitAddon) {
+        setTimeout(() => window.espTerminal.fitAddon.fit(), 50);
       }
       
       console.log('Приложение полностью загружено и отрисовано');

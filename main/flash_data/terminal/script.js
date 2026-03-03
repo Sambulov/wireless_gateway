@@ -57,17 +57,13 @@ class ESP32Terminal {
            try {
                 this.fitAddon.fit();
                this.term.focus();
-                
+
                // Форсируем пересчет размеров
                this.term.refresh(0, this.term.rows - 1);
            } catch (error) {
                console.error('Ошибка при инициализации терминала:', error);
            }
         }, 100);
-    
-        // Открытие терминала в контейнере
-        this.term.open(document.getElementById('terminal'));
-        this.fitAddon.fit();
         
         // Обработка ввода пользователя
         this.term.onData((data) => {
@@ -75,7 +71,7 @@ class ESP32Terminal {
         });
         
         this.term.writeln('\x1b[1;36mESP32 Web Terminal v1.0\x1b[0m');
-        this.term.writeln('\x1b[33mВведите адрес WebSocket и нажмите "Подключиться"\x1b[0m');
+        this.term.writeln('\x1b[33mEnter WebSocket URL and click Connect\x1b[0m');
     }
     
     bindEvents() {

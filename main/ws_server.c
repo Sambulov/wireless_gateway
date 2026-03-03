@@ -97,16 +97,16 @@ static void vBreakApiCallByFid(LinkedListItem_t *item, void *arg) {
     }
 }
 
-static void vBreakApiCallsByFd(uint32_t LockWait, uint32_t fd) {
-    if(xSemaphoreTakeRecursive(xWsApiMutex, pdMS_TO_TICKS(LockWait)) == pdTRUE) {
+static void vBreakApiCallsByFd(TickType_t wait, uint32_t fd) {
+    if(xSemaphoreTakeRecursive(xWsApiMutex, wait) == pdTRUE) {
         ulLinkedListDoForeach(pxWsApiCall, vBreakApiCallByFd, (void *)fd);
         ulLinkedListDoForeach(pxWsApiWaitingForResponse, vBreakApiCallByFd, (void *)fd);
         xSemaphoreGiveRecursive(xWsApiMutex);
     }
 }
 
-static void vBreakApiCallsByFid(uint32_t LockWait, uint32_t fid) {
-    if(xSemaphoreTakeRecursive(xWsApiMutex, pdMS_TO_TICKS(LockWait)) == pdTRUE) {
+static void vBreakApiCallsByFid(TickType_t wait, uint32_t fid) {
+    if(xSemaphoreTakeRecursive(xWsApiMutex, wait) == pdTRUE) {
         ulLinkedListDoForeach(pxWsApiCall, vBreakApiCallByFid, (void *)fid);
         ulLinkedListDoForeach(pxWsApiWaitingForResponse, vBreakApiCallByFid, (void *)fid);
         xSemaphoreGiveRecursive(xWsApiMutex);
@@ -145,8 +145,8 @@ static void vServeApiCall(LinkedListItem_t *item, void *arg) {
 static void vWsTransferComplete_cb(esp_err_t err, int socket, void *arg) {
     ApiData_t *apiData = (ApiData_t *)arg;
     ESP_LOGI(TAG, "Transfer Complete, err: %d, fd: %x", err, socket);
-    if(err) 
-        vBreakApiCallsByFd(100, socket);
+    if(err)
+        vBreakApiCallsByFd(pdMS_TO_TICKS(100), socket);
     if((!apiData->counter) || !(--apiData->counter)) {
         free(arg);
     }
@@ -181,7 +181,7 @@ uint8_t bApiCallUnregister(uint32_t ulFid) {
        (xSemaphoreTakeRecursive(xWsApiMutex, pdMS_TO_TICKS(10)) != pdTRUE)) return 0;
     ApiHandlerItem_t *registered = LinkedListGetObject(ApiHandlerItem_t, pxLinkedListFindFirst(pxWsApiHandlers, bHandlerFidMatch, (void *)ulFid));
     if(registered != NULL) {
-        vBreakApiCallsByFid(0, ulFid);
+        vBreakApiCallsByFid(0, ulFid); /* already holding mutex recursively, 0 ticks is fine */
         vLinkedListUnlink(LinkedListItem(registered));
         ESP_LOGI(TAG, "Api handler unregistered %08lx", registered->ulFid);
         xSemaphoreGiveRecursive(xWsApiMutex);
@@ -306,7 +306,7 @@ uint8_t bApiCallSendJsonFidGroup(uint32_t ulFid, const uint8_t *ucJson, uint32_t
 void free_ctx_func(void *ctx) {
     ESP_LOGI(TAG, "Free session: %p", ctx);
     event_unsubscribe(&((ApiSession_t *)ctx)->delegate);
-    vBreakApiCallsByFd(10, ((ApiSession_t *)ctx)->fd);
+    vBreakApiCallsByFd(portMAX_DELAY, ((ApiSession_t *)ctx)->fd);
     free(ctx);
 }
 
