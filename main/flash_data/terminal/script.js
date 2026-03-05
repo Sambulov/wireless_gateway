@@ -144,7 +144,6 @@ class ESP32Terminal {
                 // Регистрация клиента для получения данных
                 this.registerClient();
                 
-                this.term.writeln('\x1b[1;32m✓ Подключение установлено\x1b[0m');
                 this.term.writeln('\x1b[33mОтправка регистрационной команды...\x1b[0m');
             };
             
