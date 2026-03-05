@@ -70,7 +70,7 @@ class ESP32Terminal {
             this.handleUserInput(data);
         });
         
-        this.term.writeln('\x1b[1;36mESP32 Web Terminal v1.0\x1b[0m');
+        this.term.writeln('\x1b[1;36mESP32 Web Terminal v1.1\x1b[0m');
         this.term.writeln('\x1b[33mEnter WebSocket URL and click Connect\x1b[0m');
     }
     
