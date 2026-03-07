@@ -579,9 +579,16 @@ static void vWsApiCallWorker(void *pvParameters) {
             ApiCall_t *call = LinkedListGetObject(ApiCall_t, item);
             queue_handle_t queue = get_periph_queue(call->ulFid);
             if(queue) {
+                /* If we find right peripheral send call to it. Wait a response from peripheral
+                 * to decide what to do with this call */
                 vForwardCallToPeripheral(call, queue);
                 vLinkedListInsertLast(&pxWsApiWaitingForResponse, item);
-            }
+            } else {
+		/* No available peripheral */
+		bApiCallSendStatus(call, API_CALL_STATUS_INVALID);
+		vLinkedListUnlink(item);
+		free(call);
+	    }
             item = next;
         }
         xSemaphoreGiveRecursive(xWsApiMutex);
@@ -590,30 +597,37 @@ static void vWsApiCallWorker(void *pvParameters) {
         webapi_msg_t periph_msg;
         while(queue_receive(xWsWorkerQueue, &periph_msg, pdMS_TO_TICKS(10)) == pdPASS) {
             xSemaphoreTakeRecursive(xWsApiMutex, portMAX_DELAY);
-            if(periph_msg.id) {
-                LinkedListItem_t *item = pxLinkedListFindFirst(pxWsApiWaitingForResponse, bCallIdMatch, (void *)periph_msg.id);
-                ApiCall_t *call = LinkedListGetObject(ApiCall_t, item);
-                if(call) {
-                    uint8_t remove_item = call->fHandler(call, &call->pxHandlerContext, call->ulCallPending, periph_msg.data, periph_msg.len);
-                    if(periph_msg.len) {
-                         ESP_LOGI(TAG, "sent: %s : %lu", periph_msg.data, periph_msg.len);
-                        _bApiCallSendJson(call, 0, periph_msg.data, periph_msg.len);
-                    }
+            LinkedListItem_t *item = pxLinkedListFindFirst(pxWsApiWaitingForResponse, bCallIdMatch, (void *)periph_msg.id);
+	    if (!item) {
+	         ESP_LOGI(TAG, "Arrived message from peripheral with id %d that are no tied to any API calls", periph_msg.id);
+		 goto next;
+	    }
 
-                    if(remove_item) {
-                        vLinkedListUnlink(item);
-                        free(call);
-                    } else {
-                        vLinkedListInsertLast(&pxWsApiCall, item);
-                    }
-                }
-            } else {
-                _bApiCallSendJson(NULL, periph_msg.fid, periph_msg.data, periph_msg.len);
+            ApiCall_t *call = LinkedListGetObject(ApiCall_t, item);
+	    if (!call) {
+	         ESP_LOGI(TAG, "System error");
+		 //TODO: instead of goto next; do here abort() or BUG()
+		 goto next;
+	    }
+
+            uint8_t remove_item = call->fHandler(call, &call->pxHandlerContext, call->ulCallPending, periph_msg.data, periph_msg.len);
+            if(periph_msg.len) {
+                 ESP_LOGI(TAG, "sent: %s : %lu", periph_msg.data, periph_msg.len);
+                _bApiCallSendJson(call, 0, periph_msg.data, periph_msg.len);
             }
+
+            if(remove_item) {
+                vLinkedListUnlink(item);
+                free(call);
+            } else {
+                vLinkedListInsertLast(&pxWsApiCall, item);
+            }
+next:
             xSemaphoreGiveRecursive(xWsApiMutex);
             free(periph_msg.data);
         }
     }
+
     vTaskDelete(NULL);
 }
 

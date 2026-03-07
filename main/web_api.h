@@ -7,6 +7,8 @@
 #define API_CALL_STATUS_EXECUTING                   0x00000001
 #define API_CALL_STATUS_CANCELED                    0x00000002
 #define API_CALL_STATUS_BUSY                        0x00000003
+#define API_CALL_STATUS_INVALID                     0x00000004
+
 
 #define API_CALL_ERROR_STATUS_BAD_REQ               0x80000000
 #define API_CALL_ERROR_STATUS_FRAGMENTED            0x80000001
