@@ -328,7 +328,7 @@ static void handle_msg(app_context_t *app, webapi_msg_t *in_msg)
 
 		if (amount > 0) {
 			int32_t b64_size = base64_encode_buffer_required(amount);
-            //todo: fix. use malloc
+			//todo: fix. use malloc
 			uint8_t b64_buf[b64_size + 1];
 			int32_t b64_len = base64_encode(b64_buf, b64_size, tmp, amount);
 			if (b64_len > 0) {

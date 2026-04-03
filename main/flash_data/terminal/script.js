@@ -4,6 +4,7 @@ class ESP32Terminal {
         this.socket = null;
         //this.fitAddon = null;
         this.isConnected = false;
+        this.isRegistered = false;
         this.packetCount = 0;
         this.echoEnabled = false;
         this.initTerminal();
@@ -174,6 +175,7 @@ class ESP32Terminal {
             this.socket = null;
         }
         this.isConnected = false;
+        this.isRegistered = false;
         this.echoEnabled = false;
         const echoBtn = document.getElementById('echo-btn');
         echoBtn.textContent = 'Echo: OFF';
@@ -185,7 +187,8 @@ class ESP32Terminal {
     registerClient() {
         // Отправка команды регистрации клиента
         const registerCommand = {
-            FID: "0x00001021"
+            FID: "0x00001021",
+            FLAGS: 4  // CALL_FLAG_LONG_TERM
         };
         
         this.socket.send(JSON.stringify(registerCommand));
@@ -199,9 +202,13 @@ class ESP32Terminal {
             document.getElementById('packet-count').textContent = this.packetCount;
             document.getElementById('last-activity').textContent = new Date().toLocaleTimeString();
             
-            // Обработка пакетов с данными из UART
-            if (packet.FID === "0x00001021" && packet.ARG && !packet.ARG.STA) {
-                this.processUARTData(packet.ARG);
+            if (packet.FID === "0x00001021" && packet.ARG) {
+                if (packet.ARG.STA === "0x00000005") {
+                    this.isRegistered = true;
+                    this.term.writeln('\x1b[32m✓ Подписка подтверждена\x1b[0m');
+                } else if (this.isRegistered == true) {
+                    this.processUARTData(packet.ARG);
+                }
             }
             
         } catch (error) {

@@ -28,6 +28,14 @@ typedef struct {
     delegate_t delegate;
 } ApiSession_t;
 
+typedef enum
+{
+	CALL_FLAG_NEW = (1 << 0),	//from NEW to ONE_SHOT or to LONG_TERM
+	CALL_FLAG_ONE_SHOT = (1 << 1),
+	CALL_FLAG_LONG_TERM = (1 << 2),
+	CALL_FLAG_TO_DELETE = (1 << 3)
+}call_flags_t;
+
 typedef struct {
     __LinkedListObject__
     ApiSession_t *session;
@@ -38,6 +46,7 @@ typedef struct {
     ApiHandler_t fHandler;
     uint32_t ulFid;
     uint32_t ulCallPending;
+    call_flags_t flags; 
 } ApiCall_t;
 typedef struct {
     uint32_t counter;
@@ -138,6 +147,7 @@ static void vServeApiCall(LinkedListItem_t *item, void *arg) {
     else {
         ESP_LOGI(TAG, "Api call complete, id: %lu", call->ulId);
         vLinkedListUnlink(item);
+        free(call->pucReqData);
         free(call);
     }
 }
@@ -313,85 +323,84 @@ void free_ctx_func(void *ctx) {
 static queue_handle_t get_periph_queue(uint32_t fid);
 static void vForwardCallToPeripheral(ApiCall_t *call, queue_handle_t queue);
 
+/* Parse an incoming text-frame WebSocket message, build an ApiCall_t from it,
+ * and enqueue it for handler dispatch.  Rapid duplicate calls for the same
+ * (client, FID) pair are coalesced into the already-queued entry instead of
+ * creating a new one. */
 static esp_err_t frame_handle_text(httpd_req_t *req, httpd_ws_frame_t *ws_pkt, uint32_t fd) {
-    if(ws_pkt->payload) {
-        ESP_LOGI(TAG, "Got packet with message: %s", ws_pkt->payload);
-        ApiCall_t *wscd = malloc(sizeof(ApiCall_t));
-        if(wscd != NULL) {
-            memset(wscd, 0, sizeof(ApiCall_t));
-            cJSON *json = cJSON_ParseWithLengthOpts((char *)ws_pkt->payload, ws_pkt->len, 0, 0);
-            if (json != NULL) {
-                cJSON *fid_json = cJSON_GetObjectItem(json, "FID");
-                if (cJSON_IsNumber(fid_json))
-                    wscd->ulFid = fid_json->valueint;
-                else if (cJSON_IsString(fid_json))
-                    wscd->ulFid = (uint32_t)strtol(fid_json->valuestring, NULL, 16);
-                if(wscd->ulFid != API_HANDLER_ID_GENEGAL) {
-                    cJSON *arg_json = cJSON_GetObjectItem(json, "ARG");
-                    if(arg_json != NULL) {
-                        wscd->pucReqData = (uint8_t *)cJSON_PrintUnformatted(arg_json);
-                        wscd->ulReqDataLen = lStrLen((char *)wscd->pucReqData);
-                        ESP_LOGI(TAG, "Api arg %s", wscd->pucReqData);
-                    }
-                    wscd->ulCallPending = 1;
-                    wscd->session = req->sess_ctx;
-
-                    xSemaphoreTakeRecursive(xWsApiMutex, portMAX_DELAY);
-                    wscd->ulId = call_id++;
-
-                    ApiCall_t *call_prev = LinkedListGetObject(ApiCall_t,
-                        pxLinkedListFindFirst(pxWsApiCall, bCallClientMatch,
-                            cl_tuple_make((void *)wscd->session->fd, (void *)wscd->ulFid)));
-                    if(call_prev != NULL) {
-                        /* Same FID already active for this client — update data and bump pending */
-                        free(call_prev->pucReqData);
-                        call_prev->pucReqData = wscd->pucReqData;
-                        call_prev->ulReqDataLen = wscd->ulReqDataLen;
-                        free(wscd);
-                        wscd = call_prev;
-                        wscd->ulCallPending++;
-                    } else {
-                        ApiHandlerItem_t *hlr = LinkedListGetObject(ApiHandlerItem_t,
-                            pxLinkedListFindFirst(pxWsApiHandlers, bHandlerFidMatch, (void *)wscd->ulFid));
-                        if(hlr != NULL) {
-                            wscd->fHandler = hlr->fHandler;
-                            wscd->pxHandlerContext = hlr->xHandlerContext;
-                        }
-                        vLinkedListInsertLast(&pxWsApiCall, LinkedListItem(wscd));
-                        if(hlr == NULL) {
-                            bApiCallSendStatus(wscd, API_CALL_ERROR_STATUS_NO_HANDLER);
-                            wscd->session = NULL;
-                        }
-                    }
-
-                    queue_handle_t queue = get_periph_queue(wscd->ulFid);
-                    if(queue) {
-                        vForwardCallToPeripheral(wscd, queue);
-                        vLinkedListInsertLast(&pxWsApiWaitingForResponse, LinkedListItem(wscd));
-                    }
-                    wscd->ulReqDataLen = 0;
-                    free(wscd->pucReqData);
-                    wscd->pucReqData = NULL;
-
-                    xSemaphoreGiveRecursive(xWsApiMutex);
-                    ESP_LOGI(TAG, "New api call %lu enqueued with id:%lu", wscd->ulFid, wscd->ulId);
-                }
-                else {
-                    ESP_LOGW(TAG, "Api call bad FID property");
-                    free(wscd);
-                }
-                cJSON_Delete(json);
-            }
-            else {
-                ESP_LOGW(TAG, "Invalid JSON");
-                free(wscd);
-            }
-        }
-        else
-            ESP_LOGW(TAG, "Failed to malloc memory for ws api call");
-    }
-    else
+    if(!ws_pkt || !ws_pkt->payload) {
         ESP_LOGI(TAG, "Got packet with empty message");
+        return ESP_OK;
+    }
+
+    ESP_LOGI(TAG, "Got packet with message: %s", ws_pkt->payload);
+
+    ApiCall_t *wscd = malloc(sizeof(ApiCall_t));
+    if(!wscd) {
+        ESP_LOGW(TAG, "Failed to malloc memory for ws api call");
+        return ESP_ERR_NO_MEM;
+    }
+    memset(wscd, 0, sizeof(ApiCall_t));
+    wscd->flags |= CALL_FLAG_NEW;
+    
+    cJSON *json = cJSON_ParseWithLengthOpts((char *)ws_pkt->payload, ws_pkt->len, 0, 0);
+    if (!json) {
+        ESP_LOGW(TAG, "Invalid JSON");
+        free(wscd);
+        return ESP_ERR_INVALID_STATE;
+    }
+        
+    /* FID can be a decimal integer or a hex string (e.g. "0x1012") */
+    cJSON *fid_json = cJSON_GetObjectItem(json, "FID");
+    if (cJSON_IsNumber(fid_json))
+        wscd->ulFid = fid_json->valueint;
+    else if (cJSON_IsString(fid_json))
+        wscd->ulFid = (uint32_t)strtol(fid_json->valuestring, NULL, 16);
+
+    if(wscd->ulFid == API_HANDLER_ID_GENEGAL) {
+        ESP_LOGW(TAG, "Api call bad FID property");
+        free(wscd);
+        cJSON_Delete(json);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /* Serialize ARG back to a compact string — handlers receive it as raw bytes */
+    cJSON *arg_json = cJSON_GetObjectItem(json, "ARG");
+    if(arg_json) {
+        wscd->pucReqData = (uint8_t *)cJSON_PrintUnformatted(arg_json);
+        wscd->ulReqDataLen = lStrLen((char *)wscd->pucReqData);
+        ESP_LOGI(TAG, "Api arg %s", wscd->pucReqData);
+    }
+    /* Optional FLAGS field merges caller-supplied flags into the call */
+    cJSON *flags_json = cJSON_GetObjectItem(json, "FLAGS");
+    if(cJSON_IsNumber(flags_json))
+        wscd->flags |= (uint32_t)flags_json->valueint;
+    wscd->ulCallPending = 1;
+    wscd->session = req->sess_ctx;
+
+    xSemaphoreTakeRecursive(xWsApiMutex, portMAX_DELAY);
+    wscd->ulId = call_id++;
+
+    /* New call: bind the registered handler (if any) and enqueue */
+    ApiHandlerItem_t *hlr = LinkedListGetObject(ApiHandlerItem_t,
+                                                pxLinkedListFindFirst(pxWsApiHandlers,
+                                                                      bHandlerFidMatch,
+                                                                      (void *)wscd->ulFid));
+    if (!hlr) {
+        /* No handler registered for this FID — reply with error and free the call */
+        bApiCallSendStatus(wscd, API_CALL_ERROR_STATUS_NO_HANDLER);
+        free(wscd->pucReqData);
+        free(wscd);
+    } else {
+        wscd->fHandler = hlr->fHandler;
+        wscd->pxHandlerContext = hlr->xHandlerContext;
+        vLinkedListInsertLast(&pxWsApiCall, LinkedListItem(wscd));
+    }
+
+    xSemaphoreGiveRecursive(xWsApiMutex);
+    ESP_LOGI(TAG, "New api call %lu enqueued with id:%lu", wscd->ulFid, wscd->ulId);
+    cJSON_Delete(json);
+
     return ESP_OK;
 }
 
@@ -583,12 +592,20 @@ static void vWsApiCallWorker(void *pvParameters) {
                  * to decide what to do with this call */
                 vForwardCallToPeripheral(call, queue);
                 vLinkedListInsertLast(&pxWsApiWaitingForResponse, item);
+
+                if (call->flags & CALL_FLAG_NEW) {
+                    bool sent = false; 
+                    ESP_LOGI(TAG, "send status DELIVERED");
+                    sent = bApiCallSendStatus(call, API_CALL_STATUS_DELIVERED);
+                    if (sent == true)
+                        call->flags &= ~CALL_FLAG_NEW;
+                }
             } else {
-		/* No available peripheral */
-		bApiCallSendStatus(call, API_CALL_STATUS_INVALID);
-		vLinkedListUnlink(item);
-		free(call);
-	    }
+                /* No available peripheral */
+                bApiCallSendStatus(call, API_CALL_STATUS_INVALID);
+                vLinkedListUnlink(item);
+                free(call);
+            }
             item = next;
         }
         xSemaphoreGiveRecursive(xWsApiMutex);
@@ -598,17 +615,17 @@ static void vWsApiCallWorker(void *pvParameters) {
         while(queue_receive(xWsWorkerQueue, &periph_msg, pdMS_TO_TICKS(10)) == pdPASS) {
             xSemaphoreTakeRecursive(xWsApiMutex, portMAX_DELAY);
             LinkedListItem_t *item = pxLinkedListFindFirst(pxWsApiWaitingForResponse, bCallIdMatch, (void *)periph_msg.id);
-	    if (!item) {
-	         ESP_LOGI(TAG, "Arrived message from peripheral with id %d that are no tied to any API calls", periph_msg.id);
-		 goto next;
-	    }
+            if (!item) {
+                ESP_LOGI(TAG, "Arrived message from peripheral with id %d that are no tied to any API calls", periph_msg.id);
+                goto next;
+            }
 
             ApiCall_t *call = LinkedListGetObject(ApiCall_t, item);
-	    if (!call) {
-	         ESP_LOGI(TAG, "System error");
-		 //TODO: instead of goto next; do here abort() or BUG()
-		 goto next;
-	    }
+            if (!call) {
+                ESP_LOGI(TAG, "System error");
+                //TODO: instead of goto next; do here abort() or BUG()
+                goto next;
+            }
 
             uint8_t remove_item = call->fHandler(call, &call->pxHandlerContext, call->ulCallPending, periph_msg.data, periph_msg.len);
             if(periph_msg.len) {
@@ -616,7 +633,7 @@ static void vWsApiCallWorker(void *pvParameters) {
                 _bApiCallSendJson(call, 0, periph_msg.data, periph_msg.len);
             }
 
-            if(remove_item) {
+            if (!(call->flags & CALL_FLAG_LONG_TERM)) {
                 vLinkedListUnlink(item);
                 free(call);
             } else {
