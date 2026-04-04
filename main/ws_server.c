@@ -79,6 +79,14 @@ static uint8_t bCallClientMatch(LinkedListItem_t *item, void *arg) {
     return call->session && (call->session->fd == fd) && (call->ulFid == fid);
 }
 
+static uint8_t bCallClientIdMatch(LinkedListItem_t *item, void *arg) {
+    uint32_t fd  = cl_tuple_get(arg, 0, uint32_t);
+    uint32_t fid = cl_tuple_get(arg, 1, uint32_t);
+    uint32_t id  = cl_tuple_get(arg, 2, uint32_t);
+    ApiCall_t *call = LinkedListGetObject(ApiCall_t, item);
+    return call->session && (call->session->fd == fd) && (call->ulFid == fid) && (call->ulId == id);
+}
+
 static uint8_t bCallIdMatch(LinkedListItem_t *item, void *arg) {
     ApiCall_t *call = LinkedListGetObject(ApiCall_t, item);
     return (call->ulId == (uint32_t)arg) && call->session;
@@ -378,8 +386,10 @@ static esp_err_t frame_handle_text(httpd_req_t *req, httpd_ws_frame_t *ws_pkt, u
     wscd->ulCallPending = 1;
     wscd->session = req->sess_ctx;
 
+    /* SID from client is used as the call ID (0–0xffff); fall back to auto-increment */
+    cJSON *sid_json = cJSON_GetObjectItem(json, "SID");
     xSemaphoreTakeRecursive(xWsApiMutex, portMAX_DELAY);
-    wscd->ulId = call_id++;
+    wscd->ulId = cJSON_IsNumber(sid_json) ? ((uint32_t)sid_json->valueint & 0xffff) : call_id++;
 
     /* New call: bind the registered handler (if any) and enqueue */
     ApiHandlerItem_t *hlr = LinkedListGetObject(ApiHandlerItem_t,
@@ -580,12 +590,42 @@ static void vWsApiCallWorker(void *pvParameters) {
         ulLinkedListDoForeach(pxWsApiWaitingForResponse, vServeApiCall, NULL);
         xSemaphoreGiveRecursive(xWsApiMutex);
 
-        /* 2. Forward active calls to their peripheral */
+        /* 2. Check flags. If everything ok then forward active calls to their peripheral */
         xSemaphoreTakeRecursive(xWsApiMutex, portMAX_DELAY);
         LinkedListItem_t *item = pxLinkedListFindFirst(pxWsApiCall, NULL, NULL);
         while(item != NULL) {
             LinkedListItem_t *next = pxLinkedListFindNextNoOverlap(item, NULL, NULL);
             ApiCall_t *call = LinkedListGetObject(ApiCall_t, item);
+
+            if (call->flags & CALL_FLAG_TO_DELETE) {
+                ESP_LOGI(TAG, "received status DELETE");
+                bApiCallSendStatus(call, API_CALL_STATUS_DELIVERED);
+                if (call->session) {
+                    void *key = cl_tuple_make((void *)(uintptr_t)call->session->fd,
+                                             (void *)(uintptr_t)call->ulFid,
+                                             (void *)(uintptr_t)call->ulId);
+                    call->session = NULL; /* exclude DELETE call itself from match */
+                    LinkedListItem_t *found;
+                    while ((found = pxLinkedListFindFirst(pxWsApiWaitingForResponse, bCallClientIdMatch, key)) != NULL) {
+                        ApiCall_t *fc = LinkedListGetObject(ApiCall_t, found);
+                        vLinkedListUnlink(found);
+                        free(fc->pucReqData);
+                        free(fc);
+                    }
+                    while ((found = pxLinkedListFindFirst(pxWsApiCall, bCallClientIdMatch, key)) != NULL) {
+                        ApiCall_t *fc = LinkedListGetObject(ApiCall_t, found);
+                        vLinkedListUnlink(found);
+                        free(fc->pucReqData);
+                        free(fc);
+                    }
+                }
+                vLinkedListUnlink(item);
+                free(call->pucReqData);
+                free(call);
+                item = next;
+                continue;
+            }
+
             queue_handle_t queue = get_periph_queue(call->ulFid);
             if(queue) {
                 /* If we find right peripheral send call to it. Wait a response from peripheral
@@ -602,8 +642,10 @@ static void vWsApiCallWorker(void *pvParameters) {
                 }
             } else {
                 /* No available peripheral */
+                ESP_LOGI(TAG, "no available peripheral. send status INVALID");
                 bApiCallSendStatus(call, API_CALL_STATUS_INVALID);
                 vLinkedListUnlink(item);
+                free(call->pucReqData);
                 free(call);
             }
             item = next;

@@ -7,6 +7,7 @@ class ESP32Terminal {
         this.isRegistered = false;
         this.packetCount = 0;
         this.echoEnabled = false;
+        this.subscriptionSid = null;
         this.initTerminal();
         this.bindEvents();
     }
@@ -169,6 +170,18 @@ class ESP32Terminal {
         }
     }
     
+    unsubscribe() {
+        if (this.socket && this.isRegistered && this.subscriptionSid !== null) {
+            this.socket.send(JSON.stringify({
+                FID: "0x00001021",
+                SID: this.subscriptionSid,
+                FLAGS: 8  // CALL_FLAG_TO_DELETE
+            }));
+            this.isRegistered = false;
+            this.subscriptionSid = null;
+        }
+    }
+
     disconnect() {
         if (this.socket) {
             this.socket.close();
@@ -176,6 +189,7 @@ class ESP32Terminal {
         }
         this.isConnected = false;
         this.isRegistered = false;
+        this.subscriptionSid = null;
         this.echoEnabled = false;
         const echoBtn = document.getElementById('echo-btn');
         echoBtn.textContent = 'Echo: OFF';
@@ -185,12 +199,13 @@ class ESP32Terminal {
     }
     
     registerClient() {
-        // Отправка команды регистрации клиента
+        this.subscriptionSid = Math.floor(Math.random() * 0xffff) + 1;
         const registerCommand = {
             FID: "0x00001021",
+            SID: this.subscriptionSid,
             FLAGS: 4  // CALL_FLAG_LONG_TERM
         };
-        
+
         this.socket.send(JSON.stringify(registerCommand));
         this.term.writeln('\x1b[32m✓ Регистрация отправлена\x1b[0m');
     }
