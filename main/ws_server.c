@@ -212,10 +212,11 @@ uint8_t bApiCallUnregister(uint32_t ulFid) {
 void vApiCallComplete(void *pxApiCall) {
     xSemaphoreTakeRecursive(xWsApiMutex, portMAX_DELAY);
     ApiCall_t *call = (ApiCall_t *)pxApiCall;
-    if(bLinkedListContains(pxWsApiCall, LinkedListItem(call))) {
+    if(bLinkedListContains(pxWsApiCall, LinkedListItem(call)) ||
+       bLinkedListContains(pxWsApiWaitingForResponse, LinkedListItem(call))) {
         if(call->ulCallPending)
             call->ulCallPending--;
-        if(!call->ulCallPending) 
+        if(!call->ulCallPending)
             call->session = NULL;
     }
     xSemaphoreGiveRecursive(xWsApiMutex);
@@ -277,6 +278,7 @@ static uint8_t _bApiCallSendJson(void *pxApiCall, uint32_t ulFid, const uint8_t 
         offset += ulLen;
         resp->payload[offset] = '}';
         resp->counter = targets;
+        resp->frame.final = 1;
         resp->frame.fragmented = 0;
         resp->frame.type = HTTPD_WS_TYPE_TEXT;
         resp->frame.payload = resp->payload;
@@ -386,10 +388,21 @@ static esp_err_t frame_handle_text(httpd_req_t *req, httpd_ws_frame_t *ws_pkt, u
     wscd->ulCallPending = 1;
     wscd->session = req->sess_ctx;
 
-    /* SID from client is used as the call ID (0–0xffff); fall back to auto-increment */
+    /* SID from client is used as the call ID (0–0xffff) */
     cJSON *sid_json = cJSON_GetObjectItem(json, "SID");
+
+    /* Both FLAGS and SID are mandatory — drop calls that omit either */
+    if (!cJSON_IsNumber(flags_json) || !cJSON_IsNumber(sid_json)) {
+        ESP_LOGW(TAG, "Missing FLAGS or SID, dropping call fid:%lu", wscd->ulFid);
+        bApiCallSendStatus(wscd, API_CALL_ERROR_STATUS_BAD_REQ);
+        free(wscd->pucReqData);
+        free(wscd);
+        cJSON_Delete(json);
+        return ESP_OK;
+    }
+
     xSemaphoreTakeRecursive(xWsApiMutex, portMAX_DELAY);
-    wscd->ulId = cJSON_IsNumber(sid_json) ? ((uint32_t)sid_json->valueint & 0xffff) : call_id++;
+    wscd->ulId = (uint32_t)sid_json->valueint & 0xffff;
 
     /* New call: bind the registered handler (if any) and enqueue */
     ApiHandlerItem_t *hlr = LinkedListGetObject(ApiHandlerItem_t,
@@ -398,6 +411,7 @@ static esp_err_t frame_handle_text(httpd_req_t *req, httpd_ws_frame_t *ws_pkt, u
                                                                       (void *)wscd->ulFid));
     if (!hlr) {
         /* No handler registered for this FID — reply with error and free the call */
+        ESP_LOGW(TAG, "No handler for FID %lu, dropping call id:%lu", wscd->ulFid, wscd->ulId);
         bApiCallSendStatus(wscd, API_CALL_ERROR_STATUS_NO_HANDLER);
         free(wscd->pucReqData);
         free(wscd);
@@ -405,10 +419,10 @@ static esp_err_t frame_handle_text(httpd_req_t *req, httpd_ws_frame_t *ws_pkt, u
         wscd->fHandler = hlr->fHandler;
         wscd->pxHandlerContext = hlr->xHandlerContext;
         vLinkedListInsertLast(&pxWsApiCall, LinkedListItem(wscd));
+        ESP_LOGI(TAG, "New api call %lu enqueued with id:%lu", wscd->ulFid, wscd->ulId);
     }
 
     xSemaphoreGiveRecursive(xWsApiMutex);
-    ESP_LOGI(TAG, "New api call %lu enqueued with id:%lu", wscd->ulFid, wscd->ulId);
     cJSON_Delete(json);
 
     return ESP_OK;
@@ -669,7 +683,7 @@ static void vWsApiCallWorker(void *pvParameters) {
                 goto next;
             }
 
-            uint8_t remove_item = call->fHandler(call, &call->pxHandlerContext, call->ulCallPending, periph_msg.data, periph_msg.len);
+            call->fHandler(call, &call->pxHandlerContext, call->ulCallPending, periph_msg.data, periph_msg.len);
             if(periph_msg.len) {
                  ESP_LOGI(TAG, "sent: %s : %lu", periph_msg.data, periph_msg.len);
                 _bApiCallSendJson(call, 0, periph_msg.data, periph_msg.len);
