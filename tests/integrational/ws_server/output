@@ -4,249 +4,56 @@ cachedir: .pytest_cache
 rootdir: /home/vvmitrofanov/projects/proj/wireless_gateway/tests/integrational/ws_server
 plugins: asyncio-1.3.0, anyio-4.2.0
 asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
-collecting ... collected 14 items
+collecting ... collected 1 item
 
-test_ws_server.py::test_missing_flags_and_sid_returns_bad_req PASSED     [  7%]
-test_ws_server.py::test_missing_flags_returns_bad_req PASSED             [ 14%]
-test_ws_server.py::test_missing_sid_returns_bad_req PASSED               [ 21%]
-test_ws_server.py::test_bad_req_response_echoes_fid PASSED               [ 28%]
-test_ws_server.py::test_unknown_fid_returns_no_handler PASSED            [ 35%]
-test_ws_server.py::test_fid_zero_does_not_succeed FAILED                 [ 42%]
-test_ws_server.py::test_valid_call_response_contains_fid PASSED          [ 50%]
-test_ws_server.py::test_valid_call_response_has_arg PASSED               [ 57%]
-test_ws_server.py::test_valid_call_status_is_not_bad_req PASSED          [ 64%]
-test_ws_server.py::test_invalid_json_server_stays_alive FAILED           [ 71%]
-test_ws_server.py::test_connection_usable_after_bad_req PASSED           [ 78%]
-test_ws_server.py::test_concurrent_clients PASSED                        [ 85%]
-test_ws_server.py::test_sequential_calls_single_client PASSED            [ 92%]
-test_ws_server.py::test_mixed_valid_and_invalid_calls PASSED             [100%]
+stress_test.py::test_connection_storm 
+[connection_storm] rounds=5 MAX_CLIENTS=10 errors=15
+FAILED
 
 =================================== FAILURES ===================================
-________________________ test_fid_zero_does_not_succeed ________________________
-
-self = <websockets.legacy.client.WebSocketClientProtocol object at 0x7455db09c0e0>
-
-    async def transfer_data(self) -> None:
-        """
-        Read incoming messages and put them in a queue.
-    
-        This coroutine runs in a task until the closing handshake is started.
-    
-        """
-        try:
-            while True:
->               message = await self.read_message()
-                          ^^^^^^^^^^^^^^^^^^^^^^^^^
-
-/usr/lib/python3/dist-packages/websockets/legacy/protocol.py:968: 
-_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
-/usr/lib/python3/dist-packages/websockets/legacy/protocol.py:1038: in read_message
-    frame = await self.read_data_frame(max_size=self.max_size)
-            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-/usr/lib/python3/dist-packages/websockets/legacy/protocol.py:1113: in read_data_frame
-    frame = await self.read_frame(max_size)
-            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-/usr/lib/python3/dist-packages/websockets/legacy/protocol.py:1170: in read_frame
-    frame = await Frame.read(
-/usr/lib/python3/dist-packages/websockets/legacy/framing.py:69: in read
-    data = await reader(2)
-           ^^^^^^^^^^^^^^^
-_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
-
-self = <StreamReader eof limit=32768 transport=<_SelectorSocketTransport closed fd=17>>
-n = 2
-
-    async def readexactly(self, n):
-        """Read exactly `n` bytes.
-    
-        Raise an IncompleteReadError if EOF is reached before `n` bytes can be
-        read. The IncompleteReadError.partial attribute of the exception will
-        contain the partial read bytes.
-    
-        if n is zero, return empty bytes object.
-    
-        Returned value is not limited with limit, configured at stream
-        creation.
-    
-        If stream was paused, this function will automatically resume it if
-        needed.
-        """
-        if n < 0:
-            raise ValueError('readexactly size can not be less than zero')
-    
-        if self._exception is not None:
-            raise self._exception
-    
-        if n == 0:
-            return b''
-    
-        while len(self._buffer) < n:
-            if self._eof:
-                incomplete = bytes(self._buffer)
-                self._buffer.clear()
->               raise exceptions.IncompleteReadError(incomplete, n)
-E               asyncio.exceptions.IncompleteReadError: 0 bytes read on a total of 2 expected bytes
-
-/usr/lib/python3.12/asyncio/streams.py:750: IncompleteReadError
-
-The above exception was the direct cause of the following exception:
+____________________________ test_connection_storm _____________________________
 
     @pytest.mark.asyncio
-    async def test_fid_zero_does_not_succeed():
-        """FID 0 is reserved; the server must not produce a success response."""
-        async with websockets.connect(WS_URL) as ws:
-            await ws.send(json.dumps({"FID": 0, "FLAGS": 1, "SID": 1}))
+    async def test_connection_storm():
+        """Open and close MAX_CLIENTS connections as fast as possible, 5 rounds."""
+        rounds = 5
+        errors = 0
+        for r in range(rounds):
+            async def one_conn(idx):
+                try:
+                    async with websockets.connect(WS_URL) as ws:
+                        raw = await asyncio.wait_for(
+                            ws.recv() if False else
+                            (await ws.send(make_call(idx)) or ws.recv()),
+                            timeout=RECV_TIMEOUT,
+                        )
+                        return True
+                except Exception:
+                    return False
+    
+            # Open all at once, then they all close
+            conns = []
             try:
->               resp = await asyncio.wait_for(ws.recv(), timeout=2.0)
-                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-test_ws_server.py:101: 
-_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
-/usr/lib/python3.12/asyncio/tasks.py:520: in wait_for
-    return await fut
-           ^^^^^^^^^
-/usr/lib/python3/dist-packages/websockets/legacy/protocol.py:568: in recv
-    await self.ensure_open()
-_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
-
-self = <websockets.legacy.client.WebSocketClientProtocol object at 0x7455db09c0e0>
-
-    async def ensure_open(self) -> None:
-        """
-        Check that the WebSocket connection is open.
+                conns = await asyncio.gather(
+                    *[websockets.connect(WS_URL) for _ in range(MAX_CLIENTS)],
+                    return_exceptions=True,
+                )
+                ok = sum(1 for c in conns if not isinstance(c, Exception))
+                if ok < MAX_CLIENTS:
+                    errors += MAX_CLIENTS - ok
+            finally:
+                for c in conns:
+                    if not isinstance(c, Exception):
+                        await c.close()
     
-        Raise :exc:`~websockets.exceptions.ConnectionClosed` if it isn't.
+            await asyncio.sleep(0.1)   # let server reclaim sockets
     
-        """
-        # Handle cases from most common to least common for performance.
-        if self.state is State.OPEN:
-            # If self.transfer_data_task exited without a closing handshake,
-            # self.close_connection_task may be closing the connection, going
-            # straight from OPEN to CLOSED.
-            if self.transfer_data_task.done():
-                await asyncio.shield(self.close_connection_task)
-                raise self.connection_closed_exc()
-            else:
-                return
-    
-        if self.state is State.CLOSED:
->           raise self.connection_closed_exc()
-E           websockets.exceptions.ConnectionClosedError: no close frame received or sent
+        print(f"\n[connection_storm] rounds={rounds} MAX_CLIENTS={MAX_CLIENTS} errors={errors}")
+>       assert errors == 0, f"{errors} connections failed across {rounds} rounds"
+E       AssertionError: 15 connections failed across 5 rounds
+E       assert 15 == 0
 
-/usr/lib/python3/dist-packages/websockets/legacy/protocol.py:944: ConnectionClosedError
-_____________________ test_invalid_json_server_stays_alive _____________________
-
-self = <websockets.legacy.client.WebSocketClientProtocol object at 0x7455db09f020>
-
-    async def transfer_data(self) -> None:
-        """
-        Read incoming messages and put them in a queue.
-    
-        This coroutine runs in a task until the closing handshake is started.
-    
-        """
-        try:
-            while True:
->               message = await self.read_message()
-                          ^^^^^^^^^^^^^^^^^^^^^^^^^
-
-/usr/lib/python3/dist-packages/websockets/legacy/protocol.py:968: 
-_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
-/usr/lib/python3/dist-packages/websockets/legacy/protocol.py:1038: in read_message
-    frame = await self.read_data_frame(max_size=self.max_size)
-            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-/usr/lib/python3/dist-packages/websockets/legacy/protocol.py:1113: in read_data_frame
-    frame = await self.read_frame(max_size)
-            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-/usr/lib/python3/dist-packages/websockets/legacy/protocol.py:1170: in read_frame
-    frame = await Frame.read(
-/usr/lib/python3/dist-packages/websockets/legacy/framing.py:69: in read
-    data = await reader(2)
-           ^^^^^^^^^^^^^^^
-_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
-
-self = <StreamReader eof limit=32768 transport=<_SelectorSocketTransport closed fd=17>>
-n = 2
-
-    async def readexactly(self, n):
-        """Read exactly `n` bytes.
-    
-        Raise an IncompleteReadError if EOF is reached before `n` bytes can be
-        read. The IncompleteReadError.partial attribute of the exception will
-        contain the partial read bytes.
-    
-        if n is zero, return empty bytes object.
-    
-        Returned value is not limited with limit, configured at stream
-        creation.
-    
-        If stream was paused, this function will automatically resume it if
-        needed.
-        """
-        if n < 0:
-            raise ValueError('readexactly size can not be less than zero')
-    
-        if self._exception is not None:
-            raise self._exception
-    
-        if n == 0:
-            return b''
-    
-        while len(self._buffer) < n:
-            if self._eof:
-                incomplete = bytes(self._buffer)
-                self._buffer.clear()
->               raise exceptions.IncompleteReadError(incomplete, n)
-E               asyncio.exceptions.IncompleteReadError: 0 bytes read on a total of 2 expected bytes
-
-/usr/lib/python3.12/asyncio/streams.py:750: IncompleteReadError
-
-The above exception was the direct cause of the following exception:
-
-    @pytest.mark.asyncio
-    async def test_invalid_json_server_stays_alive():
-        """After receiving invalid JSON the server must remain usable."""
-        async with websockets.connect(WS_URL) as ws:
-            await ws.send("not-json-at-all{{{")
-            # Server silently drops the malformed frame — no response expected
-            try:
->               await asyncio.wait_for(ws.recv(), timeout=2.0)
-
-test_ws_server.py:144: 
-_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
-/usr/lib/python3.12/asyncio/tasks.py:520: in wait_for
-    return await fut
-           ^^^^^^^^^
-/usr/lib/python3/dist-packages/websockets/legacy/protocol.py:568: in recv
-    await self.ensure_open()
-_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
-
-self = <websockets.legacy.client.WebSocketClientProtocol object at 0x7455db09f020>
-
-    async def ensure_open(self) -> None:
-        """
-        Check that the WebSocket connection is open.
-    
-        Raise :exc:`~websockets.exceptions.ConnectionClosed` if it isn't.
-    
-        """
-        # Handle cases from most common to least common for performance.
-        if self.state is State.OPEN:
-            # If self.transfer_data_task exited without a closing handshake,
-            # self.close_connection_task may be closing the connection, going
-            # straight from OPEN to CLOSED.
-            if self.transfer_data_task.done():
-                await asyncio.shield(self.close_connection_task)
-                raise self.connection_closed_exc()
-            else:
-                return
-    
-        if self.state is State.CLOSED:
->           raise self.connection_closed_exc()
-E           websockets.exceptions.ConnectionClosedError: no close frame received or sent
-
-/usr/lib/python3/dist-packages/websockets/legacy/protocol.py:944: ConnectionClosedError
+stress_test.py:185: AssertionError
 =========================== short test summary info ============================
-FAILED test_ws_server.py::test_fid_zero_does_not_succeed - websockets.excepti...
-FAILED test_ws_server.py::test_invalid_json_server_stays_alive - websockets.e...
-========================= 2 failed, 12 passed in 3.41s =========================
+FAILED stress_test.py::test_connection_storm - AssertionError: 15 connections...
+======================== 1 failed in 102.71s (0:01:42) =========================
