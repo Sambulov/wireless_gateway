@@ -572,6 +572,11 @@ static uint8_t is_uart_fid(uint32_t fid) {
     }
 }
 
+/* RX FIDs use broadcast (id=0) responses — only one poll per FID per cycle */
+static uint8_t is_uart_rx_fid(uint32_t fid) {
+    return fid == ESP_WS_API_UART1_RAW_RX || fid == ESP_WS_API_UART2_RAW_RX;
+}
+
 static queue_handle_t get_periph_queue(uint32_t fid) {
     if(is_uart_fid(fid))
         return get_uart_worker_queue();
@@ -642,9 +647,13 @@ static void vWsApiCallWorker(void *pvParameters) {
 
             queue_handle_t queue = get_periph_queue(call->ulFid);
             if(queue) {
-                /* If we find right peripheral send call to it. Wait a response from peripheral
-                 * to decide what to do with this call */
-                vForwardCallToPeripheral(call, queue);
+                /* RX broadcast FIDs: only one poll message per FID per cycle.
+                 * All subscriber calls are parked in the waiting list; the single
+                 * peripheral response (id=0) will fan-out to all of them. */
+                if (!is_uart_rx_fid(call->ulFid) ||
+                    !pxLinkedListFindFirst(pxWsApiWaitingForResponse, bCallFidMatch, (void *)call->ulFid)) {
+                    vForwardCallToPeripheral(call, queue);
+                }
                 vLinkedListInsertLast(&pxWsApiWaitingForResponse, item);
 
                 if (call->flags & CALL_FLAG_NEW) {
@@ -670,22 +679,44 @@ static void vWsApiCallWorker(void *pvParameters) {
         webapi_msg_t periph_msg;
         while(queue_receive(xWsWorkerQueue, &periph_msg, pdMS_TO_TICKS(10)) == pdPASS) {
             xSemaphoreTakeRecursive(xWsApiMutex, portMAX_DELAY);
+
+            if (periph_msg.id == 0) {
+                /* Broadcast: deliver to all waiting subscribers of this FID */
+                LinkedListItem_t *it = pxLinkedListFindFirst(pxWsApiWaitingForResponse, bCallFidMatch, (void *)periph_msg.fid);
+                while (it != NULL) {
+                    LinkedListItem_t *next_it = pxLinkedListFindNextNoOverlap(it, bCallFidMatch, (void *)periph_msg.fid);
+                    ApiCall_t *c = LinkedListGetObject(ApiCall_t, it);
+                    c->fHandler(c, &c->pxHandlerContext, c->ulCallPending, periph_msg.data, periph_msg.len);
+                    if (periph_msg.len) {
+                        ESP_LOGI(TAG, "broadcast fid:%lu len:%lu", periph_msg.fid, periph_msg.len);
+                        _bApiCallSendJson(c, 0, periph_msg.data, periph_msg.len);
+                    }
+                    if (!(c->flags & CALL_FLAG_LONG_TERM)) {
+                        vLinkedListUnlink(it);
+                        free(c);
+                    } else {
+                        vLinkedListInsertLast(&pxWsApiCall, it);
+                    }
+                    it = next_it;
+                }
+                goto next;
+            }
+
             LinkedListItem_t *item = pxLinkedListFindFirst(pxWsApiWaitingForResponse, bCallIdMatch, (void *)periph_msg.id);
             if (!item) {
-                ESP_LOGI(TAG, "Arrived message from peripheral with id %d that are no tied to any API calls", periph_msg.id);
+                ESP_LOGI(TAG, "Arrived message from peripheral with id %lu that are no tied to any API calls", periph_msg.id);
                 goto next;
             }
 
             ApiCall_t *call = LinkedListGetObject(ApiCall_t, item);
             if (!call) {
                 ESP_LOGI(TAG, "System error");
-                //TODO: instead of goto next; do here abort() or BUG()
                 goto next;
             }
 
             call->fHandler(call, &call->pxHandlerContext, call->ulCallPending, periph_msg.data, periph_msg.len);
             if(periph_msg.len) {
-                 ESP_LOGI(TAG, "sent: %s : %lu", periph_msg.data, periph_msg.len);
+                ESP_LOGI(TAG, "sent: %s : %lu", periph_msg.data, periph_msg.len);
                 _bApiCallSendJson(call, 0, periph_msg.data, periph_msg.len);
             }
 

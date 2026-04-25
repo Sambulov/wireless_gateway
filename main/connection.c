@@ -128,7 +128,7 @@ typedef struct {
 } link_t;
 
 
-#define LINKS_MAX_AMOUNT  1
+#define LINKS_MAX_AMOUNT  4
 link_t links_pool[LINKS_MAX_AMOUNT];
 linked_list_t links_free = NULL;
 linked_list_t links_active = NULL;

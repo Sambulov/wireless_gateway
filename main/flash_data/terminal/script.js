@@ -183,6 +183,7 @@ class ESP32Terminal {
     }
 
     disconnect() {
+        clearTimeout(this.resubscribeTimer);
         if (this.socket) {
             this.socket.close();
             this.socket = null;
@@ -200,6 +201,7 @@ class ESP32Terminal {
     
     registerClient() {
         this.subscriptionSid = Math.floor(Math.random() * 0xffff) + 1;
+        this.txSid = Math.floor(Math.random() * 0xffff) + 1;
         const registerCommand = {
             FID: "0x00001021",
             SID: this.subscriptionSid,
@@ -208,6 +210,13 @@ class ESP32Terminal {
 
         this.socket.send(JSON.stringify(registerCommand));
         this.term.writeln('\x1b[32m✓ Регистрация отправлена\x1b[0m');
+
+        this.resubscribeTimer = setTimeout(() => {
+            if (!this.isRegistered && this.isConnected) {
+                this.term.writeln('\x1b[33m[Повтор регистрации...]\x1b[0m');
+                this.registerClient();
+            }
+        }, 3000);
     }
     
     handleWebSocketMessage(data) {
@@ -220,6 +229,7 @@ class ESP32Terminal {
             if (packet.FID === "0x00001021" && packet.ARG) {
                 if (packet.ARG.STA === "0x00000005") {
                     this.isRegistered = true;
+                    clearTimeout(this.resubscribeTimer);
                     this.term.writeln('\x1b[32m✓ Подписка подтверждена\x1b[0m');
                 } else if (this.isRegistered == true) {
                     this.processUARTData(packet.ARG);
@@ -249,6 +259,8 @@ class ESP32Terminal {
             if (this.echoEnabled && this.isConnected && this.socket) {
                 const command = {
                     FID: "0x00001022",
+                    SID: this.txSid,
+                    FLAGS: 0,
                     ARG: base64Data
                 };
                 this.socket.send(JSON.stringify(command));
@@ -272,7 +284,9 @@ class ESP32Terminal {
         
         // Формирование команды для отправки
         const command = {
-            FID: "1022",
+            FID: "0x00001022",
+            SID: this.txSid,
+            FLAGS: 0,
             ARG: base64String
         };
         
@@ -288,7 +302,9 @@ class ESP32Terminal {
         // Отправка сигнала Break (Ctrl+C)
         if (this.isConnected && this.socket) {
             const breakCommand = {
-                FID: "1022",
+                FID: "0x00001022",
+                SID: this.txSid,
+                FLAGS: 0,
                 ARG: btoa('\x03') // Ctrl+C
             };
             this.socket.send(JSON.stringify(breakCommand));

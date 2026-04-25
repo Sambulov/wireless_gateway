@@ -335,13 +335,15 @@ static void handle_msg(app_context_t *app, webapi_msg_t *in_msg)
 				b64_buf[b64_len] = '\0';
 				cJSON *json = cJSON_CreateString((char *)b64_buf);
 				if (json) {
-					send_uart_response(in_msg->id, in_msg->fid, json);
+					/* id=0: broadcast to all subscribers of this FID */
+					send_uart_response(0, in_msg->fid, json);
 					json_delete(json);
 				}
 			}
 		} else {
-       	    send_uart_response(in_msg->id, in_msg->fid, NULL);
-        }
+			/* id=0: broadcast (empty poll — no data, no response needed) */
+			send_uart_response(0, in_msg->fid, NULL);
+		}
 		break;
 	case ESP_WS_API_UART1_RAW_TX:
 		ctx = &uart_context[0];
