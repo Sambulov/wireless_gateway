@@ -50,6 +50,7 @@ typedef struct {
 } gw_uart_event_data_t;
 
 uint8_t gw_uart_init(void *desc, gw_uart_port_t port, uint32_t buffer_size);
+int32_t gw_uart_read(void *desc, uint8_t *buf, uint16_t size);
 int32_t gw_uart_write(void *desc, const uint8_t *buf, uint16_t size);
 uint8_t gw_uart_set(void *desc, const gw_uart_config_t *cnf);
 uint8_t gw_uart_get(void *desc, gw_uart_config_t *out_cnf);

@@ -577,9 +577,13 @@ static uint8_t is_uart_rx_fid(uint32_t fid) {
     return fid == ESP_WS_API_UART1_RAW_RX || fid == ESP_WS_API_UART2_RAW_RX;
 }
 
+static uint8_t is_modbus_fid(uint32_t fid) {
+    return fid == ESP_WS_API_UART1_MODBUS_REQ || fid == ESP_WS_API_UART2_MODBUS_REQ;
+}
+
 static queue_handle_t get_periph_queue(uint32_t fid) {
-    if(is_uart_fid(fid))
-        return get_uart_worker_queue();
+    if(is_uart_fid(fid))   return get_uart_worker_queue();
+    if(is_modbus_fid(fid)) return get_modbus_worker_queue(fid);
     return NULL;
 }
 

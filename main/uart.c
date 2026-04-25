@@ -211,10 +211,10 @@ const gw_uart_config_t gw_uart_config_default = {
     .boud = 115200
 };
 
-// int32_t gw_uart_read(void *desc, uint8_t *buf, uint16_t size) {
-//     gw_uart_private_t *uart = (gw_uart_private_t *) desc;
-// 	return uart_read_bytes(uart->port, buf, size, 0);
-// }
+int32_t gw_uart_read(void *desc, uint8_t *buf, uint16_t size) {
+    gw_uart_private_t *uart = (gw_uart_private_t *) desc;
+	return uart_read_bytes(uart->port, buf, size, 0);
+}
 
 int32_t gw_uart_write(void *desc, const uint8_t *buf, uint16_t size) {
     gw_uart_private_t *uart = (gw_uart_private_t *) desc;
