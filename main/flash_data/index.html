@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SUTO S111</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: monospace; background: #0d1117; color: #c9d1d9; padding: 16px; }
+
+        h1 { color: #58a6ff; font-size: 1.3em; letter-spacing: 2px; margin-bottom: 4px; }
+        h2 { color: #8b949e; font-size: 0.9em; letter-spacing: 1px; margin: 16px 0 8px; text-transform: uppercase; }
+
+        .info-bar {
+            display: flex; gap: 20px; flex-wrap: wrap;
+            font-size: 0.8em; color: #8b949e; margin-bottom: 14px;
+            padding: 8px 0; border-bottom: 1px solid #21262d;
+        }
+        .info-bar span b { color: #c9d1d9; }
+
+        .toolbar {
+            display: flex; align-items: center; gap: 12px;
+            flex-wrap: wrap; margin-bottom: 14px;
+        }
+        .badge { display: inline-block; padding: 3px 12px; border-radius: 12px; font-size: 0.78em; }
+        .badge.ok  { background: #1f4f2a; color: #56d364; }
+        .badge.err { background: #4f1f1f; color: #f85149; }
+
+        .toolbar label { font-size: 0.82em; color: #8b949e; }
+        .toolbar input[type=number], .toolbar select {
+            background: #161b22; border: 1px solid #30363d; color: #c9d1d9;
+            padding: 4px 8px; border-radius: 6px; font-family: monospace;
+        }
+        .toolbar button {
+            background: #161b22; border: 1px solid #30363d; color: #8b949e;
+            padding: 4px 12px; border-radius: 6px; cursor: pointer; font-family: monospace;
+        }
+        .toolbar button:hover { border-color: #58a6ff; color: #58a6ff; }
+
+        /* measurements table */
+        table { border-collapse: collapse; width: 100%; font-size: 0.88em; }
+        th {
+            background: #161b22; color: #58a6ff; padding: 7px 10px;
+            text-align: left; border-bottom: 2px solid #21262d;
+        }
+        td { padding: 6px 10px; border-bottom: 1px solid #21262d; vertical-align: middle; }
+        tr:hover > td { background: rgba(33,38,45,0.6); }
+
+        .col-addr { color: #484f58; font-size: 0.82em; white-space: nowrap; }
+        .col-val  { font-weight: bold; color: #e6edf3; min-width: 90px; display: inline-block; }
+        .col-unit { color: #484f58; font-size: 0.8em; margin-left: 3px; }
+        .col-desc { color: #8b949e; font-size: 0.82em; }
+
+        @keyframes flash { 0% { color: #79c0ff; } 100% { color: #e6edf3; } }
+        .flash { animation: flash 0.5s ease-out; }
+
+        /* config section */
+        .config-grid {
+            display: flex; gap: 16px; flex-wrap: wrap; margin-top: 8px;
+        }
+        .config-card {
+            background: #161b22; border: 1px solid #21262d; border-radius: 8px;
+            padding: 14px 18px; min-width: 260px;
+        }
+        .config-card h3 { color: #8b949e; font-size: 0.82em; margin-bottom: 12px; text-transform: uppercase; letter-spacing: 1px; }
+        .cfg-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+        .cfg-row label { font-size: 0.82em; color: #8b949e; min-width: 130px; }
+        .cfg-row input, .cfg-row select {
+            background: #0d1117; border: 1px solid #30363d; color: #c9d1d9;
+            padding: 3px 7px; border-radius: 4px; font-family: monospace;
+            flex: 1;
+        }
+        .cfg-row input:focus, .cfg-row select:focus { border-color: #58a6ff; outline: none; }
+        .btn {
+            background: #21262d; border: 1px solid #30363d; color: #8b949e;
+            padding: 5px 14px; border-radius: 6px; cursor: pointer; font-family: monospace;
+            font-size: 0.85em; margin-top: 4px;
+        }
+        .btn:hover { border-color: #58a6ff; color: #58a6ff; }
+        .btn.danger { border-color: #6e2020; color: #f85149; }
+        .btn.danger:hover { background: #4f1f1f; }
+        .btn-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
+
+        #poll-ts { margin-top: 10px; font-size: 0.72em; color: #484f58; }
+    </style>
+</head>
+<body>
+    <h1>SUTO S111</h1>
+
+    <div class="info-bar">
+        <span>Модель: <b id="dev-model">—</b></span>
+        <span>S/N: <b id="dev-serial">—</b></span>
+        <span>Firmware: <b id="dev-fw">—</b></span>
+        <span>Время: <b id="dev-time">—</b></span>
+    </div>
+
+    <div class="toolbar">
+        <span id="ws-status" class="badge err">Нет соединения</span>
+        <label>MB адрес:&nbsp;<input type="number" id="mb-addr" value="1" min="1" max="247" style="width:60px"></label>
+        <label>UART:&nbsp;
+            <select id="uart-sel">
+                <option value="4371">UART1 (0x1113)</option>
+                <option value="4387">UART2 (0x1123)</option>
+            </select>
+        </label>
+        <button onclick="reconnect()">Переподключить</button>
+    </div>
+
+    <h2>Измерения</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>Рег.</th>
+                <th>Параметр</th>
+                <th>Значение</th>
+                <th>Описание</th>
+            </tr>
+        </thead>
+        <tbody id="meas-body"></tbody>
+    </table>
+    <div id="poll-ts">Опрос: —</div>
+
+    <h2>Конфигурация</h2>
+    <div class="config-grid">
+
+        <!-- System params -->
+        <div class="config-card">
+            <h3>Системные параметры (инстр. 1001)</h3>
+            <div class="cfg-row">
+                <label>Схема подключения</label>
+                <select id="cfg-wiring">
+                    <option value="0">3P4W_4CT</option>
+                    <option value="1">3P4W_3CT</option>
+                    <option value="2">3P3W_2CT</option>
+                    <option value="3">1P2W</option>
+                    <option value="4">3P4W_Rogowski</option>
+                    <option value="5">3P3W_Rogowski</option>
+                </select>
+            </div>
+            <div class="cfg-row">
+                <label>Частота сети, Гц</label>
+                <select id="cfg-freq">
+                    <option value="50">50</option>
+                    <option value="60">60</option>
+                </select>
+            </div>
+            <div class="cfg-row">
+                <label>Номин. напряжение, В</label>
+                <input type="number" id="cfg-vnom" value="220" min="1" max="60000">
+            </div>
+            <button class="btn" onclick="sendSysParams()">Записать</button>
+        </div>
+
+        <!-- Comm params -->
+        <div class="config-card">
+            <h3>Связь (инстр. 1210)</h3>
+            <div class="cfg-row">
+                <label>Адрес устройства</label>
+                <input type="number" id="cfg-addr" value="1" min="1" max="247">
+            </div>
+            <div class="cfg-row">
+                <label>Скорость</label>
+                <select id="cfg-baud">
+                    <option value="0">2400</option>
+                    <option value="1">4800</option>
+                    <option value="2" selected>9600</option>
+                    <option value="3">19200</option>
+                    <option value="4">38400</option>
+                    <option value="5">57600</option>
+                    <option value="6">115200</option>
+                </select>
+            </div>
+            <div class="cfg-row">
+                <label>Чётность</label>
+                <select id="cfg-parity">
+                    <option value="0">None</option>
+                    <option value="1">Odd</option>
+                    <option value="2">Even</option>
+                </select>
+            </div>
+            <div class="cfg-row">
+                <label>Стоп-биты</label>
+                <select id="cfg-stop">
+                    <option value="1">1</option>
+                    <option value="2">2</option>
+                </select>
+            </div>
+            <button class="btn" onclick="sendCommParams()">Записать</button>
+        </div>
+
+        <!-- Reset -->
+        <div class="config-card">
+            <h3>Сброс (инстр. 1301)</h3>
+            <div class="btn-row">
+                <button class="btn" onclick="sendReset(1)">Max/Min</button>
+                <button class="btn" onclick="sendReset(2)">Demand max</button>
+            </div>
+            <div class="btn-row">
+                <button class="btn danger" onclick="sendReset(4)">Сброс энергии</button>
+                <button class="btn danger" onclick="sendReset(5)">Сброс всего</button>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+    // ── Register definitions ──────────────────────────────────────────────────
+    // All measurement registers are float32 (2 consecutive uint16 words, big-endian)
+    const MEAS = [
+        { addr: 1000, name: "Ток фазы A",          unit: "A"    },
+        { addr: 1002, name: "Ток фазы B",          unit: "A"    },
+        { addr: 1004, name: "Ток фазы C",          unit: "A"    },
+        { addr: 1010, name: "Напряжение Ua",        unit: "В"    },
+        { addr: 1012, name: "Напряжение Ub",        unit: "В"    },
+        { addr: 1014, name: "Напряжение Uc",        unit: "В"    },
+        { addr: 1034, name: "Активная мощность",    unit: "кВт"  },
+        { addr: 1042, name: "Реактивная мощность",  unit: "кВАр" },
+        { addr: 1058, name: "Коэффициент мощности", unit: ""     },
+        { addr: 1068, name: "Частота",              unit: "Гц"   },
+    ];
+
+    // Single batch covers all measurements: regs 1000–1069 (70 regs)
+    const BATCH_START = 1000;
+    const BATCH_COUNT = 70;
+
+    // ── State ─────────────────────────────────────────────────────────────────
+    let ws = null;
+    let pollTimer = null;
+    let sidCounter = 1;
+
+    function getFid()    { return parseInt(document.getElementById('uart-sel').value); }
+    function getMbAddr() { return parseInt(document.getElementById('mb-addr').value) || 1; }
+    function nextSid()   { return sidCounter++ & 0xffff; }
+
+    // ── Build measurements table ──────────────────────────────────────────────
+    const tbody = document.getElementById('meas-body');
+    MEAS.forEach(m => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+            <td class="col-addr">${m.addr}–${m.addr+1}</td>
+            <td>${m.name}</td>
+            <td><span class="col-val" id="val-${m.addr}">—</span><span class="col-unit">${m.unit}</span></td>
+            <td class="col-desc" id="raw-${m.addr}"></td>
+        `;
+        tbody.appendChild(tr);
+    });
+
+    // ── Float32 decoder ───────────────────────────────────────────────────────
+    function f32(hiWord, loWord) {
+        const buf  = new ArrayBuffer(4);
+        const view = new DataView(buf);
+        view.setUint16(0, hiWord, false);   // big-endian word order (ABCD)
+        view.setUint16(2, loWord, false);
+        return view.getFloat32(0, false);
+    }
+
+    // ── Render helper ─────────────────────────────────────────────────────────
+    function renderVal(addr, value) {
+        const el = document.getElementById(`val-${addr}`);
+        if (!el) return;
+        el.textContent = isFinite(value) ? value.toFixed(3) : '—';
+        el.classList.remove('flash');
+        void el.offsetWidth;
+        el.classList.add('flash');
+    }
+
+    // ── WebSocket ─────────────────────────────────────────────────────────────
+    function connect() {
+        ws = new WebSocket(`ws://${window.location.hostname}/ws`);
+        ws.onopen    = onOpen;
+        ws.onclose   = onClose;
+        ws.onerror   = () => {};
+        ws.onmessage = onMsg;
+    }
+
+    function onOpen() {
+        setStatus(true);
+        readDeviceInfo();
+        startPoll();
+    }
+
+    function onClose() {
+        setStatus(false);
+        stopPoll();
+        setTimeout(connect, 2000);
+    }
+
+    function onMsg(evt) {
+        let obj;
+        try { obj = JSON.parse(evt.data); } catch { return; }
+        if (parseInt(obj.FID, 16) === getFid()) handleResp(obj.ARG);
+    }
+
+    function reconnect() {
+        if (ws) { ws.onclose = null; ws.close(); }
+        stopPoll(); setStatus(false);
+        connect();
+    }
+
+    function setStatus(ok) {
+        const el = document.getElementById('ws-status');
+        el.className = 'badge ' + (ok ? 'ok' : 'err');
+        el.textContent = ok ? 'Подключено' : 'Нет соединения';
+    }
+
+    function send(arg) {
+        if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+        ws.send(JSON.stringify({ FID: getFid(), FLAGS: 0, SID: nextSid(), ARG: arg }));
+        return true;
+    }
+
+    // ── Polling ───────────────────────────────────────────────────────────────
+    function poll() {
+        send({ FN: 3, ADR: getMbAddr(), RA: BATCH_START, RVC: BATCH_COUNT, AWT: 1000 });
+        document.getElementById('poll-ts').textContent =
+            'Опрос: ' + new Date().toLocaleTimeString();
+    }
+
+    function startPoll() { poll(); pollTimer = setInterval(poll, 1000); }
+    function stopPoll()  { clearInterval(pollTimer); pollTimer = null; }
+
+    // Read device info (regs 60–83)
+    function readDeviceInfo() {
+        send({ FN: 3, ADR: getMbAddr(), RA: 60, RVC: 24, AWT: 1000 });
+    }
+
+    // ── Response handler ──────────────────────────────────────────────────────
+    function handleResp(arg) {
+        if (!arg || arg.ERR || !Array.isArray(arg.RD)) return;
+        const start = arg.RA;
+        const rd    = arg.RD;
+
+        if (start === BATCH_START) {
+            // Measurements batch
+            MEAS.forEach(m => {
+                const offset = m.addr - BATCH_START;
+                if (offset + 1 < rd.length) {
+                    renderVal(m.addr, f32(rd[offset], rd[offset + 1]));
+                }
+            });
+        } else if (start === 60) {
+            // Device info
+            parseDeviceInfo(rd);
+        }
+    }
+
+    function parseDeviceInfo(rd) {
+        // regs 60–69: model string (UTF-8, 10 regs = 20 bytes)
+        const modelBytes = [];
+        for (let i = 0; i < 10 && i < rd.length; i++) {
+            const hi = (rd[i] >> 8) & 0xff;
+            const lo = rd[i] & 0xff;
+            if (hi) modelBytes.push(hi);
+            if (lo) modelBytes.push(lo);
+        }
+        const model = new TextDecoder().decode(new Uint8Array(modelBytes)).replace(/\0/g, '').trim();
+        document.getElementById('dev-model').textContent = model || '—';
+
+        // regs 70–71: serial (uint32)
+        if (rd.length > 11) {
+            const serial = ((rd[10] << 16) | rd[11]) >>> 0;
+            document.getElementById('dev-serial').textContent = serial;
+        }
+
+        // reg 72: firmware version (hi.lo)
+        if (rd.length > 12) {
+            const fw = rd[12];
+            document.getElementById('dev-fw').textContent =
+                `${(fw >> 8) & 0xff}.${fw & 0xff}`;
+        }
+
+        // regs 75–78: datetime
+        if (rd.length > 18) {
+            const year  = rd[15];
+            const month = (rd[16] >> 8) & 0xff;
+            const day   =  rd[16] & 0xff;
+            const hour  = (rd[17] >> 8) & 0xff;
+            const min   =  rd[17] & 0xff;
+            const sec   =  rd[18] & 0xff;
+            document.getElementById('dev-time').textContent =
+                `${year}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')} ` +
+                `${String(hour).padStart(2,'0')}:${String(min).padStart(2,'0')}:${String(sec).padStart(2,'0')}`;
+        }
+    }
+
+    // ── Config writes via FC16 instruction system ─────────────────────────────
+    function sendInstr(code, params) {
+        const regs = [code, ...params];
+        send({ FN: 16, ADR: getMbAddr(), RA: 300, RVC: regs.length, RD: regs, AWT: 2000 });
+    }
+
+    function sendSysParams() {
+        const wiring = parseInt(document.getElementById('cfg-wiring').value);
+        const freq   = parseInt(document.getElementById('cfg-freq').value);
+        const vnom   = parseInt(document.getElementById('cfg-vnom').value) || 220;
+        // Instr 1001: wiring, freq, nom_V, VT_hi=1, VT_lo=0, CT_hi=1, CT_lo=0
+        sendInstr(1001, [wiring, freq, vnom, 1, 0, 1, 0]);
+    }
+
+    function sendCommParams() {
+        const addr   = parseInt(document.getElementById('cfg-addr').value)  || 1;
+        const baud   = parseInt(document.getElementById('cfg-baud').value);
+        const parity = parseInt(document.getElementById('cfg-parity').value);
+        const stop   = parseInt(document.getElementById('cfg-stop').value);
+        // Instr 1210: address, baud_index, parity, stop_bits
+        sendInstr(1210, [addr, baud, parity, stop]);
+    }
+
+    function sendReset(type) {
+        if (!confirm(`Подтвердите сброс (тип ${type})`)) return;
+        sendInstr(1301, [type]);
+    }
+
+    connect();
+    </script>
+</body>
+</html>

@@ -1,0 +1,1051 @@
+# SUTO S111 Three-Phase Power Meter — Modbus Register Table
+# Source: S111_Modbus-register-table_EN_V2025-2.pdf  Rev.2025-2
+#
+# Columns (tab-separated):
+#   ALIAS           ADDR  RW   SIZE  TYPE      UNIT   DESCRIPTION
+#
+# RW:   R=read-only  W=direct FC16  WC=write via config instr (FC16 to reg 300+)
+# SIZE: count of 16-bit Modbus registers
+# ADDR: decimal, no address offset
+
+# ── 1.9.1  Equipment parameters ───────────────────────────────────────────────
+DeviceModel         60    R    10    UTF8      -      Device model string
+SerialNo            70    R    2     UInt32    -      Serial number
+AppVersion          72    R    1     UInt16    -      App version (format X.Y hi-byte.lo-byte)
+DateTime            75    R/WC 4     DateTime  -      Reg75=Year Reg76=Month(b15:8)|Day(b7:0) Reg77=Hour(b15:8)|Min(b7:0) Reg78=Second
+
+# ── 1.9.2  Communication parameters ──────────────────────────────────────────
+SlaveAddress        80    R/WC 1     UInt16    -      Slave address 1-247
+BaudRate            81    R/WC 1     UInt16    -      0=2400 1=4800 2=9600 3=19200 4=38400 5=57600 6=115200
+Parity              82    R/WC 1     UInt16    -      0=None 1=Odd 2=Even
+StopBit             83    R/WC 1     UInt16    -      0=1bit 1=2bit
+
+# ── 1.9.3  Voltage and current phase sequence ─────────────────────────────────
+PhaseSeqState       220   R    1     UInt16    -      0=both correct 1=voltage wrong 2=current wrong 3=both wrong
+
+# ── 1.9.4  Configure instruction registers ────────────────────────────────────
+InstrCode           300   R/W  1     UInt16    -      Instruction code (write triggers execution)
+InstrParam001       301   R/W  1     UInt16    -      Instruction parameter 1
+InstrParam002       302   R/W  1     UInt16    -      Instruction parameter 2
+InstrParam003       303   R/W  1     UInt16    -      Instruction parameter 3
+InstrParam004       304   R/W  1     UInt16    -      Instruction parameter 4
+InstrParam005       305   R/W  1     UInt16    -      Instruction parameter 5
+InstrParam006       306   R/W  1     UInt16    -      Instruction parameter 6
+InstrParam007       307   R/W  1     UInt16    -      Instruction parameter 7
+InstrParam008       308   R/W  1     UInt16    -      Instruction parameter 8
+InstrParam009       309   R/W  1     UInt16    -      Instruction parameter 9
+InstrParam010       310   R/W  1     UInt16    -      Instruction parameter 10
+InstrParam011       311   R/W  1     UInt16    -      Instruction parameter 11
+InstrParam012       312   R/W  1     UInt16    -      Instruction parameter 12
+InstrParam013       313   R/W  1     UInt16    -      Instruction parameter 13
+InstrParam014       314   R/W  1     UInt16    -      Instruction parameter 14
+InstrParam015       315   R/W  1     UInt16    -      Instruction parameter 15
+InstrParam016       316   R/W  1     UInt16    -      Instruction parameter 16
+InstrParam017       317   R/W  1     UInt16    -      Instruction parameter 17
+InstrParam018       318   R/W  1     UInt16    -      Instruction parameter 18
+InstrParam019       319   R/W  1     UInt16    -      Instruction parameter 19
+InstrParam020       320   R/W  1     UInt16    -      Instruction parameter 20
+InstrParam021       321   R/W  1     UInt16    -      Instruction parameter 21
+InstrParam022       322   R/W  1     UInt16    -      Instruction parameter 22
+InstrParam023       323   R/W  1     UInt16    -      Instruction parameter 23
+InstrParam024       324   R/W  1     UInt16    -      Instruction parameter 24
+InstrParam025       325   R/W  1     UInt16    -      Instruction parameter 25
+InstrParam026       326   R/W  1     UInt16    -      Instruction parameter 26
+InstrParam027       327   R/W  1     UInt16    -      Instruction parameter 27
+InstrParam028       328   R/W  1     UInt16    -      Instruction parameter 28
+InstrParam029       329   R/W  1     UInt16    -      Instruction parameter 29
+InstrParam030       330   R/W  1     UInt16    -      Instruction parameter 30
+InstrParam031       331   R/W  1     UInt16    -      Instruction parameter 31
+InstrParam032       332   R/W  1     UInt16    -      Instruction parameter 32
+InstrParam033       333   R/W  1     UInt16    -      Instruction parameter 33
+InstrParam034       334   R/W  1     UInt16    -      Instruction parameter 34
+InstrParam035       335   R/W  1     UInt16    -      Instruction parameter 35
+InstrParam036       336   R/W  1     UInt16    -      Instruction parameter 36
+InstrParam037       337   R/W  1     UInt16    -      Instruction parameter 37
+InstrParam038       338   R/W  1     UInt16    -      Instruction parameter 38
+InstrParam039       339   R/W  1     UInt16    -      Instruction parameter 39
+InstrParam040       340   R/W  1     UInt16    -      Instruction parameter 40
+InstrParam041       341   R/W  1     UInt16    -      Instruction parameter 41
+InstrParam042       342   R/W  1     UInt16    -      Instruction parameter 42
+InstrParam043       343   R/W  1     UInt16    -      Instruction parameter 43
+InstrParam044       344   R/W  1     UInt16    -      Instruction parameter 44
+InstrParam045       345   R/W  1     UInt16    -      Instruction parameter 45
+InstrParam046       346   R/W  1     UInt16    -      Instruction parameter 46
+InstrParam047       347   R/W  1     UInt16    -      Instruction parameter 47
+InstrParam048       348   R/W  1     UInt16    -      Instruction parameter 48
+InstrParam049       349   R/W  1     UInt16    -      Instruction parameter 49
+InstrParam050       350   R/W  1     UInt16    -      Instruction parameter 50
+InstrParam051       351   R/W  1     UInt16    -      Instruction parameter 51
+InstrParam052       352   R/W  1     UInt16    -      Instruction parameter 52
+InstrParam053       353   R/W  1     UInt16    -      Instruction parameter 53
+InstrParam054       354   R/W  1     UInt16    -      Instruction parameter 54
+InstrParam055       355   R/W  1     UInt16    -      Instruction parameter 55
+InstrParam056       356   R/W  1     UInt16    -      Instruction parameter 56
+InstrParam057       357   R/W  1     UInt16    -      Instruction parameter 57
+InstrParam058       358   R/W  1     UInt16    -      Instruction parameter 58
+InstrParam059       359   R/W  1     UInt16    -      Instruction parameter 59
+InstrParam060       360   R/W  1     UInt16    -      Instruction parameter 60
+InstrParam061       361   R/W  1     UInt16    -      Instruction parameter 61
+InstrParam062       362   R/W  1     UInt16    -      Instruction parameter 62
+InstrParam063       363   R/W  1     UInt16    -      Instruction parameter 63
+InstrParam064       364   R/W  1     UInt16    -      Instruction parameter 64
+InstrParam065       365   R/W  1     UInt16    -      Instruction parameter 65
+InstrParam066       366   R/W  1     UInt16    -      Instruction parameter 66
+InstrParam067       367   R/W  1     UInt16    -      Instruction parameter 67
+InstrParam068       368   R/W  1     UInt16    -      Instruction parameter 68
+InstrParam069       369   R/W  1     UInt16    -      Instruction parameter 69
+InstrParam070       370   R/W  1     UInt16    -      Instruction parameter 70
+InstrParam071       371   R/W  1     UInt16    -      Instruction parameter 71
+InstrParam072       372   R/W  1     UInt16    -      Instruction parameter 72
+InstrParam073       373   R/W  1     UInt16    -      Instruction parameter 73
+InstrParam074       374   R/W  1     UInt16    -      Instruction parameter 74
+InstrParam075       375   R/W  1     UInt16    -      Instruction parameter 75
+InstrParam076       376   R/W  1     UInt16    -      Instruction parameter 76
+InstrParam077       377   R/W  1     UInt16    -      Instruction parameter 77
+InstrParam078       378   R/W  1     UInt16    -      Instruction parameter 78
+InstrParam079       379   R/W  1     UInt16    -      Instruction parameter 79
+InstrParam080       380   R/W  1     UInt16    -      Instruction parameter 80
+InstrParam081       381   R/W  1     UInt16    -      Instruction parameter 81
+InstrParam082       382   R/W  1     UInt16    -      Instruction parameter 82
+InstrParam083       383   R/W  1     UInt16    -      Instruction parameter 83
+InstrParam084       384   R/W  1     UInt16    -      Instruction parameter 84
+InstrParam085       385   R/W  1     UInt16    -      Instruction parameter 85
+InstrParam086       386   R/W  1     UInt16    -      Instruction parameter 86
+InstrParam087       387   R/W  1     UInt16    -      Instruction parameter 87
+InstrParam088       388   R/W  1     UInt16    -      Instruction parameter 88
+InstrParam089       389   R/W  1     UInt16    -      Instruction parameter 89
+InstrParam090       390   R/W  1     UInt16    -      Instruction parameter 90
+InstrParam091       391   R/W  1     UInt16    -      Instruction parameter 91
+InstrParam092       392   R/W  1     UInt16    -      Instruction parameter 92
+InstrParam093       393   R/W  1     UInt16    -      Instruction parameter 93
+InstrParam094       394   R/W  1     UInt16    -      Instruction parameter 94
+InstrParam095       395   R/W  1     UInt16    -      Instruction parameter 95
+InstrParam096       396   R/W  1     UInt16    -      Instruction parameter 96
+InstrParam097       397   R/W  1     UInt16    -      Instruction parameter 97
+InstrParam098       398   R/W  1     UInt16    -      Instruction parameter 98
+InstrParam099       399   R/W  1     UInt16    -      Instruction parameter 99
+InstrParam100       400   R/W  1     UInt16    -      Instruction parameter 100
+InstrParam101       401   R/W  1     UInt16    -      Instruction parameter 101
+InstrParam102       402   R/W  1     UInt16    -      Instruction parameter 102
+InstrParam103       403   R/W  1     UInt16    -      Instruction parameter 103
+InstrParam104       404   R/W  1     UInt16    -      Instruction parameter 104
+InstrParam105       405   R/W  1     UInt16    -      Instruction parameter 105
+InstrParam106       406   R/W  1     UInt16    -      Instruction parameter 106
+InstrParam107       407   R/W  1     UInt16    -      Instruction parameter 107
+InstrParam108       408   R/W  1     UInt16    -      Instruction parameter 108
+InstrParam109       409   R/W  1     UInt16    -      Instruction parameter 109
+InstrParam110       410   R/W  1     UInt16    -      Instruction parameter 110
+InstrParam111       411   R/W  1     UInt16    -      Instruction parameter 111
+InstrParam112       412   R/W  1     UInt16    -      Instruction parameter 112
+InstrParam113       413   R/W  1     UInt16    -      Instruction parameter 113
+InstrParam114       414   R/W  1     UInt16    -      Instruction parameter 114
+InstrParam115       415   R/W  1     UInt16    -      Instruction parameter 115
+InstrParam116       416   R/W  1     UInt16    -      Instruction parameter 116
+InstrParam117       417   R/W  1     UInt16    -      Instruction parameter 117
+InstrParam118       418   R/W  1     UInt16    -      Instruction parameter 118
+InstrParam119       419   R/W  1     UInt16    -      Instruction parameter 119
+InstrParam120       420   R/W  1     UInt16    -      Instruction parameter 120
+InstrParam121       421   R/W  1     UInt16    -      Instruction parameter 121
+InstrParam122       422   R/W  1     UInt16    -      Instruction parameter 122
+InstrParam123       423   R/W  1     UInt16    -      Instruction parameter 123
+CfgInstrCode        424   R    1     UInt16    -      Last executed instruction code (readback)
+CfgResult           425   R    1     UInt16    -      0=ok 80=invalid code 81=invalid param 82=wrong param count 83=not executed
+
+# ── 1.9.5  Power system ───────────────────────────────────────────────────────
+WiringMode          500   R/WC 1     UInt16    -      0=3P4W_4CT 1=3P4W_3CT 2=3P3W_3CT 3=3P3W_2CT 4=1P3W 5=1P2W
+GridFrequency       501   R/WC 1     UInt16    Hz     Grid frequency 50 or 60
+NominalVoltage      502   R/WC 1     UInt16    V      Nominal voltage (VT ratio not included)
+VTRatio             503   R/WC 2     UInt32    -      VT ratio; actual = read/10000
+CTRatio             505   R/WC 2     UInt32    -      CT ratio; actual = read/10000
+PhABC_CTAccessType  510   R/WC 1     UInt16    -      Phase ABC CT type: 0=Rogowski 1=VCT
+PhABC_RogoCoilPri   511   R/WC 2     UInt32    A      Phase ABC Rogowski coil primary
+PhABC_RogoCoilSec   513   R/WC 2     UInt32    mV     Phase ABC Rogowski coil secondary (actual=read/100)
+PhABC_RogoCoilNom   515   R/WC 2     UInt32    A      Phase ABC Rogowski coil nominal current
+PhABC_VCTPri        517   R/WC 2     UInt32    A      Phase ABC VCT primary
+PhABC_VCTSec        519   R/WC 2     UInt32    mV     Phase ABC VCT secondary (actual=read/100)
+PhABC_VCTNom        521   R/WC 2     UInt32    A      Phase ABC VCT nominal current
+PhN_CTAccessType    530   R/WC 1     UInt16    -      Phase N CT type: 0=Rogowski 1=VCT
+PhN_RogoCoilPri     531   R/WC 2     UInt32    A      Phase N Rogowski coil primary
+PhN_RogoCoilSec     533   R/WC 2     UInt32    mV     Phase N Rogowski coil secondary (actual=read/100)
+PhN_RogoCoilNom     535   R/WC 2     UInt32    A      Phase N Rogowski coil nominal current
+PhN_VCTPri          537   R/WC 2     UInt32    A      Phase N VCT primary
+PhN_VCTSec          539   R/WC 2     UInt32    mV     Phase N VCT secondary (actual=read/100)
+PhN_VCTNom          541   R/WC 2     UInt32    A      Phase N VCT nominal current
+
+# ── 1.9.6  Current direction setting ─────────────────────────────────────────
+IDirA               550   R/WC 1     UInt16    -      Phase A current direction: 0=Forward 1=Reverse
+IDirB               551   R/WC 1     UInt16    -      Phase B current direction: 0=Forward 1=Reverse
+IDirC               552   R/WC 1     UInt16    -      Phase C current direction: 0=Forward 1=Reverse
+
+# ── 1.9.7  Current channel selection ─────────────────────────────────────────
+IChA                553   R/WC 1     UInt16    -      Phase A current channel: 0=Ch1(def) 1=Ch2 2=Ch3
+IChB                554   R/WC 1     UInt16    -      Phase B current channel: 0=Ch1 1=Ch2(def) 2=Ch3
+IChC                555   R/WC 1     UInt16    -      Phase C current channel: 0=Ch1 1=Ch2 2=Ch3(def)
+
+# ── 1.9.8  Zero drift suppression ────────────────────────────────────────────
+VZeroDrift          600   R/WC 1     UInt16    %      Voltage zero drift suppression (actual=read/100)
+IZeroDrift          601   R/WC 1     UInt16    %      Current zero drift suppression (actual=read/100)
+
+# ── 1.9.9  Tariff parameters ──────────────────────────────────────────────────
+CurrentTariff       800   R    1     UInt16    -      Current tariff: 0-5 = Tariff 1-6
+TariffSwitchMode    801   R/WC 1     UInt16    -      Tariff switch mode: 0=Manual 1=RTC
+ManualTariffSel     802   R/WC 1     UInt16    -      Manual tariff selection: 0-5 = Tariff 1-6
+RTCTaStart          803   R/WC 3     Time      -      RTC period Ta start time (Hour|Min|Sec)
+RTCTbStart          806   R/WC 3     Time      -      RTC period Tb start time
+RTCTcStart          809   R/WC 3     Time      -      RTC period Tc start time
+RTCTdStart          812   R/WC 3     Time      -      RTC period Td start time
+RTCTeStart          815   R/WC 3     Time      -      RTC period Te start time
+RTCTfStart          818   R/WC 3     Time      -      RTC period Tf start time
+RTCTaTariff         821   R/WC 1     UInt16    -      Ta tariff select: 0-5 = Tariff 1-6
+RTCTbTariff         822   R/WC 1     UInt16    -      Tb tariff select: 0-5 = Tariff 1-6
+RTCTcTariff         823   R/WC 1     UInt16    -      Tc tariff select: 0-5 = Tariff 1-6
+RTCTdTariff         824   R/WC 1     UInt16    -      Td tariff select: 0-5 = Tariff 1-6
+RTCTeTariff         825   R/WC 1     UInt16    -      Te tariff select: 0-5 = Tariff 1-6
+RTCTfTariff         826   R/WC 1     UInt16    -      Tf tariff select: 0-5 = Tariff 1-6
+
+# ── 1.9.10  Voltage, current, power, power factor ─────────────────────────────
+# Current
+IA                  1000  R    2     Float32   A      Phase A current
+IB                  1002  R    2     Float32   A      Phase B current
+IC                  1004  R    2     Float32   A      Phase C current
+IAvg                1006  R    2     Float32   A      Average ABC three-phase current
+IN                  1008  R    2     Float32   A      Phase N current
+# Phase voltage
+UA                  1010  R    2     Float32   V      UA-UN phase voltage
+UB                  1012  R    2     Float32   V      UB-UN phase voltage
+UC                  1014  R    2     Float32   V      UC-UN phase voltage
+UAvg                1016  R    2     Float32   V      Average ABC phase voltage
+U0                  1018  R    2     Float32   V      Zero sequence voltage
+# Line voltage
+UAB                 1020  R    2     Float32   V      UA-UB line voltage
+UBC                 1022  R    2     Float32   V      UB-UC line voltage
+UCA                 1024  R    2     Float32   V      UC-UA line voltage
+ULAvg               1026  R    2     Float32   V      Average three-phase line voltage
+# Active power
+PA                  1028  R    2     Float32   kW     Phase A active power
+PB                  1030  R    2     Float32   kW     Phase B active power
+PC                  1032  R    2     Float32   kW     Phase C active power
+PTotal              1034  R    2     Float32   kW     Total active power
+# Reactive power
+QA                  1036  R    2     Float32   kVAR   Phase A reactive power
+QB                  1038  R    2     Float32   kVAR   Phase B reactive power
+QC                  1040  R    2     Float32   kVAR   Phase C reactive power
+QTotal              1042  R    2     Float32   kVAR   Total reactive power
+# Apparent power
+SA                  1044  R    2     Float32   kVA    Phase A apparent power
+SB                  1046  R    2     Float32   kVA    Phase B apparent power
+SC                  1048  R    2     Float32   kVA    Phase C apparent power
+STotal              1050  R    2     Float32   kVA    Total apparent power
+# Power factor
+PFA                 1052  R    2     Float32   -      Phase A power factor
+PFB                 1054  R    2     Float32   -      Phase B power factor
+PFC                 1056  R    2     Float32   -      Phase C power factor
+PFTotal             1058  R    2     Float32   -      Total power factor
+# Fundamental harmonic power factor
+DPFA                1060  R    2     Float32   -      Phase A fundamental harmonic power factor
+DPFB                1062  R    2     Float32   -      Phase B fundamental harmonic power factor
+DPFC                1064  R    2     Float32   -      Phase C fundamental harmonic power factor
+DPFTotal            1066  R    2     Float32   -      Total fundamental harmonic power factor
+# Frequency
+FreqA               1068  R    2     Float32   Hz     Phase A frequency
+FreqB               1070  R    2     Float32   Hz     Phase B frequency
+FreqC               1072  R    2     Float32   Hz     Phase C frequency
+FreqTotal           1074  R    2     Float32   Hz     Total frequency
+
+# ── 1.9.11  Energy (Int64, unit=Wh/VARh/VAh) ──────────────────────────────────
+EPAImp              2500  R    4     Int64     Wh     Phase A positive active energy
+EPBImp              2504  R    4     Int64     Wh     Phase B positive active energy
+EPCImp              2508  R    4     Int64     Wh     Phase C positive active energy
+EPImp               2512  R    4     Int64     Wh     Total positive active energy
+EPAExp              2516  R    4     Int64     Wh     Phase A reverse active energy
+EPBExp              2520  R    4     Int64     Wh     Phase B reverse active energy
+EPCExp              2524  R    4     Int64     Wh     Phase C reverse active energy
+EPExp               2528  R    4     Int64     Wh     Total reverse active energy
+EQAImp              2532  R    4     Int64     VARh   Phase A positive reactive energy
+EQBImp              2536  R    4     Int64     VARh   Phase B positive reactive energy
+EQCImp              2540  R    4     Int64     VARh   Phase C positive reactive energy
+EQImp               2544  R    4     Int64     VARh   Total positive reactive energy
+EQAExp              2548  R    4     Int64     VARh   Phase A reverse reactive energy
+EQBExp              2552  R    4     Int64     VARh   Phase B reverse reactive energy
+EQCExp              2556  R    4     Int64     VARh   Phase C reverse reactive energy
+EQExp               2560  R    4     Int64     VARh   Total reverse reactive energy
+ESA                 2564  R    4     Int64     VAh    Phase A apparent energy
+ESB                 2568  R    4     Int64     VAh    Phase B apparent energy
+ESC                 2572  R    4     Int64     VAh    Phase C apparent energy
+ES                  2576  R    4     Int64     VAh    Total apparent energy
+
+# ── 1.9.11  Energy (UInt32, unit=kWh/kVARh/kVAh) ─────────────────────────────
+EPAImp_u32          2600  R    2     UInt32    kWh    Phase A positive active energy
+EPBImp_u32          2602  R    2     UInt32    kWh    Phase B positive active energy
+EPCImp_u32          2604  R    2     UInt32    kWh    Phase C positive active energy
+EPImp_u32           2606  R    2     UInt32    kWh    Total positive active energy
+EPAExp_u32          2608  R    2     UInt32    kWh    Phase A reverse active energy
+EPBExp_u32          2610  R    2     UInt32    kWh    Phase B reverse active energy
+EPCExp_u32          2612  R    2     UInt32    kWh    Phase C reverse active energy
+EPExp_u32           2614  R    2     UInt32    kWh    Total reverse active energy
+EQAImp_u32          2616  R    2     UInt32    kVARh  Phase A positive reactive energy
+EQBImp_u32          2618  R    2     UInt32    kVARh  Phase B positive reactive energy
+EQCImp_u32          2620  R    2     UInt32    kVARh  Phase C positive reactive energy
+EQImp_u32           2622  R    2     UInt32    kVARh  Total positive reactive energy
+EQAExp_u32          2624  R    2     UInt32    kVARh  Phase A reverse reactive energy
+EQBExp_u32          2626  R    2     UInt32    kVARh  Phase B reverse reactive energy
+EQCExp_u32          2628  R    2     UInt32    kVARh  Phase C reverse reactive energy
+EQExp_u32           2630  R    2     UInt32    kVARh  Total reverse reactive energy
+ESA_u32             2632  R    2     UInt32    kVAh   Phase A apparent energy
+ESB_u32             2634  R    2     UInt32    kVAh   Phase B apparent energy
+ESC_u32             2636  R    2     UInt32    kVAh   Phase C apparent energy
+ES_u32              2638  R    2     UInt32    kVAh   Total apparent energy
+
+# ── 1.9.12  Tariff Energy (Int64, Wh) ─────────────────────────────────────────
+ET1                 2700  R    4     Int64     Wh     Tariff 1 active energy
+ET2                 2704  R    4     Int64     Wh     Tariff 2 active energy
+ET3                 2708  R    4     Int64     Wh     Tariff 3 active energy
+ET4                 2712  R    4     Int64     Wh     Tariff 4 active energy
+ET5                 2716  R    4     Int64     Wh     Tariff 5 active energy
+ET6                 2720  R    4     Int64     Wh     Tariff 6 active energy
+
+# ── 1.9.12  Tariff Energy (UInt32, kWh) ───────────────────────────────────────
+ET1_u32             2750  R    2     UInt32    kWh    Tariff 1 active energy
+ET2_u32             2752  R    2     UInt32    kWh    Tariff 2 active energy
+ET3_u32             2754  R    2     UInt32    kWh    Tariff 3 active energy
+ET4_u32             2756  R    2     UInt32    kWh    Tariff 4 active energy
+ET5_u32             2758  R    2     UInt32    kWh    Tariff 5 active energy
+ET6_u32             2760  R    2     UInt32    kWh    Tariff 6 active energy
+
+# ── 1.9.13  Demand parameters ─────────────────────────────────────────────────
+DMDMethod           3000  R/WC 1     UInt16    -      Demand calculation: 0=sliding 1=fixed
+DMDBlock            3001  R/WC 1     UInt16    min    Demand interval
+PDMDResetTime       3002  R    4     DateTime  -      Peak demand reset date/time
+PADemand            3020  R    2     Float32   kW     Current active power demand phase A
+PAPeakDemand        3022  R    2     Float32   kW     Peak active power demand phase A
+PAPeakDemandDate    3024  R    4     DateTime  -      Peak active power demand time phase A
+PBDemand            3028  R    2     Float32   kW     Current active power demand phase B
+PBPeakDemand        3030  R    2     Float32   kW     Peak active power demand phase B
+PBPeakDemandDate    3032  R    4     DateTime  -      Peak active power demand time phase B
+PCDemand            3036  R    2     Float32   kW     Current active power demand phase C
+PCPeakDemand        3038  R    2     Float32   kW     Peak active power demand phase C
+PCPeakDemandDate    3040  R    4     DateTime  -      Peak active power demand time phase C
+PSUMDemand          3044  R    2     Float32   kW     Current total active power demand
+PSUMPeakDemand      3046  R    2     Float32   kW     Peak total active power demand
+PSUMPeakDemandDate  3048  R    4     DateTime  -      Peak total active power demand time
+QADemand            3052  R    2     Float32   kVar   Current reactive power demand phase A
+QAPeakDemand        3054  R    2     Float32   kVar   Peak reactive power demand phase A
+QAPeakDemandDate    3056  R    4     DateTime  -      Peak reactive power demand time phase A
+QBDemand            3060  R    2     Float32   kVar   Current reactive power demand phase B
+QBPeakDemand        3062  R    2     Float32   kVar   Peak reactive power demand phase B
+QBPeakDemandDate    3064  R    4     DateTime  -      Peak reactive power demand time phase B
+QCDemand            3068  R    2     Float32   kVar   Current reactive power demand phase C
+QCPeakDemand        3070  R    2     Float32   kVar   Peak reactive power demand phase C
+QCPeakDemandDate    3072  R    4     DateTime  -      Peak reactive power demand time phase C
+QSUMDemand          3076  R    2     Float32   kVar   Current total reactive power demand
+QSUMPeakDemand      3078  R    2     Float32   kVar   Peak total reactive power demand
+QSUMPeakDemandDate  3080  R    4     DateTime  -      Peak total reactive power demand time
+SADemand            3084  R    2     Float32   kVA    Current apparent power demand phase A
+SAPeakDemand        3086  R    2     Float32   kVA    Peak apparent power demand phase A
+SAPeakDemandDate    3088  R    4     DateTime  -      Peak apparent power demand time phase A
+SBDemand            3092  R    2     Float32   kVA    Current apparent power demand phase B
+SBPeakDemand        3094  R    2     Float32   kVA    Peak apparent power demand phase B
+SBPeakDemandDate    3096  R    4     DateTime  -      Peak apparent power demand time phase B
+SCDemand            3100  R    2     Float32   kVA    Current apparent power demand phase C
+SCPeakDemand        3102  R    2     Float32   kVA    Peak apparent power demand phase C
+SCPeakDemandDate    3104  R    4     DateTime  -      Peak apparent power demand time phase C
+SSUMDemand          3108  R    2     Float32   kVA    Current total apparent power demand
+SSUMPeakDemand      3110  R    2     Float32   kVA    Peak total apparent power demand
+SSUMPeakDemandDate  3112  R    4     DateTime  -      Peak total apparent power demand time
+
+# ── 1.9.14  Current harmonic percentage (1st–50th, stride 6 per harmonic) ─────
+IATHD               4000  R    2     Float32   %      Phase A current total harmonic distortion
+IBTHD               4002  R    2     Float32   %      Phase B current total harmonic distortion
+ICTHD               4004  R    2     Float32   %      Phase C current total harmonic distortion
+IATOHD              4006  R    2     Float32   %      Phase A current odd total harmonic distortion
+IBTOHD              4008  R    2     Float32   %      Phase B current odd total harmonic distortion
+ICTOHD              4010  R    2     Float32   %      Phase C current odd total harmonic distortion
+IATEHD              4012  R    2     Float32   %      Phase A current even total harmonic distortion
+IBTEHD              4014  R    2     Float32   %      Phase B current even total harmonic distortion
+ICTEHD              4016  R    2     Float32   %      Phase C current even total harmonic distortion
+IAHD1               4018  R    2     Float32   %      Phase A current 1st harmonic percentage
+IBHD1               4020  R    2     Float32   %      Phase B current 1st harmonic percentage
+ICHD1               4022  R    2     Float32   %      Phase C current 1st harmonic percentage
+IAHD2               4024  R    2     Float32   %      Phase A current 2nd harmonic percentage
+IBHD2               4026  R    2     Float32   %      Phase B current 2nd harmonic percentage
+ICHD2               4028  R    2     Float32   %      Phase C current 2nd harmonic percentage
+IAHD3               4030  R    2     Float32   %      Phase A current 3rd harmonic percentage
+IBHD3               4032  R    2     Float32   %      Phase B current 3rd harmonic percentage
+ICHD3               4034  R    2     Float32   %      Phase C current 3rd harmonic percentage
+IAHD4               4036  R    2     Float32   %      Phase A current 4th harmonic percentage
+IBHD4               4038  R    2     Float32   %      Phase B current 4th harmonic percentage
+ICHD4               4040  R    2     Float32   %      Phase C current 4th harmonic percentage
+IAHD5               4042  R    2     Float32   %      Phase A current 5th harmonic percentage
+IBHD5               4044  R    2     Float32   %      Phase B current 5th harmonic percentage
+ICHD5               4046  R    2     Float32   %      Phase C current 5th harmonic percentage
+IAHD6               4048  R    2     Float32   %      Phase A current 6th harmonic percentage
+IBHD6               4050  R    2     Float32   %      Phase B current 6th harmonic percentage
+ICHD6               4052  R    2     Float32   %      Phase C current 6th harmonic percentage
+IAHD7               4054  R    2     Float32   %      Phase A current 7th harmonic percentage
+IBHD7               4056  R    2     Float32   %      Phase B current 7th harmonic percentage
+ICHD7               4058  R    2     Float32   %      Phase C current 7th harmonic percentage
+IAHD8               4060  R    2     Float32   %      Phase A current 8th harmonic percentage
+IBHD8               4062  R    2     Float32   %      Phase B current 8th harmonic percentage
+ICHD8               4064  R    2     Float32   %      Phase C current 8th harmonic percentage
+IAHD9               4066  R    2     Float32   %      Phase A current 9th harmonic percentage
+IBHD9               4068  R    2     Float32   %      Phase B current 9th harmonic percentage
+ICHD9               4070  R    2     Float32   %      Phase C current 9th harmonic percentage
+IAHD10              4072  R    2     Float32   %      Phase A current 10th harmonic percentage
+IBHD10              4074  R    2     Float32   %      Phase B current 10th harmonic percentage
+ICHD10              4076  R    2     Float32   %      Phase C current 10th harmonic percentage
+IAHD11              4078  R    2     Float32   %      Phase A current 11th harmonic percentage
+IBHD11              4080  R    2     Float32   %      Phase B current 11th harmonic percentage
+ICHD11              4082  R    2     Float32   %      Phase C current 11th harmonic percentage
+IAHD12              4084  R    2     Float32   %      Phase A current 12th harmonic percentage
+IBHD12              4086  R    2     Float32   %      Phase B current 12th harmonic percentage
+ICHD12              4088  R    2     Float32   %      Phase C current 12th harmonic percentage
+IAHD13              4090  R    2     Float32   %      Phase A current 13th harmonic percentage
+IBHD13              4092  R    2     Float32   %      Phase B current 13th harmonic percentage
+ICHD13              4094  R    2     Float32   %      Phase C current 13th harmonic percentage
+IAHD14              4096  R    2     Float32   %      Phase A current 14th harmonic percentage
+IBHD14              4098  R    2     Float32   %      Phase B current 14th harmonic percentage
+ICHD14              4100  R    2     Float32   %      Phase C current 14th harmonic percentage
+IAHD15              4102  R    2     Float32   %      Phase A current 15th harmonic percentage
+IBHD15              4104  R    2     Float32   %      Phase B current 15th harmonic percentage
+ICHD15              4106  R    2     Float32   %      Phase C current 15th harmonic percentage
+IAHD16              4108  R    2     Float32   %      Phase A current 16th harmonic percentage
+IBHD16              4110  R    2     Float32   %      Phase B current 16th harmonic percentage
+ICHD16              4112  R    2     Float32   %      Phase C current 16th harmonic percentage
+IAHD17              4114  R    2     Float32   %      Phase A current 17th harmonic percentage
+IBHD17              4116  R    2     Float32   %      Phase B current 17th harmonic percentage
+ICHD17              4118  R    2     Float32   %      Phase C current 17th harmonic percentage
+IAHD18              4120  R    2     Float32   %      Phase A current 18th harmonic percentage
+IBHD18              4122  R    2     Float32   %      Phase B current 18th harmonic percentage
+ICHD18              4124  R    2     Float32   %      Phase C current 18th harmonic percentage
+IAHD19              4126  R    2     Float32   %      Phase A current 19th harmonic percentage
+IBHD19              4128  R    2     Float32   %      Phase B current 19th harmonic percentage
+ICHD19              4130  R    2     Float32   %      Phase C current 19th harmonic percentage
+IAHD20              4132  R    2     Float32   %      Phase A current 20th harmonic percentage
+IBHD20              4134  R    2     Float32   %      Phase B current 20th harmonic percentage
+ICHD20              4136  R    2     Float32   %      Phase C current 20th harmonic percentage
+IAHD21              4138  R    2     Float32   %      Phase A current 21st harmonic percentage
+IBHD21              4140  R    2     Float32   %      Phase B current 21st harmonic percentage
+ICHD21              4142  R    2     Float32   %      Phase C current 21st harmonic percentage
+IAHD22              4144  R    2     Float32   %      Phase A current 22nd harmonic percentage
+IBHD22              4146  R    2     Float32   %      Phase B current 22nd harmonic percentage
+ICHD22              4148  R    2     Float32   %      Phase C current 22nd harmonic percentage
+IAHD23              4150  R    2     Float32   %      Phase A current 23rd harmonic percentage
+IBHD23              4152  R    2     Float32   %      Phase B current 23rd harmonic percentage
+ICHD23              4154  R    2     Float32   %      Phase C current 23rd harmonic percentage
+IAHD24              4156  R    2     Float32   %      Phase A current 24th harmonic percentage
+IBHD24              4158  R    2     Float32   %      Phase B current 24th harmonic percentage
+ICHD24              4160  R    2     Float32   %      Phase C current 24th harmonic percentage
+IAHD25              4162  R    2     Float32   %      Phase A current 25th harmonic percentage
+IBHD25              4164  R    2     Float32   %      Phase B current 25th harmonic percentage
+ICHD25              4166  R    2     Float32   %      Phase C current 25th harmonic percentage
+IAHD26              4168  R    2     Float32   %      Phase A current 26th harmonic percentage
+IBHD26              4170  R    2     Float32   %      Phase B current 26th harmonic percentage
+ICHD26              4172  R    2     Float32   %      Phase C current 26th harmonic percentage
+IAHD27              4174  R    2     Float32   %      Phase A current 27th harmonic percentage
+IBHD27              4176  R    2     Float32   %      Phase B current 27th harmonic percentage
+ICHD27              4178  R    2     Float32   %      Phase C current 27th harmonic percentage
+IAHD28              4180  R    2     Float32   %      Phase A current 28th harmonic percentage
+IBHD28              4182  R    2     Float32   %      Phase B current 28th harmonic percentage
+ICHD28              4184  R    2     Float32   %      Phase C current 28th harmonic percentage
+IAHD29              4186  R    2     Float32   %      Phase A current 29th harmonic percentage
+IBHD29              4188  R    2     Float32   %      Phase B current 29th harmonic percentage
+ICHD29              4190  R    2     Float32   %      Phase C current 29th harmonic percentage
+IAHD30              4192  R    2     Float32   %      Phase A current 30th harmonic percentage
+IBHD30              4194  R    2     Float32   %      Phase B current 30th harmonic percentage
+ICHD30              4196  R    2     Float32   %      Phase C current 30th harmonic percentage
+IAHD31              4198  R    2     Float32   %      Phase A current 31st harmonic percentage
+IBHD31              4200  R    2     Float32   %      Phase B current 31st harmonic percentage
+ICHD31              4202  R    2     Float32   %      Phase C current 31st harmonic percentage
+IAHD32              4204  R    2     Float32   %      Phase A current 32nd harmonic percentage
+IBHD32              4206  R    2     Float32   %      Phase B current 32nd harmonic percentage
+ICHD32              4208  R    2     Float32   %      Phase C current 32nd harmonic percentage
+IAHD33              4210  R    2     Float32   %      Phase A current 33rd harmonic percentage
+IBHD33              4212  R    2     Float32   %      Phase B current 33rd harmonic percentage
+ICHD33              4214  R    2     Float32   %      Phase C current 33rd harmonic percentage
+IAHD34              4216  R    2     Float32   %      Phase A current 34th harmonic percentage
+IBHD34              4218  R    2     Float32   %      Phase B current 34th harmonic percentage
+ICHD34              4220  R    2     Float32   %      Phase C current 34th harmonic percentage
+IAHD35              4222  R    2     Float32   %      Phase A current 35th harmonic percentage
+IBHD35              4224  R    2     Float32   %      Phase B current 35th harmonic percentage
+ICHD35              4226  R    2     Float32   %      Phase C current 35th harmonic percentage
+IAHD36              4228  R    2     Float32   %      Phase A current 36th harmonic percentage
+IBHD36              4230  R    2     Float32   %      Phase B current 36th harmonic percentage
+ICHD36              4232  R    2     Float32   %      Phase C current 36th harmonic percentage
+IAHD37              4234  R    2     Float32   %      Phase A current 37th harmonic percentage
+IBHD37              4236  R    2     Float32   %      Phase B current 37th harmonic percentage
+ICHD37              4238  R    2     Float32   %      Phase C current 37th harmonic percentage
+IAHD38              4240  R    2     Float32   %      Phase A current 38th harmonic percentage
+IBHD38              4242  R    2     Float32   %      Phase B current 38th harmonic percentage
+ICHD38              4244  R    2     Float32   %      Phase C current 38th harmonic percentage
+IAHD39              4246  R    2     Float32   %      Phase A current 39th harmonic percentage
+IBHD39              4248  R    2     Float32   %      Phase B current 39th harmonic percentage
+ICHD39              4250  R    2     Float32   %      Phase C current 39th harmonic percentage
+IAHD40              4252  R    2     Float32   %      Phase A current 40th harmonic percentage
+IBHD40              4254  R    2     Float32   %      Phase B current 40th harmonic percentage
+ICHD40              4256  R    2     Float32   %      Phase C current 40th harmonic percentage
+IAHD41              4258  R    2     Float32   %      Phase A current 41st harmonic percentage
+IBHD41              4260  R    2     Float32   %      Phase B current 41st harmonic percentage
+ICHD41              4262  R    2     Float32   %      Phase C current 41st harmonic percentage
+IAHD42              4264  R    2     Float32   %      Phase A current 42nd harmonic percentage
+IBHD42              4266  R    2     Float32   %      Phase B current 42nd harmonic percentage
+ICHD42              4268  R    2     Float32   %      Phase C current 42nd harmonic percentage
+IAHD43              4270  R    2     Float32   %      Phase A current 43rd harmonic percentage
+IBHD43              4272  R    2     Float32   %      Phase B current 43rd harmonic percentage
+ICHD43              4274  R    2     Float32   %      Phase C current 43rd harmonic percentage
+IAHD44              4276  R    2     Float32   %      Phase A current 44th harmonic percentage
+IBHD44              4278  R    2     Float32   %      Phase B current 44th harmonic percentage
+ICHD44              4280  R    2     Float32   %      Phase C current 44th harmonic percentage
+IAHD45              4282  R    2     Float32   %      Phase A current 45th harmonic percentage
+IBHD45              4284  R    2     Float32   %      Phase B current 45th harmonic percentage
+ICHD45              4286  R    2     Float32   %      Phase C current 45th harmonic percentage
+IAHD46              4288  R    2     Float32   %      Phase A current 46th harmonic percentage
+IBHD46              4290  R    2     Float32   %      Phase B current 46th harmonic percentage
+ICHD46              4292  R    2     Float32   %      Phase C current 46th harmonic percentage
+IAHD47              4294  R    2     Float32   %      Phase A current 47th harmonic percentage
+IBHD47              4296  R    2     Float32   %      Phase B current 47th harmonic percentage
+ICHD47              4298  R    2     Float32   %      Phase C current 47th harmonic percentage
+IAHD48              4300  R    2     Float32   %      Phase A current 48th harmonic percentage
+IBHD48              4302  R    2     Float32   %      Phase B current 48th harmonic percentage
+ICHD48              4304  R    2     Float32   %      Phase C current 48th harmonic percentage
+IAHD49              4306  R    2     Float32   %      Phase A current 49th harmonic percentage
+IBHD49              4308  R    2     Float32   %      Phase B current 49th harmonic percentage
+ICHD49              4310  R    2     Float32   %      Phase C current 49th harmonic percentage
+IAHD50              4312  R    2     Float32   %      Phase A current 50th harmonic percentage
+IBHD50              4314  R    2     Float32   %      Phase B current 50th harmonic percentage
+ICHD50              4316  R    2     Float32   %      Phase C current 50th harmonic percentage
+
+# ── 1.9.14  Current harmonic value (1st–50th) ─────────────────────────────────
+IAHDV1              4400  R    2     Float32   A      Phase A fundamental current value
+IBHDV1              4402  R    2     Float32   A      Phase B fundamental current value
+ICHDV1              4404  R    2     Float32   A      Phase C fundamental current value
+IAHDV2              4406  R    2     Float32   A      Phase A 2nd harmonic current value
+IBHDV2              4408  R    2     Float32   A      Phase B 2nd harmonic current value
+ICHDV2              4410  R    2     Float32   A      Phase C 2nd harmonic current value
+IAHDV3              4412  R    2     Float32   A      Phase A 3rd harmonic current value
+IBHDV3              4414  R    2     Float32   A      Phase B 3rd harmonic current value
+ICHDV3              4416  R    2     Float32   A      Phase C 3rd harmonic current value
+IAHDV4              4418  R    2     Float32   A      Phase A 4th harmonic current value
+IBHDV4              4420  R    2     Float32   A      Phase B 4th harmonic current value
+ICHDV4              4422  R    2     Float32   A      Phase C 4th harmonic current value
+IAHDV5              4424  R    2     Float32   A      Phase A 5th harmonic current value
+IBHDV5              4426  R    2     Float32   A      Phase B 5th harmonic current value
+ICHDV5              4428  R    2     Float32   A      Phase C 5th harmonic current value
+IAHDV6              4430  R    2     Float32   A      Phase A 6th harmonic current value
+IBHDV6              4432  R    2     Float32   A      Phase B 6th harmonic current value
+ICHDV6              4434  R    2     Float32   A      Phase C 6th harmonic current value
+IAHDV7              4436  R    2     Float32   A      Phase A 7th harmonic current value
+IBHDV7              4438  R    2     Float32   A      Phase B 7th harmonic current value
+ICHDV7              4440  R    2     Float32   A      Phase C 7th harmonic current value
+IAHDV8              4442  R    2     Float32   A      Phase A 8th harmonic current value
+IBHDV8              4444  R    2     Float32   A      Phase B 8th harmonic current value
+ICHDV8              4446  R    2     Float32   A      Phase C 8th harmonic current value
+IAHDV9              4448  R    2     Float32   A      Phase A 9th harmonic current value
+IBHDV9              4450  R    2     Float32   A      Phase B 9th harmonic current value
+ICHDV9              4452  R    2     Float32   A      Phase C 9th harmonic current value
+IAHDV10             4454  R    2     Float32   A      Phase A 10th harmonic current value
+IBHDV10             4456  R    2     Float32   A      Phase B 10th harmonic current value
+ICHDV10             4458  R    2     Float32   A      Phase C 10th harmonic current value
+IAHDV11             4460  R    2     Float32   A      Phase A 11th harmonic current value
+IBHDV11             4462  R    2     Float32   A      Phase B 11th harmonic current value
+ICHDV11             4464  R    2     Float32   A      Phase C 11th harmonic current value
+IAHDV12             4466  R    2     Float32   A      Phase A 12th harmonic current value
+IBHDV12             4468  R    2     Float32   A      Phase B 12th harmonic current value
+ICHDV12             4470  R    2     Float32   A      Phase C 12th harmonic current value
+IAHDV13             4472  R    2     Float32   A      Phase A 13th harmonic current value
+IBHDV13             4474  R    2     Float32   A      Phase B 13th harmonic current value
+ICHDV13             4476  R    2     Float32   A      Phase C 13th harmonic current value
+IAHDV14             4478  R    2     Float32   A      Phase A 14th harmonic current value
+IBHDV14             4480  R    2     Float32   A      Phase B 14th harmonic current value
+ICHDV14             4482  R    2     Float32   A      Phase C 14th harmonic current value
+IAHDV15             4484  R    2     Float32   A      Phase A 15th harmonic current value
+IBHDV15             4486  R    2     Float32   A      Phase B 15th harmonic current value
+ICHDV15             4488  R    2     Float32   A      Phase C 15th harmonic current value
+IAHDV16             4490  R    2     Float32   A      Phase A 16th harmonic current value
+IBHDV16             4492  R    2     Float32   A      Phase B 16th harmonic current value
+ICHDV16             4494  R    2     Float32   A      Phase C 16th harmonic current value
+IAHDV17             4496  R    2     Float32   A      Phase A 17th harmonic current value
+IBHDV17             4498  R    2     Float32   A      Phase B 17th harmonic current value
+ICHDV17             4500  R    2     Float32   A      Phase C 17th harmonic current value
+IAHDV18             4502  R    2     Float32   A      Phase A 18th harmonic current value
+IBHDV18             4504  R    2     Float32   A      Phase B 18th harmonic current value
+ICHDV18             4506  R    2     Float32   A      Phase C 18th harmonic current value
+IAHDV19             4508  R    2     Float32   A      Phase A 19th harmonic current value
+IBHDV19             4510  R    2     Float32   A      Phase B 19th harmonic current value
+ICHDV19             4512  R    2     Float32   A      Phase C 19th harmonic current value
+IAHDV20             4514  R    2     Float32   A      Phase A 20th harmonic current value
+IBHDV20             4516  R    2     Float32   A      Phase B 20th harmonic current value
+ICHDV20             4518  R    2     Float32   A      Phase C 20th harmonic current value
+IAHDV21             4520  R    2     Float32   A      Phase A 21st harmonic current value
+IBHDV21             4522  R    2     Float32   A      Phase B 21st harmonic current value
+ICHDV21             4524  R    2     Float32   A      Phase C 21st harmonic current value
+IAHDV22             4526  R    2     Float32   A      Phase A 22nd harmonic current value
+IBHDV22             4528  R    2     Float32   A      Phase B 22nd harmonic current value
+ICHDV22             4530  R    2     Float32   A      Phase C 22nd harmonic current value
+IAHDV23             4532  R    2     Float32   A      Phase A 23rd harmonic current value
+IBHDV23             4534  R    2     Float32   A      Phase B 23rd harmonic current value
+ICHDV23             4536  R    2     Float32   A      Phase C 23rd harmonic current value
+IAHDV24             4538  R    2     Float32   A      Phase A 24th harmonic current value
+IBHDV24             4540  R    2     Float32   A      Phase B 24th harmonic current value
+ICHDV24             4542  R    2     Float32   A      Phase C 24th harmonic current value
+IAHDV25             4544  R    2     Float32   A      Phase A 25th harmonic current value
+IBHDV25             4546  R    2     Float32   A      Phase B 25th harmonic current value
+ICHDV25             4548  R    2     Float32   A      Phase C 25th harmonic current value
+IAHDV26             4550  R    2     Float32   A      Phase A 26th harmonic current value
+IBHDV26             4552  R    2     Float32   A      Phase B 26th harmonic current value
+ICHDV26             4554  R    2     Float32   A      Phase C 26th harmonic current value
+IAHDV27             4556  R    2     Float32   A      Phase A 27th harmonic current value
+IBHDV27             4558  R    2     Float32   A      Phase B 27th harmonic current value
+ICHDV27             4560  R    2     Float32   A      Phase C 27th harmonic current value
+IAHDV28             4562  R    2     Float32   A      Phase A 28th harmonic current value
+IBHDV28             4564  R    2     Float32   A      Phase B 28th harmonic current value
+ICHDV28             4566  R    2     Float32   A      Phase C 28th harmonic current value
+IAHDV29             4568  R    2     Float32   A      Phase A 29th harmonic current value
+IBHDV29             4570  R    2     Float32   A      Phase B 29th harmonic current value
+ICHDV29             4572  R    2     Float32   A      Phase C 29th harmonic current value
+IAHDV30             4574  R    2     Float32   A      Phase A 30th harmonic current value
+IBHDV30             4576  R    2     Float32   A      Phase B 30th harmonic current value
+ICHDV30             4578  R    2     Float32   A      Phase C 30th harmonic current value
+IAHDV31             4580  R    2     Float32   A      Phase A 31st harmonic current value
+IBHDV31             4582  R    2     Float32   A      Phase B 31st harmonic current value
+ICHDV31             4584  R    2     Float32   A      Phase C 31st harmonic current value
+IAHDV32             4586  R    2     Float32   A      Phase A 32nd harmonic current value
+IBHDV32             4588  R    2     Float32   A      Phase B 32nd harmonic current value
+ICHDV32             4590  R    2     Float32   A      Phase C 32nd harmonic current value
+IAHDV33             4592  R    2     Float32   A      Phase A 33rd harmonic current value
+IBHDV33             4594  R    2     Float32   A      Phase B 33rd harmonic current value
+ICHDV33             4596  R    2     Float32   A      Phase C 33rd harmonic current value
+IAHDV34             4598  R    2     Float32   A      Phase A 34th harmonic current value
+IBHDV34             4600  R    2     Float32   A      Phase B 34th harmonic current value
+ICHDV34             4602  R    2     Float32   A      Phase C 34th harmonic current value
+IAHDV35             4604  R    2     Float32   A      Phase A 35th harmonic current value
+IBHDV35             4606  R    2     Float32   A      Phase B 35th harmonic current value
+ICHDV35             4608  R    2     Float32   A      Phase C 35th harmonic current value
+IAHDV36             4610  R    2     Float32   A      Phase A 36th harmonic current value
+IBHDV36             4612  R    2     Float32   A      Phase B 36th harmonic current value
+ICHDV36             4614  R    2     Float32   A      Phase C 36th harmonic current value
+IAHDV37             4616  R    2     Float32   A      Phase A 37th harmonic current value
+IBHDV37             4618  R    2     Float32   A      Phase B 37th harmonic current value
+ICHDV37             4620  R    2     Float32   A      Phase C 37th harmonic current value
+IAHDV38             4622  R    2     Float32   A      Phase A 38th harmonic current value
+IBHDV38             4624  R    2     Float32   A      Phase B 38th harmonic current value
+ICHDV38             4626  R    2     Float32   A      Phase C 38th harmonic current value
+IAHDV39             4628  R    2     Float32   A      Phase A 39th harmonic current value
+IBHDV39             4630  R    2     Float32   A      Phase B 39th harmonic current value
+ICHDV39             4632  R    2     Float32   A      Phase C 39th harmonic current value
+IAHDV40             4634  R    2     Float32   A      Phase A 40th harmonic current value
+IBHDV40             4636  R    2     Float32   A      Phase B 40th harmonic current value
+ICHDV40             4638  R    2     Float32   A      Phase C 40th harmonic current value
+IAHDV41             4640  R    2     Float32   A      Phase A 41st harmonic current value
+IBHDV41             4642  R    2     Float32   A      Phase B 41st harmonic current value
+ICHDV41             4644  R    2     Float32   A      Phase C 41st harmonic current value
+IAHDV42             4646  R    2     Float32   A      Phase A 42nd harmonic current value
+IBHDV42             4648  R    2     Float32   A      Phase B 42nd harmonic current value
+ICHDV42             4650  R    2     Float32   A      Phase C 42nd harmonic current value
+IAHDV43             4652  R    2     Float32   A      Phase A 43rd harmonic current value
+IBHDV43             4654  R    2     Float32   A      Phase B 43rd harmonic current value
+ICHDV43             4656  R    2     Float32   A      Phase C 43rd harmonic current value
+IAHDV44             4658  R    2     Float32   A      Phase A 44th harmonic current value
+IBHDV44             4660  R    2     Float32   A      Phase B 44th harmonic current value
+ICHDV44             4662  R    2     Float32   A      Phase C 44th harmonic current value
+IAHDV45             4664  R    2     Float32   A      Phase A 45th harmonic current value
+IBHDV45             4666  R    2     Float32   A      Phase B 45th harmonic current value
+ICHDV45             4668  R    2     Float32   A      Phase C 45th harmonic current value
+IAHDV46             4670  R    2     Float32   A      Phase A 46th harmonic current value
+IBHDV46             4672  R    2     Float32   A      Phase B 46th harmonic current value
+ICHDV46             4674  R    2     Float32   A      Phase C 46th harmonic current value
+IAHDV47             4676  R    2     Float32   A      Phase A 47th harmonic current value
+IBHDV47             4678  R    2     Float32   A      Phase B 47th harmonic current value
+ICHDV47             4680  R    2     Float32   A      Phase C 47th harmonic current value
+IAHDV48             4682  R    2     Float32   A      Phase A 48th harmonic current value
+IBHDV48             4684  R    2     Float32   A      Phase B 48th harmonic current value
+ICHDV48             4686  R    2     Float32   A      Phase C 48th harmonic current value
+IAHDV49             4688  R    2     Float32   A      Phase A 49th harmonic current value
+IBHDV49             4690  R    2     Float32   A      Phase B 49th harmonic current value
+ICHDV49             4692  R    2     Float32   A      Phase C 49th harmonic current value
+IAHDV50             4694  R    2     Float32   A      Phase A 50th harmonic current value
+IBHDV50             4696  R    2     Float32   A      Phase B 50th harmonic current value
+ICHDV50             4698  R    2     Float32   A      Phase C 50th harmonic current value
+
+# ── 1.9.14  Voltage harmonic percentage (1st–50th) ────────────────────────────
+UATHD               5000  R    2     Float32   %      Phase A voltage total harmonic distortion
+UBTHD               5002  R    2     Float32   %      Phase B voltage total harmonic distortion
+UCTHD               5004  R    2     Float32   %      Phase C voltage total harmonic distortion
+UATOHD              5006  R    2     Float32   %      Phase A voltage odd total harmonic distortion
+UBTOHD              5008  R    2     Float32   %      Phase B voltage odd total harmonic distortion
+UCTOHD              5010  R    2     Float32   %      Phase C voltage odd total harmonic distortion
+UATEHD              5012  R    2     Float32   %      Phase A voltage even total harmonic distortion
+UBTEHD              5014  R    2     Float32   %      Phase B voltage even total harmonic distortion
+UCTEHD              5016  R    2     Float32   %      Phase C voltage even total harmonic distortion
+UAHDV1              5018  R    2     Float32   %      Phase A voltage 1st harmonic percentage
+UBHDV1              5020  R    2     Float32   %      Phase B voltage 1st harmonic percentage
+UCHDV1              5022  R    2     Float32   %      Phase C voltage 1st harmonic percentage
+UAHDV2              5024  R    2     Float32   %      Phase A voltage 2nd harmonic percentage
+UBHDV2              5026  R    2     Float32   %      Phase B voltage 2nd harmonic percentage
+UCHDV2              5028  R    2     Float32   %      Phase C voltage 2nd harmonic percentage
+UAHDV3              5030  R    2     Float32   %      Phase A voltage 3rd harmonic percentage
+UBHDV3              5032  R    2     Float32   %      Phase B voltage 3rd harmonic percentage
+UCHDV3              5034  R    2     Float32   %      Phase C voltage 3rd harmonic percentage
+UAHDV4              5036  R    2     Float32   %      Phase A voltage 4th harmonic percentage
+UBHDV4              5038  R    2     Float32   %      Phase B voltage 4th harmonic percentage
+UCHDV4              5040  R    2     Float32   %      Phase C voltage 4th harmonic percentage
+UAHDV5              5042  R    2     Float32   %      Phase A voltage 5th harmonic percentage
+UBHDV5              5044  R    2     Float32   %      Phase B voltage 5th harmonic percentage
+UCHDV5              5046  R    2     Float32   %      Phase C voltage 5th harmonic percentage
+UAHDV6              5048  R    2     Float32   %      Phase A voltage 6th harmonic percentage
+UBHDV6              5050  R    2     Float32   %      Phase B voltage 6th harmonic percentage
+UCHDV6              5052  R    2     Float32   %      Phase C voltage 6th harmonic percentage
+UAHDV7              5054  R    2     Float32   %      Phase A voltage 7th harmonic percentage
+UBHDV7              5056  R    2     Float32   %      Phase B voltage 7th harmonic percentage
+UCHDV7              5058  R    2     Float32   %      Phase C voltage 7th harmonic percentage
+UAHDV8              5060  R    2     Float32   %      Phase A voltage 8th harmonic percentage
+UBHDV8              5062  R    2     Float32   %      Phase B voltage 8th harmonic percentage
+UCHDV8              5064  R    2     Float32   %      Phase C voltage 8th harmonic percentage
+UAHDV9              5066  R    2     Float32   %      Phase A voltage 9th harmonic percentage
+UBHDV9              5068  R    2     Float32   %      Phase B voltage 9th harmonic percentage
+UCHDV9              5070  R    2     Float32   %      Phase C voltage 9th harmonic percentage
+UAHDV10             5072  R    2     Float32   %      Phase A voltage 10th harmonic percentage
+UBHDV10             5074  R    2     Float32   %      Phase B voltage 10th harmonic percentage
+UCHDV10             5076  R    2     Float32   %      Phase C voltage 10th harmonic percentage
+UAHDV11             5078  R    2     Float32   %      Phase A voltage 11th harmonic percentage
+UBHDV11             5080  R    2     Float32   %      Phase B voltage 11th harmonic percentage
+UCHDV11             5082  R    2     Float32   %      Phase C voltage 11th harmonic percentage
+UAHDV12             5084  R    2     Float32   %      Phase A voltage 12th harmonic percentage
+UBHDV12             5086  R    2     Float32   %      Phase B voltage 12th harmonic percentage
+UCHDV12             5088  R    2     Float32   %      Phase C voltage 12th harmonic percentage
+UAHDV13             5090  R    2     Float32   %      Phase A voltage 13th harmonic percentage
+UBHDV13             5092  R    2     Float32   %      Phase B voltage 13th harmonic percentage
+UCHDV13             5094  R    2     Float32   %      Phase C voltage 13th harmonic percentage
+UAHDV14             5096  R    2     Float32   %      Phase A voltage 14th harmonic percentage
+UBHDV14             5098  R    2     Float32   %      Phase B voltage 14th harmonic percentage
+UCHDV14             5100  R    2     Float32   %      Phase C voltage 14th harmonic percentage
+UAHDV15             5102  R    2     Float32   %      Phase A voltage 15th harmonic percentage
+UBHDV15             5104  R    2     Float32   %      Phase B voltage 15th harmonic percentage
+UCHDV15             5106  R    2     Float32   %      Phase C voltage 15th harmonic percentage
+UAHDV16             5108  R    2     Float32   %      Phase A voltage 16th harmonic percentage
+UBHDV16             5110  R    2     Float32   %      Phase B voltage 16th harmonic percentage
+UCHDV16             5112  R    2     Float32   %      Phase C voltage 16th harmonic percentage
+UAHDV17             5114  R    2     Float32   %      Phase A voltage 17th harmonic percentage
+UBHDV17             5116  R    2     Float32   %      Phase B voltage 17th harmonic percentage
+UCHDV17             5118  R    2     Float32   %      Phase C voltage 17th harmonic percentage
+UAHDV18             5120  R    2     Float32   %      Phase A voltage 18th harmonic percentage
+UBHDV18             5122  R    2     Float32   %      Phase B voltage 18th harmonic percentage
+UCHDV18             5124  R    2     Float32   %      Phase C voltage 18th harmonic percentage
+UAHDV19             5126  R    2     Float32   %      Phase A voltage 19th harmonic percentage
+UBHDV19             5128  R    2     Float32   %      Phase B voltage 19th harmonic percentage
+UCHDV19             5130  R    2     Float32   %      Phase C voltage 19th harmonic percentage
+UAHDV20             5132  R    2     Float32   %      Phase A voltage 20th harmonic percentage
+UBHDV20             5134  R    2     Float32   %      Phase B voltage 20th harmonic percentage
+UCHDV20             5136  R    2     Float32   %      Phase C voltage 20th harmonic percentage
+UAHDV21             5138  R    2     Float32   %      Phase A voltage 21st harmonic percentage
+UBHDV21             5140  R    2     Float32   %      Phase B voltage 21st harmonic percentage
+UCHDV21             5142  R    2     Float32   %      Phase C voltage 21st harmonic percentage
+UAHDV22             5144  R    2     Float32   %      Phase A voltage 22nd harmonic percentage
+UBHDV22             5146  R    2     Float32   %      Phase B voltage 22nd harmonic percentage
+UCHDV22             5148  R    2     Float32   %      Phase C voltage 22nd harmonic percentage
+UAHDV23             5150  R    2     Float32   %      Phase A voltage 23rd harmonic percentage
+UBHDV23             5152  R    2     Float32   %      Phase B voltage 23rd harmonic percentage
+UCHDV23             5154  R    2     Float32   %      Phase C voltage 23rd harmonic percentage
+UAHDV24             5156  R    2     Float32   %      Phase A voltage 24th harmonic percentage
+UBHDV24             5158  R    2     Float32   %      Phase B voltage 24th harmonic percentage
+UCHDV24             5160  R    2     Float32   %      Phase C voltage 24th harmonic percentage
+UAHDV25             5162  R    2     Float32   %      Phase A voltage 25th harmonic percentage
+UBHDV25             5164  R    2     Float32   %      Phase B voltage 25th harmonic percentage
+UCHDV25             5166  R    2     Float32   %      Phase C voltage 25th harmonic percentage
+UAHDV26             5168  R    2     Float32   %      Phase A voltage 26th harmonic percentage
+UBHDV26             5170  R    2     Float32   %      Phase B voltage 26th harmonic percentage
+UCHDV26             5172  R    2     Float32   %      Phase C voltage 26th harmonic percentage
+UAHDV27             5174  R    2     Float32   %      Phase A voltage 27th harmonic percentage
+UBHDV27             5176  R    2     Float32   %      Phase B voltage 27th harmonic percentage
+UCHDV27             5178  R    2     Float32   %      Phase C voltage 27th harmonic percentage
+UAHDV28             5180  R    2     Float32   %      Phase A voltage 28th harmonic percentage
+UBHDV28             5182  R    2     Float32   %      Phase B voltage 28th harmonic percentage
+UCHDV28             5184  R    2     Float32   %      Phase C voltage 28th harmonic percentage
+UAHDV29             5186  R    2     Float32   %      Phase A voltage 29th harmonic percentage
+UBHDV29             5188  R    2     Float32   %      Phase B voltage 29th harmonic percentage
+UCHDV29             5190  R    2     Float32   %      Phase C voltage 29th harmonic percentage
+UAHDV30             5192  R    2     Float32   %      Phase A voltage 30th harmonic percentage
+UBHDV30             5194  R    2     Float32   %      Phase B voltage 30th harmonic percentage
+UCHDV30             5196  R    2     Float32   %      Phase C voltage 30th harmonic percentage
+UAHDV31             5198  R    2     Float32   %      Phase A voltage 31st harmonic percentage
+UBHDV31             5200  R    2     Float32   %      Phase B voltage 31st harmonic percentage
+UCHDV31             5202  R    2     Float32   %      Phase C voltage 31st harmonic percentage
+UAHDV32             5204  R    2     Float32   %      Phase A voltage 32nd harmonic percentage
+UBHDV32             5206  R    2     Float32   %      Phase B voltage 32nd harmonic percentage
+UCHDV32             5208  R    2     Float32   %      Phase C voltage 32nd harmonic percentage
+UAHDV33             5210  R    2     Float32   %      Phase A voltage 33rd harmonic percentage
+UBHDV33             5212  R    2     Float32   %      Phase B voltage 33rd harmonic percentage
+UCHDV33             5214  R    2     Float32   %      Phase C voltage 33rd harmonic percentage
+UAHDV34             5216  R    2     Float32   %      Phase A voltage 34th harmonic percentage
+UBHDV34             5218  R    2     Float32   %      Phase B voltage 34th harmonic percentage
+UCHDV34             5220  R    2     Float32   %      Phase C voltage 34th harmonic percentage
+UAHDV35             5222  R    2     Float32   %      Phase A voltage 35th harmonic percentage
+UBHDV35             5224  R    2     Float32   %      Phase B voltage 35th harmonic percentage
+UCHDV35             5226  R    2     Float32   %      Phase C voltage 35th harmonic percentage
+UAHDV36             5228  R    2     Float32   %      Phase A voltage 36th harmonic percentage
+UBHDV36             5230  R    2     Float32   %      Phase B voltage 36th harmonic percentage
+UCHDV36             5232  R    2     Float32   %      Phase C voltage 36th harmonic percentage
+UAHDV37             5234  R    2     Float32   %      Phase A voltage 37th harmonic percentage
+UBHDV37             5236  R    2     Float32   %      Phase B voltage 37th harmonic percentage
+UCHDV37             5238  R    2     Float32   %      Phase C voltage 37th harmonic percentage
+UAHDV38             5240  R    2     Float32   %      Phase A voltage 38th harmonic percentage
+UBHDV38             5242  R    2     Float32   %      Phase B voltage 38th harmonic percentage
+UCHDV38             5244  R    2     Float32   %      Phase C voltage 38th harmonic percentage
+UAHDV39             5246  R    2     Float32   %      Phase A voltage 39th harmonic percentage
+UBHDV39             5248  R    2     Float32   %      Phase B voltage 39th harmonic percentage
+UCHDV39             5250  R    2     Float32   %      Phase C voltage 39th harmonic percentage
+UAHDV40             5252  R    2     Float32   %      Phase A voltage 40th harmonic percentage
+UBHDV40             5254  R    2     Float32   %      Phase B voltage 40th harmonic percentage
+UCHDV40             5256  R    2     Float32   %      Phase C voltage 40th harmonic percentage
+UAHDV41             5258  R    2     Float32   %      Phase A voltage 41st harmonic percentage
+UBHDV41             5260  R    2     Float32   %      Phase B voltage 41st harmonic percentage
+UCHDV41             5262  R    2     Float32   %      Phase C voltage 41st harmonic percentage
+UAHDV42             5264  R    2     Float32   %      Phase A voltage 42nd harmonic percentage
+UBHDV42             5266  R    2     Float32   %      Phase B voltage 42nd harmonic percentage
+UCHDV42             5268  R    2     Float32   %      Phase C voltage 42nd harmonic percentage
+UAHDV43             5270  R    2     Float32   %      Phase A voltage 43rd harmonic percentage
+UBHDV43             5272  R    2     Float32   %      Phase B voltage 43rd harmonic percentage
+UCHDV43             5274  R    2     Float32   %      Phase C voltage 43rd harmonic percentage
+UAHDV44             5276  R    2     Float32   %      Phase A voltage 44th harmonic percentage
+UBHDV44             5278  R    2     Float32   %      Phase B voltage 44th harmonic percentage
+UCHDV44             5280  R    2     Float32   %      Phase C voltage 44th harmonic percentage
+UAHDV45             5282  R    2     Float32   %      Phase A voltage 45th harmonic percentage
+UBHDV45             5284  R    2     Float32   %      Phase B voltage 45th harmonic percentage
+UCHDV45             5286  R    2     Float32   %      Phase C voltage 45th harmonic percentage
+UAHDV46             5288  R    2     Float32   %      Phase A voltage 46th harmonic percentage
+UBHDV46             5290  R    2     Float32   %      Phase B voltage 46th harmonic percentage
+UCHDV46             5292  R    2     Float32   %      Phase C voltage 46th harmonic percentage
+UAHDV47             5294  R    2     Float32   %      Phase A voltage 47th harmonic percentage
+UBHDV47             5296  R    2     Float32   %      Phase B voltage 47th harmonic percentage
+UCHDV47             5298  R    2     Float32   %      Phase C voltage 47th harmonic percentage
+UAHDV48             5300  R    2     Float32   %      Phase A voltage 48th harmonic percentage
+UBHDV48             5302  R    2     Float32   %      Phase B voltage 48th harmonic percentage
+UCHDV48             5304  R    2     Float32   %      Phase C voltage 48th harmonic percentage
+UAHDV49             5306  R    2     Float32   %      Phase A voltage 49th harmonic percentage
+UBHDV49             5308  R    2     Float32   %      Phase B voltage 49th harmonic percentage
+UCHDV49             5310  R    2     Float32   %      Phase C voltage 49th harmonic percentage
+UAHD50              5312  R    2     Float32   %      Phase A voltage 50th harmonic percentage
+UBHD50              5314  R    2     Float32   %      Phase B voltage 50th harmonic percentage
+UCHD50              5316  R    2     Float32   %      Phase C voltage 50th harmonic percentage
+
+# ── 1.9.14  Voltage harmonic value (1st–50th) ─────────────────────────────────
+UAHDVV1             5400  R    2     Float32   V      Phase A 1st harmonic voltage value
+UBHDVV1             5402  R    2     Float32   V      Phase B 1st harmonic voltage value
+UCHDVV1             5404  R    2     Float32   V      Phase C 1st harmonic voltage value
+UAHDVV2             5406  R    2     Float32   V      Phase A 2nd harmonic voltage value
+UBHDVV2             5408  R    2     Float32   V      Phase B 2nd harmonic voltage value
+UCHDVV2             5410  R    2     Float32   V      Phase C 2nd harmonic voltage value
+UAHDVV3             5412  R    2     Float32   V      Phase A 3rd harmonic voltage value
+UBHDVV3             5414  R    2     Float32   V      Phase B 3rd harmonic voltage value
+UCHDVV3             5416  R    2     Float32   V      Phase C 3rd harmonic voltage value
+UAHDVV4             5418  R    2     Float32   V      Phase A 4th harmonic voltage value
+UBHDVV4             5420  R    2     Float32   V      Phase B 4th harmonic voltage value
+UCHDVV4             5422  R    2     Float32   V      Phase C 4th harmonic voltage value
+UAHDVV5             5424  R    2     Float32   V      Phase A 5th harmonic voltage value
+UBHDVV5             5426  R    2     Float32   V      Phase B 5th harmonic voltage value
+UCHDVV5             5428  R    2     Float32   V      Phase C 5th harmonic voltage value
+UAHDVV6             5430  R    2     Float32   V      Phase A 6th harmonic voltage value
+UBHDVV6             5432  R    2     Float32   V      Phase B 6th harmonic voltage value
+UCHDVV6             5434  R    2     Float32   V      Phase C 6th harmonic voltage value
+UAHDVV7             5436  R    2     Float32   V      Phase A 7th harmonic voltage value
+UBHDVV7             5438  R    2     Float32   V      Phase B 7th harmonic voltage value
+UCHDVV7             5440  R    2     Float32   V      Phase C 7th harmonic voltage value
+UAHDVV8             5442  R    2     Float32   V      Phase A 8th harmonic voltage value
+UBHDVV8             5444  R    2     Float32   V      Phase B 8th harmonic voltage value
+UCHDVV8             5446  R    2     Float32   V      Phase C 8th harmonic voltage value
+UAHDVV9             5448  R    2     Float32   V      Phase A 9th harmonic voltage value
+UBHDVV9             5450  R    2     Float32   V      Phase B 9th harmonic voltage value
+UCHDVV9             5452  R    2     Float32   V      Phase C 9th harmonic voltage value
+UAHDVV10            5454  R    2     Float32   V      Phase A 10th harmonic voltage value
+UBHDVV10            5456  R    2     Float32   V      Phase B 10th harmonic voltage value
+UCHDVV10            5458  R    2     Float32   V      Phase C 10th harmonic voltage value
+UAHDVV11            5460  R    2     Float32   V      Phase A 11th harmonic voltage value
+UBHDVV11            5462  R    2     Float32   V      Phase B 11th harmonic voltage value
+UCHDVV11            5464  R    2     Float32   V      Phase C 11th harmonic voltage value
+UAHDVV12            5466  R    2     Float32   V      Phase A 12th harmonic voltage value
+UBHDVV12            5468  R    2     Float32   V      Phase B 12th harmonic voltage value
+UCHDVV12            5470  R    2     Float32   V      Phase C 12th harmonic voltage value
+UAHDVV13            5472  R    2     Float32   V      Phase A 13th harmonic voltage value
+UBHDVV13            5474  R    2     Float32   V      Phase B 13th harmonic voltage value
+UCHDVV13            5476  R    2     Float32   V      Phase C 13th harmonic voltage value
+UAHDVV14            5478  R    2     Float32   V      Phase A 14th harmonic voltage value
+UBHDVV14            5480  R    2     Float32   V      Phase B 14th harmonic voltage value
+UCHDVV14            5482  R    2     Float32   V      Phase C 14th harmonic voltage value
+UAHDVV15            5484  R    2     Float32   V      Phase A 15th harmonic voltage value
+UBHDVV15            5486  R    2     Float32   V      Phase B 15th harmonic voltage value
+UCHDVV15            5488  R    2     Float32   V      Phase C 15th harmonic voltage value
+UAHDVV16            5490  R    2     Float32   V      Phase A 16th harmonic voltage value
+UBHDVV16            5492  R    2     Float32   V      Phase B 16th harmonic voltage value
+UCHDVV16            5494  R    2     Float32   V      Phase C 16th harmonic voltage value
+UAHDVV17            5496  R    2     Float32   V      Phase A 17th harmonic voltage value
+UBHDVV17            5498  R    2     Float32   V      Phase B 17th harmonic voltage value
+UCHDVV17            5500  R    2     Float32   V      Phase C 17th harmonic voltage value
+UAHDVV18            5502  R    2     Float32   V      Phase A 18th harmonic voltage value
+UBHDVV18            5504  R    2     Float32   V      Phase B 18th harmonic voltage value
+UCHDVV18            5506  R    2     Float32   V      Phase C 18th harmonic voltage value
+UAHDVV19            5508  R    2     Float32   V      Phase A 19th harmonic voltage value
+UBHDVV19            5510  R    2     Float32   V      Phase B 19th harmonic voltage value
+UCHDVV19            5512  R    2     Float32   V      Phase C 19th harmonic voltage value
+UAHDVV20            5514  R    2     Float32   V      Phase A 20th harmonic voltage value
+UBHDVV20            5516  R    2     Float32   V      Phase B 20th harmonic voltage value
+UCHDVV20            5518  R    2     Float32   V      Phase C 20th harmonic voltage value
+UAHDVV21            5520  R    2     Float32   V      Phase A 21st harmonic voltage value
+UBHDVV21            5522  R    2     Float32   V      Phase B 21st harmonic voltage value
+UCHDVV21            5524  R    2     Float32   V      Phase C 21st harmonic voltage value
+UAHDVV22            5526  R    2     Float32   V      Phase A 22nd harmonic voltage value
+UBHDVV22            5528  R    2     Float32   V      Phase B 22nd harmonic voltage value
+UCHDVV22            5530  R    2     Float32   V      Phase C 22nd harmonic voltage value
+UAHDVV23            5532  R    2     Float32   V      Phase A 23rd harmonic voltage value
+UBHDVV23            5534  R    2     Float32   V      Phase B 23rd harmonic voltage value
+UCHDVV23            5536  R    2     Float32   V      Phase C 23rd harmonic voltage value
+UAHDVV24            5538  R    2     Float32   V      Phase A 24th harmonic voltage value
+UBHDVV24            5540  R    2     Float32   V      Phase B 24th harmonic voltage value
+UCHDVV24            5542  R    2     Float32   V      Phase C 24th harmonic voltage value
+UAHDVV25            5544  R    2     Float32   V      Phase A 25th harmonic voltage value
+UBHDVV25            5546  R    2     Float32   V      Phase B 25th harmonic voltage value
+UCHDVV25            5548  R    2     Float32   V      Phase C 25th harmonic voltage value
+UAHDVV26            5550  R    2     Float32   V      Phase A 26th harmonic voltage value
+UBHDVV26            5552  R    2     Float32   V      Phase B 26th harmonic voltage value
+UCHDVV26            5554  R    2     Float32   V      Phase C 26th harmonic voltage value
+UAHDVV27            5556  R    2     Float32   V      Phase A 27th harmonic voltage value
+UBHDVV27            5558  R    2     Float32   V      Phase B 27th harmonic voltage value
+UCHDVV27            5560  R    2     Float32   V      Phase C 27th harmonic voltage value
+UAHDVV28            5562  R    2     Float32   V      Phase A 28th harmonic voltage value
+UBHDVV28            5564  R    2     Float32   V      Phase B 28th harmonic voltage value
+UCHDVV28            5566  R    2     Float32   V      Phase C 28th harmonic voltage value
+UAHDVV29            5568  R    2     Float32   V      Phase A 29th harmonic voltage value
+UBHDVV29            5570  R    2     Float32   V      Phase B 29th harmonic voltage value
+UCHDVV29            5572  R    2     Float32   V      Phase C 29th harmonic voltage value
+UAHDVV30            5574  R    2     Float32   V      Phase A 30th harmonic voltage value
+UBHDVV30            5576  R    2     Float32   V      Phase B 30th harmonic voltage value
+UCHDVV30            5578  R    2     Float32   V      Phase C 30th harmonic voltage value
+UAHDVV31            5580  R    2     Float32   V      Phase A 31st harmonic voltage value
+UBHDVV31            5582  R    2     Float32   V      Phase B 31st harmonic voltage value
+UCHDVV31            5584  R    2     Float32   V      Phase C 31st harmonic voltage value
+UAHDVV32            5586  R    2     Float32   V      Phase A 32nd harmonic voltage value
+UBHDVV32            5588  R    2     Float32   V      Phase B 32nd harmonic voltage value
+UCHDVV32            5590  R    2     Float32   V      Phase C 32nd harmonic voltage value
+UAHDVV33            5592  R    2     Float32   V      Phase A 33rd harmonic voltage value
+UBHDVV33            5594  R    2     Float32   V      Phase B 33rd harmonic voltage value
+UCHDVV33            5596  R    2     Float32   V      Phase C 33rd harmonic voltage value
+UAHDVV34            5598  R    2     Float32   V      Phase A 34th harmonic voltage value
+UBHDVV34            5600  R    2     Float32   V      Phase B 34th harmonic voltage value
+UCHDVV34            5602  R    2     Float32   V      Phase C 34th harmonic voltage value
+UAHDVV35            5604  R    2     Float32   V      Phase A 35th harmonic voltage value
+UBHDVV35            5606  R    2     Float32   V      Phase B 35th harmonic voltage value
+UCHDVV35            5608  R    2     Float32   V      Phase C 35th harmonic voltage value
+UAHDVV36            5610  R    2     Float32   V      Phase A 36th harmonic voltage value
+UBHDVV36            5612  R    2     Float32   V      Phase B 36th harmonic voltage value
+UCHDVV36            5614  R    2     Float32   V      Phase C 36th harmonic voltage value
+UAHDVV37            5616  R    2     Float32   V      Phase A 37th harmonic voltage value
+UBHDVV37            5618  R    2     Float32   V      Phase B 37th harmonic voltage value
+UCHDVV37            5620  R    2     Float32   V      Phase C 37th harmonic voltage value
+UAHDVV38            5622  R    2     Float32   V      Phase A 38th harmonic voltage value
+UBHDVV38            5624  R    2     Float32   V      Phase B 38th harmonic voltage value
+UCHDVV38            5626  R    2     Float32   V      Phase C 38th harmonic voltage value
+UAHDVV39            5628  R    2     Float32   V      Phase A 39th harmonic voltage value
+UBHDVV39            5630  R    2     Float32   V      Phase B 39th harmonic voltage value
+UCHDVV39            5632  R    2     Float32   V      Phase C 39th harmonic voltage value
+UAHDVV40            5634  R    2     Float32   V      Phase A 40th harmonic voltage value
+UBHDVV40            5636  R    2     Float32   V      Phase B 40th harmonic voltage value
+UCHDVV40            5638  R    2     Float32   V      Phase C 40th harmonic voltage value
+UAHDVV41            5640  R    2     Float32   V      Phase A 41st harmonic voltage value
+UBHDVV41            5642  R    2     Float32   V      Phase B 41st harmonic voltage value
+UCHDVV41            5644  R    2     Float32   V      Phase C 41st harmonic voltage value
+UAHDVV42            5646  R    2     Float32   V      Phase A 42nd harmonic voltage value
+UBHDVV42            5648  R    2     Float32   V      Phase B 42nd harmonic voltage value
+UCHDVV42            5650  R    2     Float32   V      Phase C 42nd harmonic voltage value
+UAHDVV43            5652  R    2     Float32   V      Phase A 43rd harmonic voltage value
+UBHDVV43            5654  R    2     Float32   V      Phase B 43rd harmonic voltage value
+UCHDVV43            5656  R    2     Float32   V      Phase C 43rd harmonic voltage value
+UAHDVV44            5658  R    2     Float32   V      Phase A 44th harmonic voltage value
+UBHDVV44            5660  R    2     Float32   V      Phase B 44th harmonic voltage value
+UCHDVV44            5662  R    2     Float32   V      Phase C 44th harmonic voltage value
+UAHDVV45            5664  R    2     Float32   V      Phase A 45th harmonic voltage value
+UBHDVV45            5666  R    2     Float32   V      Phase B 45th harmonic voltage value
+UCHDVV45            5668  R    2     Float32   V      Phase C 45th harmonic voltage value
+UAHDVV46            5670  R    2     Float32   V      Phase A 46th harmonic voltage value
+UBHDVV46            5672  R    2     Float32   V      Phase B 46th harmonic voltage value
+UCHDVV46            5674  R    2     Float32   V      Phase C 46th harmonic voltage value
+UAHDVV47            5676  R    2     Float32   V      Phase A 47th harmonic voltage value
+UBHDVV47            5678  R    2     Float32   V      Phase B 47th harmonic voltage value
+UCHDVV47            5680  R    2     Float32   V      Phase C 47th harmonic voltage value
+UAHDVV48            5682  R    2     Float32   V      Phase A 48th harmonic voltage value
+UBHDVV48            5684  R    2     Float32   V      Phase B 48th harmonic voltage value
+UCHDVV48            5686  R    2     Float32   V      Phase C 48th harmonic voltage value
+UAHDVV49            5688  R    2     Float32   V      Phase A 49th harmonic voltage value
+UBHDVV49            5690  R    2     Float32   V      Phase B 49th harmonic voltage value
+UCHDVV49            5692  R    2     Float32   V      Phase C 49th harmonic voltage value
+UAHDVV50            5694  R    2     Float32   V      Phase A 50th harmonic voltage value
+UBHDVV50            5696  R    2     Float32   V      Phase B 50th harmonic voltage value
+UCHDVV50            5698  R    2     Float32   V      Phase C 50th harmonic voltage value
+
+# ── 1.9.15  Max. value and Min. value ─────────────────────────────────────────
+IAMax               6000  R    2     Float32   A      Phase A maximum current
+IBMax               6002  R    2     Float32   A      Phase B maximum current
+ICMax               6004  R    2     Float32   A      Phase C maximum current
+IAVGMax             6006  R    2     Float32   A      Maximum three-phase average current
+INMax               6008  R    2     Float32   A      Phase N maximum current
+IAMin               6010  R    2     Float32   A      Phase A minimum current
+IBMin               6012  R    2     Float32   A      Phase B minimum current
+ICMin               6014  R    2     Float32   A      Phase C minimum current
+IAVGMin             6016  R    2     Float32   A      Minimum three-phase average current
+INMin               6018  R    2     Float32   A      Phase N minimum current
+UAMax               6020  R    2     Float32   V      UA-UN maximum phase voltage
+UBMax               6022  R    2     Float32   V      UB-UN maximum phase voltage
+UCMax               6024  R    2     Float32   V      UC-UN maximum phase voltage
+UAVGMax             6026  R    2     Float32   V      Maximum average three-phase phase voltage
+UAMin               6030  R    2     Float32   V      UA-UN minimum phase voltage
+UBMin               6032  R    2     Float32   V      UB-UN minimum phase voltage
+UCMin               6034  R    2     Float32   V      UC-UN minimum phase voltage
+UAVGMin             6036  R    2     Float32   V      Minimum average three-phase phase voltage
+UABMax              6040  R    2     Float32   V      UA-UB maximum line voltage
+UBCMax              6042  R    2     Float32   V      UB-UC maximum line voltage
+UCAMax              6044  R    2     Float32   V      UC-UA maximum line voltage
+ULAVGMax            6046  R    2     Float32   V      Maximum average three-phase line voltage
+UABMin              6050  R    2     Float32   V      UA-UB minimum line voltage
+UBCMin              6052  R    2     Float32   V      UB-UC minimum line voltage
+UCAMin              6054  R    2     Float32   V      UC-UA minimum line voltage
+ULAVGMin            6056  R    2     Float32   V      Minimum average three-phase line voltage
+PAMax               6060  R    2     Float32   kW     Maximum active power phase A
+PBMax               6062  R    2     Float32   kW     Maximum active power phase B
+PCMax               6064  R    2     Float32   kW     Maximum active power phase C
+PSUMMax             6066  R    2     Float32   kW     Maximum three-phase total active power
+PAMin               6070  R    2     Float32   kW     Minimum active power phase A
+PBMin               6072  R    2     Float32   kW     Minimum active power phase B
+PCMin               6074  R    2     Float32   kW     Minimum active power phase C
+PSUMMin             6076  R    2     Float32   kW     Minimum three-phase total active power
+QAMax               6080  R    2     Float32   kVar   Maximum reactive power phase A
+QBMax               6082  R    2     Float32   kVar   Maximum reactive power phase B
+QCMax               6084  R    2     Float32   kVar   Maximum reactive power phase C
+QSUMMax             6086  R    2     Float32   kVar   Maximum three-phase total reactive power
+QAMin               6090  R    2     Float32   kVar   Minimum reactive power phase A
+QBMin               6092  R    2     Float32   kVar   Minimum reactive power phase B
+QCMin               6094  R    2     Float32   kVar   Minimum reactive power phase C
+QSUMMin             6096  R    2     Float32   kVar   Minimum three-phase total reactive power
+SAMax               6100  R    2     Float32   kVA    Maximum apparent power phase A
+SBMax               6102  R    2     Float32   kVA    Maximum apparent power phase B
+SCMax               6104  R    2     Float32   kVA    Maximum apparent power phase C
+SSUMMax             6106  R    2     Float32   kVA    Maximum three-phase total apparent power
+SAMin               6110  R    2     Float32   kVA    Minimum apparent power phase A
+SBMin               6112  R    2     Float32   kVA    Minimum apparent power phase B
+SCMin               6114  R    2     Float32   kVA    Minimum apparent power phase C
+SSUMMin             6116  R    2     Float32   kVA    Minimum three-phase total apparent power
+
+# ── 1.9.16  Unbalancedness ────────────────────────────────────────────────────
+INegSeqUnbal        7000  R    2     Float32   %      Current negative sequence unbalancedness
+IZeroSeqUnbal       7002  R    2     Float32   %      Current zero sequence unbalancedness
+UNegSeqUnbal        7004  R    2     Float32   %      Voltage negative sequence unbalancedness
+UZeroSeqUnbal       7006  R    2     Float32   %      Voltage zero sequence unbalancedness
+
+# ── 1.9.17  Current K-factor and crest factor ─────────────────────────────────
+KFIA                8000  R    2     Float32   -      Current K-factor phase A
+KFIB                8002  R    2     Float32   -      Current K-factor phase B
+KFIC                8004  R    2     Float32   -      Current K-factor phase C
+
+# ── 1.9.18  Voltage and current angle register ────────────────────────────────
+AngleUA             8100  R    2     Float32   deg    Angle of phase A voltage
+AngleUB             8102  R    2     Float32   deg    Angle of phase B voltage
+AngleUC             8104  R    2     Float32   deg    Angle of phase C voltage
+AngleIA             8110  R    2     Float32   deg    Angle of phase A current
+AngleIB             8112  R    2     Float32   deg    Angle of phase B current
+AngleIC             8114  R    2     Float32   deg    Angle of phase C current

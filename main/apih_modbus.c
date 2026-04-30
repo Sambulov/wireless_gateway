@@ -114,7 +114,9 @@ static void format_and_send_mb_response(int id, int fid, mb_cb_ctx_t *cb) {
             if (i > 0 && off < (int)buf_sz - 1)
                 buf[off++] = ',';
             if (size == 2) {
-                uint16_t v = ((uint16_t)regs[i * 2] << 8) | regs[i * 2 + 1];
+                /* modbus_frame_data() already byte-swapped each word to host
+                 * (little-endian) order — read as LE, not BE */
+                uint16_t v = (uint16_t)regs[i * 2] | ((uint16_t)regs[i * 2 + 1] << 8);
                 off += snprintf(buf + off, buf_sz - off, "%u", v);
             } else {
                 off += snprintf(buf + off, buf_sz - off, "%u", (unsigned)regs[i]);
