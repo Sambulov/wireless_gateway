@@ -18,20 +18,9 @@ static void httpd_event_handler(void *arg, esp_event_base_t event_base, int32_t 
           ESP_LOGW(TAG, "started");
           break;
         case HTTP_SERVER_EVENT_ON_CONNECTED : //int
-          //esp_netif_t *nif = pxGetNetIfFromSocket(*(int*)event_data);
-          //if(nif) {
-          //  ESP_LOGI(TAG, "Connection on NetIF: %s", esp_netif_get_ifkey(nif));
-          //}
-          //esp_ip4_addr_t addr;
-          //get_client_ip4(*(int*)event_data, &addr);
-          /* todo: unsafe, use mutex */
-          //if (!ws_connections_left) {
-          //  httpd_sess_trigger_close(server, *(int*)event_data);
-          //  ESP_LOGI(TAG, "Connection rejected (limit reached)");
-          //} else {
-            ws_connections_left--;
-            ESP_LOGW(TAG, "new connection: '%08x'; connections left %lu", *(int *)event_data, ws_connections_left);
-          //}
+          if (ws_connections_left > 0)
+              ws_connections_left--;
+          ESP_LOGW(TAG, "new connection: '%08x'; connections left %lu", *(int *)event_data, ws_connections_left);
           break;
         case HTTP_SERVER_EVENT_ON_HEADER : //int
           ESP_LOGW(TAG, "on header: '%08lx'", (uint32_t)event_data);

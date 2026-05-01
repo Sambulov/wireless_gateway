@@ -88,11 +88,20 @@ void app_main(void)
 
     ESP_LOGI(TAG, "Run");
 
+    ret = ws_uart_run(&app_context);
+    if (!ret)
+	ESP_LOGI("app", "can't run ws_uart task");
+
+    if (ws_modbus_run(&app_context) != ESP_OK)
+        ESP_LOGI("app", "can't run ws_modbus tasks");
+
+#if 0
+    //TOOD: move test to other place.
+    ws_uart_integrational_test_run(&app_context);
+#endif
+
     while (1) {
-        //xTaskCreatePinnedToCore(vDallasSensorTask, "DallasSensorTask", 4096, NULL, 5, NULL, tskNO_AFFINITY);
         api_handler_system_work(&app_context);
-        api_handler_uart_work(&app_context);
-        //api_handler_modbus_work(&app_context);
         /* give other tasks to work, also idle task to reset wdt */
         task_delay(pdMS_TO_TICKS(1));
     }

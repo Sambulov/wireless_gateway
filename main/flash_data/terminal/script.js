@@ -4,8 +4,10 @@ class ESP32Terminal {
         this.socket = null;
         //this.fitAddon = null;
         this.isConnected = false;
+        this.isRegistered = false;
         this.packetCount = 0;
         this.echoEnabled = false;
+        this.subscriptionSid = null;
         this.initTerminal();
         this.bindEvents();
     }
@@ -57,25 +59,21 @@ class ESP32Terminal {
            try {
                 this.fitAddon.fit();
                this.term.focus();
-                
+
                // Форсируем пересчет размеров
                this.term.refresh(0, this.term.rows - 1);
            } catch (error) {
                console.error('Ошибка при инициализации терминала:', error);
            }
         }, 100);
-    
-        // Открытие терминала в контейнере
-        this.term.open(document.getElementById('terminal'));
-        this.fitAddon.fit();
         
         // Обработка ввода пользователя
         this.term.onData((data) => {
             this.handleUserInput(data);
         });
         
-        this.term.writeln('\x1b[1;36mESP32 Web Terminal v1.0\x1b[0m');
-        this.term.writeln('\x1b[33mВведите адрес WebSocket и нажмите "Подключиться"\x1b[0m');
+        this.term.writeln('\x1b[1;36mESP32 Web Terminal v1.1\x1b[0m');
+        this.term.writeln('\x1b[33mEnter WebSocket URL and click Connect\x1b[0m');
     }
     
     bindEvents() {
@@ -148,7 +146,6 @@ class ESP32Terminal {
                 // Регистрация клиента для получения данных
                 this.registerClient();
                 
-                this.term.writeln('\x1b[1;32m✓ Подключение установлено\x1b[0m');
                 this.term.writeln('\x1b[33mОтправка регистрационной команды...\x1b[0m');
             };
             
@@ -173,12 +170,27 @@ class ESP32Terminal {
         }
     }
     
+    unsubscribe() {
+        if (this.socket && this.isRegistered && this.subscriptionSid !== null) {
+            this.socket.send(JSON.stringify({
+                FID: "0x00001021",
+                SID: this.subscriptionSid,
+                FLAGS: 8  // CALL_FLAG_TO_DELETE
+            }));
+            this.isRegistered = false;
+            this.subscriptionSid = null;
+        }
+    }
+
     disconnect() {
+        clearTimeout(this.resubscribeTimer);
         if (this.socket) {
             this.socket.close();
             this.socket = null;
         }
         this.isConnected = false;
+        this.isRegistered = false;
+        this.subscriptionSid = null;
         this.echoEnabled = false;
         const echoBtn = document.getElementById('echo-btn');
         echoBtn.textContent = 'Echo: OFF';
@@ -188,13 +200,23 @@ class ESP32Terminal {
     }
     
     registerClient() {
-        // Отправка команды регистрации клиента
+        this.subscriptionSid = Math.floor(Math.random() * 0xffff) + 1;
+        this.txSid = Math.floor(Math.random() * 0xffff) + 1;
         const registerCommand = {
-            FID: "0x00001021"
+            FID: "0x00001021",
+            SID: this.subscriptionSid,
+            FLAGS: 4  // CALL_FLAG_LONG_TERM
         };
-        
+
         this.socket.send(JSON.stringify(registerCommand));
         this.term.writeln('\x1b[32m✓ Регистрация отправлена\x1b[0m');
+
+        this.resubscribeTimer = setTimeout(() => {
+            if (!this.isRegistered && this.isConnected) {
+                this.term.writeln('\x1b[33m[Повтор регистрации...]\x1b[0m');
+                this.registerClient();
+            }
+        }, 3000);
     }
     
     handleWebSocketMessage(data) {
@@ -204,9 +226,14 @@ class ESP32Terminal {
             document.getElementById('packet-count').textContent = this.packetCount;
             document.getElementById('last-activity').textContent = new Date().toLocaleTimeString();
             
-            // Обработка пакетов с данными из UART
-            if (packet.FID === "0x00001021" && packet.ARG && !packet.ARG.STA) {
-                this.processUARTData(packet.ARG);
+            if (packet.FID === "0x00001021" && packet.ARG) {
+                if (packet.ARG.STA === "0x00000005") {
+                    this.isRegistered = true;
+                    clearTimeout(this.resubscribeTimer);
+                    this.term.writeln('\x1b[32m✓ Подписка подтверждена\x1b[0m');
+                } else if (this.isRegistered == true) {
+                    this.processUARTData(packet.ARG);
+                }
             }
             
         } catch (error) {
@@ -232,6 +259,8 @@ class ESP32Terminal {
             if (this.echoEnabled && this.isConnected && this.socket) {
                 const command = {
                     FID: "0x00001022",
+                    SID: this.txSid,
+                    FLAGS: 0,
                     ARG: base64Data
                 };
                 this.socket.send(JSON.stringify(command));
@@ -255,7 +284,9 @@ class ESP32Terminal {
         
         // Формирование команды для отправки
         const command = {
-            FID: "1022",
+            FID: "0x00001022",
+            SID: this.txSid,
+            FLAGS: 0,
             ARG: base64String
         };
         
@@ -271,7 +302,9 @@ class ESP32Terminal {
         // Отправка сигнала Break (Ctrl+C)
         if (this.isConnected && this.socket) {
             const breakCommand = {
-                FID: "1022",
+                FID: "0x00001022",
+                SID: this.txSid,
+                FLAGS: 0,
                 ARG: btoa('\x03') // Ctrl+C
             };
             this.socket.send(JSON.stringify(breakCommand));
