@@ -77,7 +77,10 @@ static void send_mb_msg(int id, int fid, const char *json_str, size_t len) {
         msg.data = NULL;
         msg.len  = 0;
     }
-    queue_send(get_ws_worker_queue(), &msg, pdMS_TO_TICKS(0));
+    if (queue_send(get_ws_worker_queue(), &msg, pdMS_TO_TICKS(100)) != pdPASS) {
+        ESP_LOGW(TAG, "ws queue full, dropping mb response id:%d", id);
+        free(msg.data);
+    }
 }
 
 static void send_mb_error(int id, int fid, int code) {
