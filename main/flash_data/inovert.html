@@ -1,0 +1,728 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>INOVERT</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: monospace; background: #0d1117; color: #c9d1d9; padding: 16px; }
+
+        h1 { color: #58a6ff; font-size: 1.3em; letter-spacing: 2px; margin-bottom: 4px; }
+        h2 { color: #8b949e; font-size: 0.9em; letter-spacing: 1px; margin: 16px 0 8px; text-transform: uppercase; }
+
+        .info-bar {
+            display: flex; gap: 20px; flex-wrap: wrap;
+            font-size: 0.8em; color: #8b949e; margin-bottom: 14px;
+            padding: 8px 0; border-bottom: 1px solid #21262d;
+        }
+        .info-bar span b { color: #c9d1d9; }
+
+        .toolbar {
+            display: flex; align-items: center; gap: 12px;
+            flex-wrap: wrap; margin-bottom: 14px;
+        }
+        .badge { display: inline-block; padding: 3px 12px; border-radius: 12px; font-size: 0.78em; }
+        .badge.ok  { background: #1f4f2a; color: #56d364; }
+        .badge.err { background: #4f1f1f; color: #f85149; }
+
+        .toolbar label { font-size: 0.82em; color: #8b949e; }
+        .toolbar input[type=number], .toolbar select {
+            background: #161b22; border: 1px solid #30363d; color: #c9d1d9;
+            padding: 4px 8px; border-radius: 6px; font-family: monospace;
+        }
+        .toolbar button {
+            background: #161b22; border: 1px solid #30363d; color: #8b949e;
+            padding: 4px 12px; border-radius: 6px; cursor: pointer; font-family: monospace;
+        }
+        .toolbar button:hover { border-color: #58a6ff; color: #58a6ff; }
+
+        /* control panel */
+        .control-card {
+            background: #161b22; border: 1px solid #21262d; border-radius: 8px;
+            padding: 16px 20px; margin-bottom: 4px;
+        }
+        .control-top {
+            display: flex; align-items: center; gap: 20px; flex-wrap: wrap;
+            margin-bottom: 14px;
+        }
+
+        .state-badge {
+            display: inline-block; min-width: 160px; text-align: center;
+            padding: 10px 20px; border-radius: 8px; border: 2px solid #484f58;
+            font-size: 1.2em; font-weight: bold; letter-spacing: 2px;
+            color: #c9d1d9; background: #0d1117;
+            transition: color 0.3s, border-color 0.3s, box-shadow 0.3s;
+        }
+        .state-badge.state-stop {
+            color: #f85149; border-color: #f85149;
+            box-shadow: 0 0 10px rgba(248,81,73,0.35);
+        }
+        .state-badge.state-fwd {
+            color: #56d364; border-color: #56d364;
+            box-shadow: 0 0 10px rgba(86,211,100,0.35);
+        }
+        .state-badge.state-rev {
+            color: #79c0ff; border-color: #79c0ff;
+            box-shadow: 0 0 10px rgba(121,192,255,0.35);
+        }
+
+        .ctrl-freq-row {
+            display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+        }
+        .ctrl-freq-row label { font-size: 0.82em; color: #8b949e; }
+        .ctrl-freq-row input[type=number] {
+            background: #0d1117; border: 1px solid #30363d; color: #c9d1d9;
+            padding: 5px 10px; border-radius: 6px; font-family: monospace;
+            font-size: 1em; width: 90px;
+        }
+        .ctrl-freq-row input[type=number]:focus { border-color: #58a6ff; outline: none; }
+
+        .ctrl-btn-row {
+            display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+            margin-top: 12px;
+        }
+        .ctrl-btn {
+            background: #0d1117; border: 2px solid #30363d; color: #c9d1d9;
+            padding: 8px 20px; border-radius: 6px; cursor: pointer;
+            font-family: monospace; font-weight: bold; font-size: 0.9em;
+            transition: background 0.15s, color 0.15s;
+        }
+        .ctrl-btn:hover { background: #21262d; }
+        .ctrl-btn.btn-fwd  { border-color: #56d364; color: #56d364; }
+        .ctrl-btn.btn-fwd:hover  { background: #1f4f2a; }
+        .ctrl-btn.btn-rev  { border-color: #79c0ff; color: #79c0ff; }
+        .ctrl-btn.btn-rev:hover  { background: #1a2f4a; }
+        .ctrl-btn.btn-stop {
+            border-color: #f85149; color: #f85149;
+            padding: 10px 28px; font-size: 1em;
+        }
+        .ctrl-btn.btn-stop:hover { background: #4f1f1f; }
+
+        /* measurements table */
+        table { border-collapse: collapse; width: 100%; font-size: 0.88em; }
+        th {
+            background: #161b22; color: #58a6ff; padding: 7px 10px;
+            text-align: left; border-bottom: 2px solid #21262d;
+        }
+        td { padding: 6px 10px; border-bottom: 1px solid #21262d; vertical-align: middle; }
+        tr:hover > td { background: rgba(33,38,45,0.6); }
+
+        .col-addr { color: #484f58; font-size: 0.82em; white-space: nowrap; }
+        .col-val  { font-weight: bold; color: #e6edf3; min-width: 90px; display: inline-block; }
+        .col-unit { color: #484f58; font-size: 0.8em; margin-left: 3px; }
+
+        @keyframes flash { 0% { color: #79c0ff; } 100% { color: #e6edf3; } }
+        .flash { animation: flash 0.5s ease-out; }
+
+        .section-row td {
+            background: #161b22; color: #58a6ff; font-size: 0.76em;
+            padding: 5px 10px 3px; text-transform: uppercase; letter-spacing: 1px;
+            border-top: 2px solid #21262d; border-bottom: 1px solid #21262d;
+        }
+
+        /* config section */
+        .config-grid {
+            display: flex; gap: 16px; flex-wrap: wrap; margin-top: 8px;
+        }
+        .config-card {
+            background: #161b22; border: 1px solid #21262d; border-radius: 8px;
+            padding: 14px 18px; min-width: 260px;
+        }
+        .config-card h3 { color: #8b949e; font-size: 0.82em; margin-bottom: 12px; text-transform: uppercase; letter-spacing: 1px; }
+        .cfg-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+        .cfg-row label { font-size: 0.82em; color: #8b949e; min-width: 140px; }
+        .cfg-row input, .cfg-row select {
+            background: #0d1117; border: 1px solid #30363d; color: #c9d1d9;
+            padding: 3px 7px; border-radius: 4px; font-family: monospace;
+            flex: 1;
+        }
+        .cfg-row input:focus, .cfg-row select:focus { border-color: #58a6ff; outline: none; }
+        .btn {
+            background: #21262d; border: 1px solid #30363d; color: #8b949e;
+            padding: 5px 14px; border-radius: 6px; cursor: pointer; font-family: monospace;
+            font-size: 0.85em; margin-top: 4px;
+        }
+        .btn:hover { border-color: #58a6ff; color: #58a6ff; }
+
+        #poll-ts { margin-top: 10px; font-size: 0.72em; color: #484f58; display: flex; gap: 20px; }
+        #rtt-val { color: #79c0ff; font-weight: bold; }
+
+        .write-timing {
+            display: flex; gap: 24px; flex-wrap: wrap;
+            margin-top: 14px; padding: 10px 14px;
+            background: #161b22; border: 1px solid #21262d; border-radius: 8px;
+            font-size: 0.78em; color: #8b949e;
+        }
+        .write-timing .wt-field { display: flex; flex-direction: column; gap: 2px; }
+        .write-timing .wt-label { font-size: 0.85em; text-transform: uppercase; letter-spacing: 0.5px; }
+        .write-timing .wt-val   { font-family: monospace; color: #c9d1d9; font-size: 1.1em; }
+        .write-timing .wt-val.wt-rtt { color: #79c0ff; font-weight: bold; font-size: 1.3em; }
+        .write-timing .wt-val.wt-err { color: #f85149; }
+    </style>
+</head>
+<body>
+    <h1>INOVERT</h1>
+
+    <div class="info-bar">
+        <span>Версия ПО: <b id="dev-fw">—</b></span>
+        <span>Часы работы: <b id="dev-hours">—</b> ч</span>
+    </div>
+
+    <div class="toolbar">
+        <span id="ws-status" class="badge err">Нет соединения</span>
+        <label>MB адрес:&nbsp;<input type="number" id="mb-addr" value="1" min="1" max="247" style="width:60px"></label>
+        <label>UART:&nbsp;
+            <select id="uart-sel">
+                <option value="4371">UART1 (0x1113)</option>
+                <option value="4387">UART2 (0x1123)</option>
+            </select>
+        </label>
+        <button onclick="reconnect()">Переподключить</button>
+    </div>
+
+    <h2>Управление</h2>
+    <div class="control-card">
+        <div class="control-top">
+            <span id="state-badge" class="state-badge state-stop">СТОП</span>
+            <div class="ctrl-freq-row">
+                <label>Частота, Гц:</label>
+                <input type="number" id="ctrl-freq" value="50.0" min="0.1" max="999.9" step="0.1">
+            </div>
+        </div>
+        <div class="ctrl-btn-row">
+            <button class="ctrl-btn btn-fwd" onclick="cmdStart(1)">ПУСК ВП</button>
+            <button class="ctrl-btn btn-rev" onclick="cmdStart(2)">ПУСК НАЗ</button>
+            <button class="ctrl-btn" onclick="cmdSetFreq()">ЗАДАТЬ ЧАС.</button>
+            <button class="ctrl-btn btn-stop" onclick="cmdStop()">СТОП</button>
+        </div>
+    </div>
+
+    <h2>Измерения</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>Рег.</th>
+                <th>Параметр</th>
+                <th>Значение</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody id="meas-body"></tbody>
+    </table>
+    <div id="poll-ts">
+        <span>Опрос: <span id="poll-time">—</span></span>
+        <span>RTT: <span id="rtt-val">—</span> мс</span>
+    </div>
+
+    <h2>Конфигурация</h2>
+    <div class="config-grid">
+
+        <!-- PB params -->
+        <div class="config-card">
+            <h3>PB — Основные параметры</h3>
+            <div class="cfg-row">
+                <label>Заданная частота, Гц</label>
+                <input type="number" id="pb-setfreq" value="50.0" min="0.0" max="999.9" step="0.1">
+            </div>
+            <div class="cfg-row">
+                <label>Макс. частота, Гц</label>
+                <input type="number" id="pb-maxfreq" value="50.0" min="0.0" max="999.9" step="0.1">
+            </div>
+            <div class="cfg-row">
+                <label>Мин. частота, Гц</label>
+                <input type="number" id="pb-minfreq" value="0.0" min="0.0" max="999.9" step="0.1">
+            </div>
+            <div class="cfg-row">
+                <label>Время разгона, с</label>
+                <input type="number" id="pb-accel" value="10.0" min="0.0" max="6000.0" step="0.1">
+            </div>
+            <div class="cfg-row">
+                <label>Время торможения, с</label>
+                <input type="number" id="pb-decel" value="10.0" min="0.0" max="6000.0" step="0.1">
+            </div>
+            <button class="btn" onclick="sendPbParams()">Записать</button>
+        </div>
+
+        <!-- PC params -->
+        <div class="config-card">
+            <h3>PC — Параметры двигателя</h3>
+            <div class="cfg-row">
+                <label>Ном. напряжение, В</label>
+                <input type="number" id="pc-voltage" value="380" min="1" max="999">
+            </div>
+            <div class="cfg-row">
+                <label>Ном. ток, А</label>
+                <input type="number" id="pc-current" value="10.0" min="0.1" max="999.9" step="0.1">
+            </div>
+            <div class="cfg-row">
+                <label>Ном. обороты, об/мин</label>
+                <input type="number" id="pc-rpm" value="1460" min="1" max="60000">
+            </div>
+            <div class="cfg-row">
+                <label>Полюса</label>
+                <input type="number" id="pc-poles" value="4" min="2" max="48" step="2">
+            </div>
+            <div class="cfg-row">
+                <label>Ном. частота, Гц</label>
+                <input type="number" id="pc-freq" value="50.0" min="0.1" max="999.9" step="0.1">
+            </div>
+            <button class="btn" onclick="sendPcParams()">Записать</button>
+        </div>
+
+        <!-- PH params -->
+        <div class="config-card">
+            <h3>PH — RS-485</h3>
+            <div class="cfg-row">
+                <label>Адрес</label>
+                <input type="number" id="ph-addr" value="1" min="1" max="247">
+            </div>
+            <div class="cfg-row">
+                <label>Скорость</label>
+                <select id="ph-baud">
+                    <option value="0">4800</option>
+                    <option value="1" selected>9600</option>
+                </select>
+            </div>
+            <div class="cfg-row">
+                <label>Формат</label>
+                <select id="ph-fmt">
+                    <option value="0">8N1 ASCII</option>
+                    <option value="1">8E1 ASCII</option>
+                    <option value="2">8O1 ASCII</option>
+                    <option value="3">8N1 RTU</option>
+                    <option value="4">8E1 RTU</option>
+                    <option value="5">8O1 RTU</option>
+                </select>
+            </div>
+            <button class="btn" onclick="sendPhParams()">Записать</button>
+        </div>
+
+    </div>
+
+    <div class="write-timing">
+        <div class="wt-field">
+            <span class="wt-label">Отправлено</span>
+            <span class="wt-val" id="wt-sent">—</span>
+        </div>
+        <div class="wt-field">
+            <span class="wt-label">Получено</span>
+            <span class="wt-val" id="wt-recv">—</span>
+        </div>
+        <div class="wt-field">
+            <span class="wt-label">RTT записи</span>
+            <span class="wt-val wt-rtt" id="wt-rtt">— мс</span>
+        </div>
+    </div>
+
+    <script>
+    // ── Constants ─────────────────────────────────────────────────────────────
+    const BATCH_START = 0, BATCH_COUNT = 51, AWT = 500;
+    const PB_START = 100, PB_COUNT = 9;
+    const PC_START = 209, PC_COUNT = 7;
+    const PH_START = 700, PH_COUNT = 5;
+
+    // ── Register definitions ──────────────────────────────────────────────────
+    const MEAS = [
+        { section: "Частота" },
+        { addr: 2,  name: "Выходная частота",    unit: "Гц",     scale: 10 },
+        { addr: 1,  name: "Заданная частота",    unit: "Гц",     scale: 10 },
+        { section: "Электрические величины" },
+        { addr: 3,  name: "Выходной ток",        unit: "А",      scale: 10 },
+        { addr: 9,  name: "Выходное напряжение", unit: "В",      scale: 1  },
+        { addr: 5,  name: "Напряжение DC шины",  unit: "В",      scale: 10 },
+        { section: "Механика" },
+        { addr: 4,  name: "Скорость вращения",   unit: "об/мин", scale: 1  },
+        { section: "Входы / Выходы" },
+        { addr: 23, name: "Вход AVI",            unit: "В",      scale: 100 },
+        { addr: 21, name: "Входы управления",    type: "inputs" },
+        { addr: 22, name: "Выход RA-RC",         type: "relay"  },
+        { section: "Статус" },
+        { addr: 28, name: "Состояние",           type: "state"  },
+        { addr: 27, name: "Код ошибки",          type: "error"  },
+        { section: "Статистика" },
+        { addr: 8,  name: "Часы работы",         unit: "ч",      scale: 1  },
+        { addr: 50, name: "Версия ПО",           type: "fw"     },
+    ];
+
+    // ── Error codes ───────────────────────────────────────────────────────────
+    const ERR_CODES = {
+        0:  '—',
+        2:  'OC при разгоне',
+        3:  'OC при торможении',
+        4:  'OC на пост. скорости',
+        5:  'ОВ при разгоне',
+        6:  'ОВ при торможении',
+        7:  'ОВ на пост. скорости',
+        8:  'Перегрузка зарядного резистора',
+        9:  'Низкое напряжение',
+        10: 'Перегрузка преобразователя',
+        11: 'Перегрузка двигателя',
+        14: 'Перегрев преобразователя',
+        15: 'Внешняя ошибка',
+        16: 'Ошибка RS-485',
+        24: 'ПИД ОС ниже предела',
+        27: 'ПИД ОС выше предела',
+        28: 'Сухой ход',
+        29: 'Время включения достигнуто',
+        31: 'Обрыв ОС ПИД'
+    };
+
+    // ── State ─────────────────────────────────────────────────────────────────
+    let ws = null;
+    let pollTimer = null;
+    let sidCounter = 1;
+    let _pollSentAt = 0;
+    let _writeSentAt = 0;
+    let _writeWatchdog = null;
+    let _configRequested = false;
+    const _cfgRegs = {};   // cache of last-read config register values
+
+    function getFid()    { return parseInt(document.getElementById('uart-sel').value); }
+    function getMbAddr() { return parseInt(document.getElementById('mb-addr').value) || 1; }
+    function nextSid()   { return sidCounter++ & 0xffff; }
+
+    // ── Build measurements table ──────────────────────────────────────────────
+    const tbody = document.getElementById('meas-body');
+    MEAS.forEach(m => {
+        const tr = document.createElement('tr');
+        if (m.section) {
+            tr.className = 'section-row';
+            tr.innerHTML = `<td colspan="4">${m.section}</td>`;
+        } else {
+            const unitHtml = m.unit
+                ? `<span class="col-unit">${m.unit}</span>`
+                : '';
+            tr.innerHTML = `
+                <td class="col-addr">${m.addr}</td>
+                <td>${m.name}</td>
+                <td><span class="col-val" id="val-${m.addr}">—</span>${unitHtml}</td>
+                <td></td>
+            `;
+        }
+        tbody.appendChild(tr);
+    });
+
+    // ── Value decoders ────────────────────────────────────────────────────────
+    function decodeReg(m, val) {
+        if (m.type === 'state') {
+            return { 0: 'Остановлен', 1: 'Вперёд', 2: 'Назад' }[val] ?? String(val);
+        }
+        if (m.type === 'error') {
+            return val === 0 ? '—' : `[${val}] ${ERR_CODES[val] ?? '?'}`;
+        }
+        if (m.type === 'relay') {
+            return val ? 'Активен' : 'Не активен';
+        }
+        if (m.type === 'inputs') {
+            const bits = [];
+            if (val & 0x1) bits.push('FWD');
+            if (val & 0x2) bits.push('REV');
+            if (val & 0x4) bits.push('S1');
+            if (val & 0x8) bits.push('S2');
+            return bits.length ? bits.join(', ') : '—';
+        }
+        if (m.type === 'fw') {
+            return ((val >> 8) & 0xff) + '.' + String(val & 0xff).padStart(2, '0');
+        }
+        // numeric
+        const decimals = m.scale >= 100 ? 2 : m.scale >= 10 ? 1 : 0;
+        return (val / m.scale).toFixed(decimals);
+    }
+
+    function renderVal(m, val) {
+        const el = document.getElementById(`val-${m.addr}`);
+        if (!el) return;
+        const text = decodeReg(m, val);
+        el.textContent = text;
+        // color for special types
+        if (m.type === 'error') {
+            el.style.color = val !== 0 ? '#f85149' : '#56d364';
+        } else if (m.type === 'state') {
+            el.style.color = val === 0 ? '#f85149' : val === 1 ? '#56d364' : '#79c0ff';
+        } else {
+            el.style.color = '';
+        }
+        el.classList.remove('flash');
+        void el.offsetWidth;
+        el.classList.add('flash');
+    }
+
+    // ── State badge ───────────────────────────────────────────────────────────
+    function updateStateBadge(stateVal) {
+        const el = document.getElementById('state-badge');
+        if (stateVal === 1) {
+            el.className = 'state-badge state-fwd';
+            el.textContent = 'ВПЕРЁД ▶';
+        } else if (stateVal === 2) {
+            el.className = 'state-badge state-rev';
+            el.textContent = '◀ НАЗАД';
+        } else {
+            el.className = 'state-badge state-stop';
+            el.textContent = 'СТОП';
+        }
+    }
+
+    // ── WebSocket ─────────────────────────────────────────────────────────────
+    function connect() {
+        ws = new WebSocket(`ws://${window.location.hostname}/ws`);
+        ws.onopen    = onOpen;
+        ws.onclose   = onClose;
+        ws.onerror   = () => {};
+        ws.onmessage = onMsg;
+    }
+
+    function onOpen() {
+        setStatus(true);
+        _configRequested = false;
+        startPoll();
+    }
+
+    function onClose() {
+        setStatus(false);
+        stopPoll();
+        setTimeout(connect, 2000);
+    }
+
+    function onMsg(evt) {
+        let obj;
+        try { obj = JSON.parse(evt.data); } catch { return; }
+        if (parseInt(obj.FID, 16) !== getFid()) return;
+        const arg = obj.ARG;
+        if (_writeSentAt > 0 && arg && parseInt(arg.STA, 16) === 0x00000003) {
+            _clearWrite();
+            document.getElementById('wt-recv').textContent = fmtTime(new Date());
+            const el = document.getElementById('wt-rtt');
+            el.textContent = 'BUSY';
+            el.className = 'wt-val wt-err';
+            return;
+        }
+        handleResp(arg);
+    }
+
+    function reconnect() {
+        if (ws) { ws.onclose = null; ws.close(); }
+        stopPoll(); setStatus(false);
+        connect();
+    }
+
+    function setStatus(ok) {
+        const el = document.getElementById('ws-status');
+        el.className = 'badge ' + (ok ? 'ok' : 'err');
+        el.textContent = ok ? 'Подключено' : 'Нет соединения';
+    }
+
+    function send(arg) {
+        if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+        ws.send(JSON.stringify({ FID: getFid(), FLAGS: 0, SID: nextSid(), ARG: arg }));
+        return true;
+    }
+
+    // ── Polling ───────────────────────────────────────────────────────────────
+    function poll() {
+        _pollSentAt = performance.now();
+        send({ FN: 3, ADR: getMbAddr(), RA: BATCH_START, RVC: BATCH_COUNT, AWT });
+        document.getElementById('poll-time').textContent = new Date().toLocaleTimeString();
+    }
+
+    function startPoll() { poll(); pollTimer = setInterval(poll, 500); }
+    function stopPoll()  { clearInterval(pollTimer); pollTimer = null; }
+
+    // ── Config read ───────────────────────────────────────────────────────────
+    function readConfig() {
+        send({ FN: 3, ADR: getMbAddr(), RA: PB_START, RVC: PB_COUNT, AWT });
+        send({ FN: 3, ADR: getMbAddr(), RA: PC_START, RVC: PC_COUNT, AWT });
+        send({ FN: 3, ADR: getMbAddr(), RA: PH_START, RVC: PH_COUNT, AWT });
+    }
+
+    // ── Response handler ──────────────────────────────────────────────────────
+    function handleResp(arg) {
+        if (!arg) return;
+        const start = arg.RA;
+        const rd = arg.RD;
+
+        // Write completion (FC16 / FC6): always intercept, never fall through to read handlers
+        if (arg.FN === 16 || arg.FN === 6) {
+            if (_writeSentAt > 0) {
+                const rtt = (performance.now() - _writeSentAt).toFixed(1);
+                _clearWrite();
+                document.getElementById('wt-recv').textContent = fmtTime(new Date());
+                const el = document.getElementById('wt-rtt');
+                if (arg.ERR) {
+                    el.textContent = 'ERR: ' + arg.ERR;
+                    el.className = 'wt-val wt-err';
+                } else {
+                    el.textContent = rtt + ' мс';
+                    el.className = 'wt-val wt-rtt';
+                }
+            }
+            return;
+        }
+
+        // Gateway-level error (no RD field, e.g. ERR:4 timeout) while write in flight
+        if (_writeSentAt > 0 && arg.ERR && !Array.isArray(rd)) {
+            _clearWrite();
+            document.getElementById('wt-recv').textContent = fmtTime(new Date());
+            const el = document.getElementById('wt-rtt');
+            el.textContent = 'ERR: ' + arg.ERR;
+            el.className = 'wt-val wt-err';
+            return;
+        }
+
+        if (arg.ERR || !Array.isArray(rd)) return;
+
+        if (start === BATCH_START && rd.length >= BATCH_COUNT) {
+            // measurements
+            if (_pollSentAt > 0) {
+                document.getElementById('rtt-val').textContent =
+                    (performance.now() - _pollSentAt).toFixed(1);
+                _pollSentAt = 0;
+            }
+            MEAS.forEach(m => {
+                if (m.section) return;
+                const i = m.addr - BATCH_START;
+                if (i < rd.length) renderVal(m, rd[i]);
+            });
+            // update state badge
+            if (rd.length > 28) updateStateBadge(rd[28]);
+            // update info bar
+            if (rd.length > 50) {
+                document.getElementById('dev-fw').textContent =
+                    ((rd[50] >> 8) & 0xff) + '.' + String(rd[50] & 0xff).padStart(2, '0');
+            }
+            document.getElementById('dev-hours').textContent = rd[8] ?? '—';
+            if (!_configRequested) { _configRequested = true; readConfig(); }
+
+        } else if (start === PB_START && rd.length >= PB_COUNT) {
+            for (let i = 0; i < PB_COUNT; i++) _cfgRegs[PB_START + i] = rd[i];
+            document.getElementById('pb-setfreq').value = (rd[0] / 10).toFixed(1);
+            document.getElementById('pb-maxfreq').value = (rd[5] / 10).toFixed(1);
+            document.getElementById('pb-minfreq').value = (rd[6] / 10).toFixed(1);
+            document.getElementById('pb-accel').value   = (rd[7] / 10).toFixed(1);
+            document.getElementById('pb-decel').value   = (rd[8] / 10).toFixed(1);
+
+        } else if (start === PC_START && rd.length >= PC_COUNT) {
+            for (let i = 0; i < PC_COUNT; i++) _cfgRegs[PC_START + i] = rd[i];
+            document.getElementById('pc-voltage').value = rd[0];
+            document.getElementById('pc-current').value = (rd[1] / 10).toFixed(1);
+            document.getElementById('pc-rpm').value     = rd[3];
+            document.getElementById('pc-poles').value   = rd[4];
+            document.getElementById('pc-freq').value    = (rd[6] / 10).toFixed(1);
+
+        } else if (start === PH_START && rd.length >= PH_COUNT) {
+            for (let i = 0; i < PH_COUNT; i++) _cfgRegs[PH_START + i] = rd[i];
+            document.getElementById('ph-baud').value = rd[0];
+            document.getElementById('ph-fmt').value  = rd[1];
+            document.getElementById('ph-addr').value = rd[2];
+        }
+    }
+
+    // ── Write timing helpers ──────────────────────────────────────────────────
+    function fmtTime(d) {
+        return d.toLocaleTimeString('ru', { hour12: false }) +
+               '.' + String(d.getMilliseconds()).padStart(3, '0');
+    }
+
+    function _clearWrite() {
+        _writeSentAt = 0;
+        if (_writeWatchdog) { clearTimeout(_writeWatchdog); _writeWatchdog = null; }
+    }
+
+    function _beginWrite() {
+        _writeSentAt = performance.now();
+        document.getElementById('wt-sent').textContent = fmtTime(new Date());
+        document.getElementById('wt-recv').textContent = '—';
+        const el = document.getElementById('wt-rtt');
+        el.textContent = '— мс';
+        el.className = 'wt-val wt-rtt';
+        if (_writeWatchdog) clearTimeout(_writeWatchdog);
+        _writeWatchdog = setTimeout(() => {
+            _writeWatchdog = null;
+            if (_writeSentAt > 0) {
+                _writeSentAt = 0;
+                document.getElementById('wt-recv').textContent = fmtTime(new Date());
+                const e = document.getElementById('wt-rtt');
+                e.textContent = 'TIMEOUT';
+                e.className = 'wt-val wt-err';
+            }
+        }, AWT + 1500);
+    }
+
+    // ── Control commands ──────────────────────────────────────────────────────
+    function cmdStart(dir) {
+        if (_writeSentAt > 0) return;
+        const freqRaw = Math.round(parseFloat(document.getElementById('ctrl-freq').value || 50) * 10);
+        _beginWrite();
+        if (!send({ FN: 16, ADR: getMbAddr(), RA: 100, RVC: 3, RD: [freqRaw, 5, dir], AWT })) _clearWrite();
+    }
+
+    function cmdSetFreq() {
+        if (_writeSentAt > 0) return;
+        const freqRaw = Math.round(parseFloat(document.getElementById('ctrl-freq').value || 50) * 10);
+        _beginWrite();
+        if (!send({ FN: 16, ADR: getMbAddr(), RA: 100, RVC: 1, RD: [freqRaw], AWT })) _clearWrite();
+    }
+
+    function cmdStop() {
+        if (_writeSentAt > 0) return;
+        _beginWrite();
+        if (!send({ FN: 16, ADR: getMbAddr(), RA: 102, RVC: 1, RD: [0], AWT })) _clearWrite();
+    }
+
+    // ── Config writes ─────────────────────────────────────────────────────────
+    function cfgWrite(addr, value) {
+        send({ FN: 16, ADR: getMbAddr(), RA: addr, RVC: 1, RD: [Math.round(value) & 0xFFFF], AWT });
+    }
+
+    function sendPbParams() {
+        if (_writeSentAt > 0) return;
+        _beginWrite();
+        // Single FC16 block 100-108; use cached values for non-UI regs (esp. 102=run/stop)
+        const block = [
+            Math.round(parseFloat(document.getElementById('pb-setfreq').value || 50) * 10),
+            _cfgRegs[101] ?? 3,
+            _cfgRegs[102] ?? 0,
+            _cfgRegs[103] ?? 1,
+            _cfgRegs[104] ?? 0,
+            Math.round(parseFloat(document.getElementById('pb-maxfreq').value || 50) * 10),
+            Math.round(parseFloat(document.getElementById('pb-minfreq').value || 0)  * 10),
+            Math.round(parseFloat(document.getElementById('pb-accel').value   || 10) * 10),
+            Math.round(parseFloat(document.getElementById('pb-decel').value   || 10) * 10),
+        ];
+        if (!send({ FN: 16, ADR: getMbAddr(), RA: PB_START, RVC: PB_COUNT, RD: block, AWT })) _clearWrite();
+    }
+
+    function sendPcParams() {
+        if (_writeSentAt > 0) return;
+        _beginWrite();
+        // Single FC16 block 209-215; use cached value for non-UI reg 211 (idle%) and 214
+        const block = [
+            parseInt(document.getElementById('pc-voltage').value) || 380,
+            Math.round(parseFloat(document.getElementById('pc-current').value || 10) * 10),
+            _cfgRegs[211] ?? 50,
+            parseInt(document.getElementById('pc-rpm').value) || 1460,
+            parseInt(document.getElementById('pc-poles').value) || 4,
+            _cfgRegs[214] ?? 0,
+            Math.round(parseFloat(document.getElementById('pc-freq').value || 50) * 10),
+        ];
+        if (!send({ FN: 16, ADR: getMbAddr(), RA: PC_START, RVC: PC_COUNT, RD: block, AWT })) _clearWrite();
+    }
+
+    function sendPhParams() {
+        if (_writeSentAt > 0) return;
+        _beginWrite();
+        // Single FC16 block 700-704; use cached values for non-UI regs 703-704
+        const block = [
+            parseInt(document.getElementById('ph-baud').value),
+            parseInt(document.getElementById('ph-fmt').value),
+            parseInt(document.getElementById('ph-addr').value) || 1,
+            _cfgRegs[703] ?? 0,
+            _cfgRegs[704] ?? 0,
+        ];
+        if (!send({ FN: 16, ADR: getMbAddr(), RA: PH_START, RVC: PH_COUNT, RD: block, AWT })) _clearWrite();
+    }
+
+    connect();
+    </script>
+</body>
+</html>
