@@ -12,6 +12,7 @@ typedef struct {
     uart_config_t cnf;
     event_t on_receive;
     uint8_t echo_enabled;
+    volatile uint8_t rx_locked;
 } gw_uart_private_t;
 
 #define ASSERRT_STRUCTURE_CAST(private_type, public_type, prv_size_def, def_file)   _Static_assert(sizeof(private_type) == sizeof(public_type), "In "def_file" data structure size of "#public_type" doesn't match, check "#prv_size_def)
@@ -31,6 +32,7 @@ static void uart_event_task(void *pvParameters) {
         other types of events. If we take too much time on data event, the queue might
         be full.*/
         case UART_DATA: {
+            if (uart->rx_locked) break;
             gw_uart_event_data_t ev_trig;
             ev_trig.buf = buf;
             size_t size = event.size;
@@ -250,4 +252,14 @@ void gw_uart_set_echo(void *desc, uint8_t enabled) {
 uint8_t gw_uart_get_echo(void *desc) {
     gw_uart_private_t *uart = (gw_uart_private_t *) desc;
     return uart->echo_enabled;
+}
+
+void gw_uart_lock_rx(void *desc) {
+    gw_uart_private_t *uart = (gw_uart_private_t *) desc;
+    uart->rx_locked = 1;
+}
+
+void gw_uart_unlock_rx(void *desc) {
+    gw_uart_private_t *uart = (gw_uart_private_t *) desc;
+    uart->rx_locked = 0;
 }

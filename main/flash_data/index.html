@@ -81,7 +81,20 @@
         .btn.danger:hover { background: #4f1f1f; }
         .btn-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
 
-        #poll-ts { margin-top: 10px; font-size: 0.72em; color: #484f58; }
+        #poll-ts { margin-top: 10px; font-size: 0.72em; color: #484f58; display: flex; gap: 20px; }
+        #rtt-val { color: #79c0ff; font-weight: bold; }
+
+        .write-timing {
+            display: flex; gap: 24px; flex-wrap: wrap;
+            margin-top: 14px; padding: 10px 14px;
+            background: #161b22; border: 1px solid #21262d; border-radius: 8px;
+            font-size: 0.78em; color: #8b949e;
+        }
+        .write-timing .wt-field { display: flex; flex-direction: column; gap: 2px; }
+        .write-timing .wt-label { font-size: 0.85em; text-transform: uppercase; letter-spacing: 0.5px; }
+        .write-timing .wt-val   { font-family: monospace; color: #c9d1d9; font-size: 1.1em; }
+        .write-timing .wt-val.wt-rtt { color: #79c0ff; font-weight: bold; font-size: 1.3em; }
+        .write-timing .wt-val.wt-err { color: #f85149; }
     </style>
 </head>
 <body>
@@ -118,7 +131,10 @@
         </thead>
         <tbody id="meas-body"></tbody>
     </table>
-    <div id="poll-ts">Опрос: —</div>
+    <div id="poll-ts">
+        <span>Опрос: <span id="poll-time">—</span></span>
+        <span>RTT: <span id="rtt-val">—</span> мс</span>
+    </div>
 
     <h2>Конфигурация</h2>
     <div class="config-grid">
@@ -203,6 +219,21 @@
 
     </div>
 
+    <div class="write-timing">
+        <div class="wt-field">
+            <span class="wt-label">Отправлено</span>
+            <span class="wt-val" id="wt-sent">—</span>
+        </div>
+        <div class="wt-field">
+            <span class="wt-label">Получено</span>
+            <span class="wt-val" id="wt-recv">—</span>
+        </div>
+        <div class="wt-field">
+            <span class="wt-label">RTT записи</span>
+            <span class="wt-val wt-rtt" id="wt-rtt">— мс</span>
+        </div>
+    </div>
+
     <script>
     // ── Register definitions ──────────────────────────────────────────────────
     // All measurement registers are float32 (2 consecutive uint16 words, big-endian)
@@ -227,6 +258,7 @@
     let ws = null;
     let pollTimer = null;
     let sidCounter = 1;
+    let _pollSentAt = 0;
 
     function getFid()    { return parseInt(document.getElementById('uart-sel').value); }
     function getMbAddr() { return parseInt(document.getElementById('mb-addr').value) || 1; }
@@ -274,6 +306,7 @@
     }
 
     let _infoRequested = false;
+    let _writeSentAt   = 0;
 
     function onOpen() {
         setStatus(true);
@@ -290,7 +323,17 @@
     function onMsg(evt) {
         let obj;
         try { obj = JSON.parse(evt.data); } catch { return; }
-        if (parseInt(obj.FID, 16) === getFid()) handleResp(obj.ARG);
+        if (parseInt(obj.FID, 16) !== getFid()) return;
+        const arg = obj.ARG;
+        if (_writeSentAt > 0 && arg && parseInt(arg.STA, 16) === 0x00000003) {
+            _writeSentAt = 0;
+            document.getElementById('wt-recv').textContent = fmtTime(new Date());
+            const el = document.getElementById('wt-rtt');
+            el.textContent = 'BUSY';
+            el.className = 'wt-val wt-err';
+            return;
+        }
+        handleResp(arg);
     }
 
     function reconnect() {
@@ -315,9 +358,9 @@
     const AWT = 150;  // ms — virtual device responds in ~10ms at 115200 baud
 
     function poll() {
+        _pollSentAt = performance.now();
         send({ FN: 3, ADR: getMbAddr(), RA: BATCH_START, RVC: BATCH_COUNT, AWT });
-        document.getElementById('poll-ts').textContent =
-            'Опрос: ' + new Date().toLocaleTimeString();
+        document.getElementById('poll-time').textContent = new Date().toLocaleTimeString();
     }
 
     function startPoll() { poll(); pollTimer = setInterval(poll, 500); }
@@ -329,11 +372,36 @@
 
     // ── Response handler ──────────────────────────────────────────────────────
     function handleResp(arg) {
-        if (!arg || arg.ERR || !Array.isArray(arg.RD)) return;
+        if (!arg) return;
         const start = arg.RA;
-        const rd    = arg.RD;
+
+        const isWriteResp = start === 300
+            || (_writeSentAt > 0 && arg.ERR && start !== BATCH_START && start !== 60);
+
+        if (isWriteResp && _writeSentAt > 0) {
+            const rtt = (performance.now() - _writeSentAt).toFixed(1);
+            _writeSentAt = 0;
+            document.getElementById('wt-recv').textContent = fmtTime(new Date());
+            const el = document.getElementById('wt-rtt');
+            if (arg.ERR) {
+                const cv = arg.CV ? ' CV:0x' + arg.CV.toString(16).toUpperCase() : '';
+                el.textContent = 'ERR: ' + arg.ERR + cv;
+                el.className = 'wt-val wt-err';
+            } else {
+                el.textContent = rtt + ' мс';
+                el.className = 'wt-val wt-rtt';
+            }
+        }
+
+        if (arg.ERR || !Array.isArray(arg.RD)) return;
+        const rd = arg.RD;
 
         if (start === BATCH_START) {
+            if (_pollSentAt > 0) {
+                document.getElementById('rtt-val').textContent =
+                    (performance.now() - _pollSentAt).toFixed(1);
+                _pollSentAt = 0;
+            }
             // Measurements batch
             MEAS.forEach(m => {
                 const offset = m.addr - BATCH_START;
@@ -390,8 +458,19 @@
         }
     }
 
+    function fmtTime(d) {
+        return d.toLocaleTimeString('ru', { hour12: false }) +
+               '.' + String(d.getMilliseconds()).padStart(3, '0');
+    }
+
     // ── Config writes via FC16 instruction system ─────────────────────────────
     function sendInstr(code, params) {
+        _writeSentAt = performance.now();
+        document.getElementById('wt-sent').textContent = fmtTime(new Date());
+        document.getElementById('wt-recv').textContent = '—';
+        const el = document.getElementById('wt-rtt');
+        el.textContent = '— мс';
+        el.className = 'wt-val wt-rtt';
         const regs = [code, ...params];
         send({ FN: 16, ADR: getMbAddr(), RA: 300, RVC: regs.length, RD: regs, AWT: 2000 });
     }

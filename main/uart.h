@@ -60,3 +60,6 @@ void gw_uart_on_receive_subscribe(void *desc, delegate_t *delegate);
 
 void gw_uart_set_echo(void *desc, uint8_t enabled);
 uint8_t gw_uart_get_echo(void *desc);
+
+void gw_uart_lock_rx(void *desc);
+void gw_uart_unlock_rx(void *desc);
