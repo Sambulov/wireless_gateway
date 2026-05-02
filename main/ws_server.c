@@ -250,7 +250,7 @@ static uint8_t _bApiCallSendJson(void *pxApiCall, uint32_t ulFid, const uint8_t 
     esp_err_t res = ESP_OK;
     ApiCall_t *call = pxApiCall;
     uint32_t fid_out = (call != NULL) ? call->ulFid : ulFid;
-    uint32_t sid = xTaskGetTickCount();
+    uint32_t sid = (call != NULL) ? call->ulId : 0;
 
     xSemaphoreTakeRecursive(xWsApiMutex, portMAX_DELAY);
 
