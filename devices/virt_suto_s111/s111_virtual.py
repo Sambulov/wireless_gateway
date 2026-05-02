@@ -476,6 +476,10 @@ class S111:
                 rb.set(502, [params[2]])
                 rb.u32(503, (params[3] << 16) | params[4])
                 rb.u32(505, (params[5] << 16) | params[6])
+                if params[2] > 0:
+                    self.VOLTAGE = float(params[2])
+                if params[1] in (50, 60):
+                    self.FREQ = float(params[1])
 
         elif code == 1010:    # Current direction A/B/C
             if len(params) < 3:
