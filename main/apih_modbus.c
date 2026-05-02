@@ -169,7 +169,8 @@ static void handle_modbus_msg(modbus_worker_t *w, webapi_msg_t *msg) {
             if (n > 0) {
                 int stride = (frame.ucFunc == MB_FUNC_WRITE_COILS) ? 1 : 2;
                 if (n * stride > MB_PAYLOAD_SIZE) break;
-                frame.ucBufferSize = (uint8_t)(n * stride);
+                frame.ucBufferSize  = (uint8_t)(n * stride);
+                frame.ucLengthCode  = frame.ucBufferSize;
                 frame.pucData = wr_buf;
                 cJSON *elem = rd->child;
                 for (int i = 0; i < n && elem; i++, elem = elem->next) {
@@ -196,6 +197,8 @@ static void handle_modbus_msg(modbus_worker_t *w, webapi_msg_t *msg) {
 
     mb_cb_ctx_t cb = {0};
 
+    gw_uart_lock_rx(&w->app_uart->desc);
+
     /* Point the library's receive buffer at w->payload; cb copies it out in the callback */
     w->payload[0] = 0; /* clear */
     modbus_config_t cfg_update = {
@@ -214,6 +217,7 @@ static void handle_modbus_msg(modbus_worker_t *w, webapi_msg_t *msg) {
 
     uint32_t tid = modbus_request(&w->mb, &frame, mb_on_complete, &cb);
     if (!tid) {
+        gw_uart_unlock_rx(&w->app_uart->desc);
         send_mb_error(msg->id, msg->fid, 3);
         return;
     }
@@ -226,10 +230,12 @@ static void handle_modbus_msg(modbus_worker_t *w, webapi_msg_t *msg) {
 
     if (!cb.done) {
         modbus_cancel_request(&w->mb, tid);
+        gw_uart_unlock_rx(&w->app_uart->desc);
         send_mb_error(msg->id, msg->fid, 4);
         return;
     }
 
+    gw_uart_unlock_rx(&w->app_uart->desc);
     format_and_send_mb_response(msg->id, msg->fid, &cb);
 }
 

@@ -54,6 +54,12 @@
         @keyframes flash { 0% { color: #79c0ff; } 100% { color: #e6edf3; } }
         .flash { animation: flash 0.5s ease-out; }
 
+        .section-row td {
+            background: #161b22; color: #58a6ff; font-size: 0.76em;
+            padding: 5px 10px 3px; text-transform: uppercase; letter-spacing: 1px;
+            border-top: 2px solid #21262d; border-bottom: 1px solid #21262d;
+        }
+
         /* config section */
         .config-grid {
             display: flex; gap: 16px; flex-wrap: wrap; margin-top: 8px;
@@ -81,7 +87,20 @@
         .btn.danger:hover { background: #4f1f1f; }
         .btn-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
 
-        #poll-ts { margin-top: 10px; font-size: 0.72em; color: #484f58; }
+        #poll-ts { margin-top: 10px; font-size: 0.72em; color: #484f58; display: flex; gap: 20px; }
+        #rtt-val { color: #79c0ff; font-weight: bold; }
+
+        .write-timing {
+            display: flex; gap: 24px; flex-wrap: wrap;
+            margin-top: 14px; padding: 10px 14px;
+            background: #161b22; border: 1px solid #21262d; border-radius: 8px;
+            font-size: 0.78em; color: #8b949e;
+        }
+        .write-timing .wt-field { display: flex; flex-direction: column; gap: 2px; }
+        .write-timing .wt-label { font-size: 0.85em; text-transform: uppercase; letter-spacing: 0.5px; }
+        .write-timing .wt-val   { font-family: monospace; color: #c9d1d9; font-size: 1.1em; }
+        .write-timing .wt-val.wt-rtt { color: #79c0ff; font-weight: bold; font-size: 1.3em; }
+        .write-timing .wt-val.wt-err { color: #f85149; }
     </style>
 </head>
 <body>
@@ -118,7 +137,10 @@
         </thead>
         <tbody id="meas-body"></tbody>
     </table>
-    <div id="poll-ts">Опрос: —</div>
+    <div id="poll-ts">
+        <span>Опрос: <span id="poll-time">—</span></span>
+        <span>RTT: <span id="rtt-val">—</span> мс</span>
+    </div>
 
     <h2>Конфигурация</h2>
     <div class="config-grid">
@@ -203,20 +225,75 @@
 
     </div>
 
+    <div class="write-timing">
+        <div class="wt-field">
+            <span class="wt-label">Отправлено</span>
+            <span class="wt-val" id="wt-sent">—</span>
+        </div>
+        <div class="wt-field">
+            <span class="wt-label">Получено</span>
+            <span class="wt-val" id="wt-recv">—</span>
+        </div>
+        <div class="wt-field">
+            <span class="wt-label">RTT записи</span>
+            <span class="wt-val wt-rtt" id="wt-rtt">— мс</span>
+        </div>
+    </div>
+
     <script>
     // ── Register definitions ──────────────────────────────────────────────────
     // All measurement registers are float32 (2 consecutive uint16 words, big-endian)
     const MEAS = [
-        { addr: 1000, name: "Ток фазы A",          unit: "A"    },
-        { addr: 1002, name: "Ток фазы B",          unit: "A"    },
-        { addr: 1004, name: "Ток фазы C",          unit: "A"    },
-        { addr: 1010, name: "Напряжение Ua",        unit: "В"    },
-        { addr: 1012, name: "Напряжение Ub",        unit: "В"    },
-        { addr: 1014, name: "Напряжение Uc",        unit: "В"    },
-        { addr: 1034, name: "Активная мощность",    unit: "кВт"  },
-        { addr: 1042, name: "Реактивная мощность",  unit: "кВАр" },
-        { addr: 1058, name: "Коэффициент мощности", unit: ""     },
-        { addr: 1068, name: "Частота",              unit: "Гц"   },
+        { section: "Токи" },
+        { addr: 1000, name: "Ток фазы A",               unit: "A"    },
+        { addr: 1002, name: "Ток фазы B",               unit: "A"    },
+        { addr: 1004, name: "Ток фазы C",               unit: "A"    },
+        { addr: 1006, name: "Ток средний",               unit: "A"    },
+        { addr: 1008, name: "Ток нейтрали",              unit: "A"    },
+
+        { section: "Фазные напряжения" },
+        { addr: 1010, name: "Напряжение Ua",             unit: "В"    },
+        { addr: 1012, name: "Напряжение Ub",             unit: "В"    },
+        { addr: 1014, name: "Напряжение Uc",             unit: "В"    },
+        { addr: 1016, name: "Напряжение среднее",        unit: "В"    },
+        { addr: 1018, name: "Напряж. нул. последоват.",  unit: "В"    },
+
+        { section: "Линейные напряжения" },
+        { addr: 1020, name: "Напряжение Uab",            unit: "В"    },
+        { addr: 1022, name: "Напряжение Ubc",            unit: "В"    },
+        { addr: 1024, name: "Напряжение Uca",            unit: "В"    },
+        { addr: 1026, name: "Линейное среднее",          unit: "В"    },
+
+        { section: "Активная мощность" },
+        { addr: 1028, name: "Активная мощность A",       unit: "кВт"  },
+        { addr: 1030, name: "Активная мощность B",       unit: "кВт"  },
+        { addr: 1032, name: "Активная мощность C",       unit: "кВт"  },
+        { addr: 1034, name: "Активная мощность Σ",       unit: "кВт"  },
+
+        { section: "Реактивная мощность" },
+        { addr: 1036, name: "Реактивная мощность A",     unit: "кВАр" },
+        { addr: 1038, name: "Реактивная мощность B",     unit: "кВАр" },
+        { addr: 1040, name: "Реактивная мощность C",     unit: "кВАр" },
+        { addr: 1042, name: "Реактивная мощность Σ",     unit: "кВАр" },
+
+        { section: "Полная мощность" },
+        { addr: 1044, name: "Полная мощность A",         unit: "кВА"  },
+        { addr: 1046, name: "Полная мощность B",         unit: "кВА"  },
+        { addr: 1048, name: "Полная мощность C",         unit: "кВА"  },
+        { addr: 1050, name: "Полная мощность Σ",         unit: "кВА"  },
+
+        { section: "Коэффициент мощности" },
+        { addr: 1052, name: "КМ фазы A",                 unit: ""     },
+        { addr: 1054, name: "КМ фазы B",                 unit: ""     },
+        { addr: 1056, name: "КМ фазы C",                 unit: ""     },
+        { addr: 1058, name: "КМ Σ",                      unit: ""     },
+        { addr: 1060, name: "КМ осн. гарм. A",           unit: ""     },
+        { addr: 1062, name: "КМ осн. гарм. B",           unit: ""     },
+        { addr: 1064, name: "КМ осн. гарм. C",           unit: ""     },
+        { addr: 1066, name: "КМ осн. гарм. Σ",           unit: ""     },
+
+        { section: "Частота" },
+        { addr: 1068, name: "Частота",                   unit: "Гц"   },
     ];
 
     // Single batch covers all measurements: regs 1000–1069 (70 regs)
@@ -227,6 +304,7 @@
     let ws = null;
     let pollTimer = null;
     let sidCounter = 1;
+    let _pollSentAt = 0;
 
     function getFid()    { return parseInt(document.getElementById('uart-sel').value); }
     function getMbAddr() { return parseInt(document.getElementById('mb-addr').value) || 1; }
@@ -236,12 +314,17 @@
     const tbody = document.getElementById('meas-body');
     MEAS.forEach(m => {
         const tr = document.createElement('tr');
-        tr.innerHTML = `
-            <td class="col-addr">${m.addr}–${m.addr+1}</td>
-            <td>${m.name}</td>
-            <td><span class="col-val" id="val-${m.addr}">—</span><span class="col-unit">${m.unit}</span></td>
-            <td class="col-desc" id="raw-${m.addr}"></td>
-        `;
+        if (m.section) {
+            tr.className = 'section-row';
+            tr.innerHTML = `<td colspan="4">${m.section}</td>`;
+        } else {
+            tr.innerHTML = `
+                <td class="col-addr">${m.addr}–${m.addr+1}</td>
+                <td>${m.name}</td>
+                <td><span class="col-val" id="val-${m.addr}">—</span><span class="col-unit">${m.unit}</span></td>
+                <td class="col-desc" id="raw-${m.addr}"></td>
+            `;
+        }
         tbody.appendChild(tr);
     });
 
@@ -273,10 +356,13 @@
         ws.onmessage = onMsg;
     }
 
+    let _infoRequested = false;
+    let _writeSentAt   = 0;
+
     function onOpen() {
         setStatus(true);
-        readDeviceInfo();
-        startPoll();
+        _infoRequested = false;
+        startPoll();  // measurements first — info is requested after first response
     }
 
     function onClose() {
@@ -288,7 +374,17 @@
     function onMsg(evt) {
         let obj;
         try { obj = JSON.parse(evt.data); } catch { return; }
-        if (parseInt(obj.FID, 16) === getFid()) handleResp(obj.ARG);
+        if (parseInt(obj.FID, 16) !== getFid()) return;
+        const arg = obj.ARG;
+        if (_writeSentAt > 0 && arg && parseInt(arg.STA, 16) === 0x00000003) {
+            _writeSentAt = 0;
+            document.getElementById('wt-recv').textContent = fmtTime(new Date());
+            const el = document.getElementById('wt-rtt');
+            el.textContent = 'BUSY';
+            el.className = 'wt-val wt-err';
+            return;
+        }
+        handleResp(arg);
     }
 
     function reconnect() {
@@ -310,34 +406,65 @@
     }
 
     // ── Polling ───────────────────────────────────────────────────────────────
+    const AWT = 150;  // ms — virtual device responds in ~10ms at 115200 baud
+
     function poll() {
-        send({ FN: 3, ADR: getMbAddr(), RA: BATCH_START, RVC: BATCH_COUNT, AWT: 1000 });
-        document.getElementById('poll-ts').textContent =
-            'Опрос: ' + new Date().toLocaleTimeString();
+        _pollSentAt = performance.now();
+        send({ FN: 3, ADR: getMbAddr(), RA: BATCH_START, RVC: BATCH_COUNT, AWT });
+        document.getElementById('poll-time').textContent = new Date().toLocaleTimeString();
     }
 
-    function startPoll() { poll(); pollTimer = setInterval(poll, 1000); }
+    function startPoll() { poll(); pollTimer = setInterval(poll, 500); }
     function stopPoll()  { clearInterval(pollTimer); pollTimer = null; }
 
-    // Read device info (regs 60–83)
     function readDeviceInfo() {
-        send({ FN: 3, ADR: getMbAddr(), RA: 60, RVC: 24, AWT: 1000 });
+        send({ FN: 3, ADR: getMbAddr(), RA: 60, RVC: 24, AWT });
     }
 
     // ── Response handler ──────────────────────────────────────────────────────
     function handleResp(arg) {
-        if (!arg || arg.ERR || !Array.isArray(arg.RD)) return;
+        if (!arg) return;
         const start = arg.RA;
-        const rd    = arg.RD;
+
+        const isWriteResp = start === 300
+            || (_writeSentAt > 0 && arg.ERR && start !== BATCH_START && start !== 60);
+
+        if (isWriteResp && _writeSentAt > 0) {
+            const rtt = (performance.now() - _writeSentAt).toFixed(1);
+            _writeSentAt = 0;
+            document.getElementById('wt-recv').textContent = fmtTime(new Date());
+            const el = document.getElementById('wt-rtt');
+            if (arg.ERR) {
+                const cv = arg.CV ? ' CV:0x' + arg.CV.toString(16).toUpperCase() : '';
+                el.textContent = 'ERR: ' + arg.ERR + cv;
+                el.className = 'wt-val wt-err';
+            } else {
+                el.textContent = rtt + ' мс';
+                el.className = 'wt-val wt-rtt';
+            }
+        }
+
+        if (arg.ERR || !Array.isArray(arg.RD)) return;
+        const rd = arg.RD;
 
         if (start === BATCH_START) {
+            if (_pollSentAt > 0) {
+                document.getElementById('rtt-val').textContent =
+                    (performance.now() - _pollSentAt).toFixed(1);
+                _pollSentAt = 0;
+            }
             // Measurements batch
             MEAS.forEach(m => {
+                if (m.section) return;
                 const offset = m.addr - BATCH_START;
                 if (offset + 1 < rd.length) {
                     renderVal(m.addr, f32(rd[offset], rd[offset + 1]));
                 }
             });
+            if (!_infoRequested) {
+                _infoRequested = true;
+                readDeviceInfo();
+            }
         } else if (start === 60) {
             // Device info
             parseDeviceInfo(rd);
@@ -383,8 +510,19 @@
         }
     }
 
+    function fmtTime(d) {
+        return d.toLocaleTimeString('ru', { hour12: false }) +
+               '.' + String(d.getMilliseconds()).padStart(3, '0');
+    }
+
     // ── Config writes via FC16 instruction system ─────────────────────────────
     function sendInstr(code, params) {
+        _writeSentAt = performance.now();
+        document.getElementById('wt-sent').textContent = fmtTime(new Date());
+        document.getElementById('wt-recv').textContent = '—';
+        const el = document.getElementById('wt-rtt');
+        el.textContent = '— мс';
+        el.className = 'wt-val wt-rtt';
         const regs = [code, ...params];
         send({ FN: 16, ADR: getMbAddr(), RA: 300, RVC: regs.length, RD: regs, AWT: 2000 });
     }
