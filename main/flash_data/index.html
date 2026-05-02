@@ -54,6 +54,12 @@
         @keyframes flash { 0% { color: #79c0ff; } 100% { color: #e6edf3; } }
         .flash { animation: flash 0.5s ease-out; }
 
+        .section-row td {
+            background: #161b22; color: #58a6ff; font-size: 0.76em;
+            padding: 5px 10px 3px; text-transform: uppercase; letter-spacing: 1px;
+            border-top: 2px solid #21262d; border-bottom: 1px solid #21262d;
+        }
+
         /* config section */
         .config-grid {
             display: flex; gap: 16px; flex-wrap: wrap; margin-top: 8px;
@@ -238,16 +244,56 @@
     // ── Register definitions ──────────────────────────────────────────────────
     // All measurement registers are float32 (2 consecutive uint16 words, big-endian)
     const MEAS = [
-        { addr: 1000, name: "Ток фазы A",          unit: "A"    },
-        { addr: 1002, name: "Ток фазы B",          unit: "A"    },
-        { addr: 1004, name: "Ток фазы C",          unit: "A"    },
-        { addr: 1010, name: "Напряжение Ua",        unit: "В"    },
-        { addr: 1012, name: "Напряжение Ub",        unit: "В"    },
-        { addr: 1014, name: "Напряжение Uc",        unit: "В"    },
-        { addr: 1034, name: "Активная мощность",    unit: "кВт"  },
-        { addr: 1042, name: "Реактивная мощность",  unit: "кВАр" },
-        { addr: 1058, name: "Коэффициент мощности", unit: ""     },
-        { addr: 1068, name: "Частота",              unit: "Гц"   },
+        { section: "Токи" },
+        { addr: 1000, name: "Ток фазы A",               unit: "A"    },
+        { addr: 1002, name: "Ток фазы B",               unit: "A"    },
+        { addr: 1004, name: "Ток фазы C",               unit: "A"    },
+        { addr: 1006, name: "Ток средний",               unit: "A"    },
+        { addr: 1008, name: "Ток нейтрали",              unit: "A"    },
+
+        { section: "Фазные напряжения" },
+        { addr: 1010, name: "Напряжение Ua",             unit: "В"    },
+        { addr: 1012, name: "Напряжение Ub",             unit: "В"    },
+        { addr: 1014, name: "Напряжение Uc",             unit: "В"    },
+        { addr: 1016, name: "Напряжение среднее",        unit: "В"    },
+        { addr: 1018, name: "Напряж. нул. последоват.",  unit: "В"    },
+
+        { section: "Линейные напряжения" },
+        { addr: 1020, name: "Напряжение Uab",            unit: "В"    },
+        { addr: 1022, name: "Напряжение Ubc",            unit: "В"    },
+        { addr: 1024, name: "Напряжение Uca",            unit: "В"    },
+        { addr: 1026, name: "Линейное среднее",          unit: "В"    },
+
+        { section: "Активная мощность" },
+        { addr: 1028, name: "Активная мощность A",       unit: "кВт"  },
+        { addr: 1030, name: "Активная мощность B",       unit: "кВт"  },
+        { addr: 1032, name: "Активная мощность C",       unit: "кВт"  },
+        { addr: 1034, name: "Активная мощность Σ",       unit: "кВт"  },
+
+        { section: "Реактивная мощность" },
+        { addr: 1036, name: "Реактивная мощность A",     unit: "кВАр" },
+        { addr: 1038, name: "Реактивная мощность B",     unit: "кВАр" },
+        { addr: 1040, name: "Реактивная мощность C",     unit: "кВАр" },
+        { addr: 1042, name: "Реактивная мощность Σ",     unit: "кВАр" },
+
+        { section: "Полная мощность" },
+        { addr: 1044, name: "Полная мощность A",         unit: "кВА"  },
+        { addr: 1046, name: "Полная мощность B",         unit: "кВА"  },
+        { addr: 1048, name: "Полная мощность C",         unit: "кВА"  },
+        { addr: 1050, name: "Полная мощность Σ",         unit: "кВА"  },
+
+        { section: "Коэффициент мощности" },
+        { addr: 1052, name: "КМ фазы A",                 unit: ""     },
+        { addr: 1054, name: "КМ фазы B",                 unit: ""     },
+        { addr: 1056, name: "КМ фазы C",                 unit: ""     },
+        { addr: 1058, name: "КМ Σ",                      unit: ""     },
+        { addr: 1060, name: "КМ осн. гарм. A",           unit: ""     },
+        { addr: 1062, name: "КМ осн. гарм. B",           unit: ""     },
+        { addr: 1064, name: "КМ осн. гарм. C",           unit: ""     },
+        { addr: 1066, name: "КМ осн. гарм. Σ",           unit: ""     },
+
+        { section: "Частота" },
+        { addr: 1068, name: "Частота",                   unit: "Гц"   },
     ];
 
     // Single batch covers all measurements: regs 1000–1069 (70 regs)
@@ -268,12 +314,17 @@
     const tbody = document.getElementById('meas-body');
     MEAS.forEach(m => {
         const tr = document.createElement('tr');
-        tr.innerHTML = `
-            <td class="col-addr">${m.addr}–${m.addr+1}</td>
-            <td>${m.name}</td>
-            <td><span class="col-val" id="val-${m.addr}">—</span><span class="col-unit">${m.unit}</span></td>
-            <td class="col-desc" id="raw-${m.addr}"></td>
-        `;
+        if (m.section) {
+            tr.className = 'section-row';
+            tr.innerHTML = `<td colspan="4">${m.section}</td>`;
+        } else {
+            tr.innerHTML = `
+                <td class="col-addr">${m.addr}–${m.addr+1}</td>
+                <td>${m.name}</td>
+                <td><span class="col-val" id="val-${m.addr}">—</span><span class="col-unit">${m.unit}</span></td>
+                <td class="col-desc" id="raw-${m.addr}"></td>
+            `;
+        }
         tbody.appendChild(tr);
     });
 
@@ -404,6 +455,7 @@
             }
             // Measurements batch
             MEAS.forEach(m => {
+                if (m.section) return;
                 const offset = m.addr - BATCH_START;
                 if (offset + 1 < rd.length) {
                     renderVal(m.addr, f32(rd[offset], rd[offset + 1]));
