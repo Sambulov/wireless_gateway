@@ -591,17 +591,38 @@ static void vForwardCallToPeripheral(ApiCall_t *call, queue_handle_t queue) {
     webapi_msg_t *msg = malloc(sizeof(webapi_msg_t));
     if(!msg)
         return;
-    msg->fid  = call->ulFid;
-    msg->id   = call->ulId;
-    msg->data = call->pucReqData;
-    msg->len  = call->ulReqDataLen;
-    if(queue_send(queue, &msg, pdMS_TO_TICKS(0)) == pdPASS) {
-        call->pucReqData = NULL; /* ownership transferred to msg */
+    msg->fid = call->ulFid;
+    msg->id  = call->ulId;
+    msg->len = call->ulReqDataLen;
+
+    if(call->flags & CALL_FLAG_LONG_TERM) {
+        /* Long-term calls retain ownership of pucReqData so they can be re-polled.
+         * Give the peripheral a copy that it can free independently. */
+        if(call->pucReqData && call->ulReqDataLen > 0) {
+            msg->data = malloc(call->ulReqDataLen + 1);
+            if(!msg->data) { free(msg); return; }
+            memcpy(msg->data, call->pucReqData, call->ulReqDataLen);
+            msg->data[call->ulReqDataLen] = '\0';
+        } else {
+            msg->data = NULL;
+        }
+        if(queue_send(queue, &msg, pdMS_TO_TICKS(0)) != pdPASS) {
+            ESP_LOGW(TAG, "periph queue full, FID 0x%lx dropped", call->ulFid);
+            free(msg->data);
+            free(msg);
+            bApiCallSendStatus(call, API_CALL_STATUS_BUSY);
+            call->session = NULL;
+        }
     } else {
-        ESP_LOGW(TAG, "periph queue full, FID 0x%lx dropped", call->ulFid);
-        free(msg);
-        bApiCallSendStatus(call, API_CALL_STATUS_BUSY);
-        call->session = NULL;
+        msg->data = call->pucReqData;
+        if(queue_send(queue, &msg, pdMS_TO_TICKS(0)) == pdPASS) {
+            call->pucReqData = NULL; /* ownership transferred to msg */
+        } else {
+            ESP_LOGW(TAG, "periph queue full, FID 0x%lx dropped", call->ulFid);
+            free(msg);
+            bApiCallSendStatus(call, API_CALL_STATUS_BUSY);
+            call->session = NULL;
+        }
     }
 }
 

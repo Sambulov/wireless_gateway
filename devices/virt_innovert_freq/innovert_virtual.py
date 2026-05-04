@@ -70,7 +70,7 @@ def _check_crc(frame: bytes) -> bool:
 # ── Inovert virtual device ────────────────────────────────────────────────────
 
 class Inovert:
-    REG_SIZE = 800
+    REG_SIZE = 820
 
     def __init__(self, address: int = 1, on_event=None,
                  rated_freq: float = 50.0,
@@ -102,74 +102,85 @@ class Inovert:
     def _init_defaults(self):
         r = self._regs
 
-        # PA50 — firmware version
-        r[50] = 0x0110           # 1.10
+        # PA group — display / monitoring
+        r[0]  = 0                # PA00: display param selection
+        r[50] = 0x0110           # PA50: firmware version 1.10
 
         # PB group — basic functions
-        r[100] = int(self.RATED_FREQ * 10)   # PB00: target freq 50.0 Hz
+        r[100] = int(self.RATED_FREQ * 10)   # PB00: target freq
         r[101] = 3               # PB01: panel potentiometer source
         r[102] = 0               # PB02: keypad start (0=stop in virtual)
         r[103] = 1               # PB03: STOP button enabled
         r[105] = int(self.RATED_FREQ * 10)   # PB05: max freq
         r[106] = 0               # PB06: min freq 0.0 Hz
-        r[107] = 100             # PB07: accel time 10.0 s
-        r[108] = 100             # PB08: decel time 10.0 s
-        r[109] = self.RATED_VOLTAGE * 10     # PB09: max voltage (0.1V)
+        r[107] = 100             # PB07: accel time 1 = 10.0 s
+        r[108] = 100             # PB08: decel time 1 = 10.0 s
+        r[109] = self.RATED_VOLTAGE * 10     # PB09: V/F max voltage (0.1 V)
         r[110] = int(self.RATED_FREQ * 10)   # PB10: V/F base freq
-        r[111] = 0               # PB11: mid voltage 0.0 V
-        r[112] = 25              # PB12: mid freq 2.5 Hz
-        r[113] = 0               # PB13: min voltage 0.0 V
-        r[114] = 12              # PB14: min freq 1.2 Hz
+        r[111] = 0               # PB11: V/F mid voltage 0.0 V
+        r[112] = 25              # PB12: V/F mid freq 2.5 Hz
+        r[113] = 0               # PB13: V/F min voltage 0.0 V
+        r[114] = 12              # PB14: V/F min freq 1.2 Hz
         r[115] = 0               # PB15: carrier freq
         r[117] = 0               # PB17: param init
         r[118] = 0               # PB18: param lock
         r[120] = 0               # PB20: Y-channel source
         r[121] = 0               # PB21: X/Y selection → X
-        r[122] = 0               # PB22: Y relative to max
+        r[122] = 0               # PB22: Y relative to max freq
         r[123] = 100             # PB23: Y range 100 %
-        r[124] = 0               # PB24: freq correction
+        r[124] = 0               # PB24: freq correction 0.0 Hz
         r[125] = 1               # PB25: UP/DOWN base = setpoint
         r[126] = int(self.RATED_FREQ * 10)   # PB26: accel/decel base freq
-        r[127] = 0               # PB27: accel/decel mode
+        r[127] = 0               # PB27: accel/decel mode = max freq
 
         # PC group — main application params
         r[200] = 0               # PC00: normal start
         r[201] = 0               # PC01: decel-to-stop
         r[202] = 5               # PC02: start freq 0.5 Hz
         r[203] = 5               # PC03: stop freq 0.5 Hz
-        r[204] = 0               # PC04: DC brake V at start
-        r[205] = 0               # PC05: DC brake t at start
-        r[206] = 0               # PC06: DC brake V at stop
-        r[207] = 0               # PC07: DC brake t at stop
+        r[204] = 0               # PC04: DC brake V at start 0.0 %
+        r[205] = 0               # PC05: DC brake t at start 0.0 s
+        r[206] = 0               # PC06: DC brake V at stop 0.0 %
+        r[207] = 0               # PC07: DC brake t at stop 0.0 s
         r[208] = 3               # PC08: boost 3 %
         r[209] = self.RATED_VOLTAGE          # PC09: motor rated V
-        r[210] = int(self.RATED_CURRENT * 10) # PC10: motor rated I (0.1A)
+        r[210] = int(self.RATED_CURRENT * 10) # PC10: motor rated I (0.1 A)
         r[211] = 50              # PC11: idle current 50 %
-        # synchronous RPM minus ~3 % slip
         sync_rpm = 120.0 * self.RATED_FREQ / self.POLES
         r[212] = int(sync_rpm * 0.97)        # PC12: rated RPM
         r[213] = self.POLES      # PC13: number of poles
         r[215] = int(self.RATED_FREQ * 10)   # PC15: motor rated freq
+        r[216] = 0               # PC16: stator resistance 0.0 Ω
+        r[217] = 0               # PC17: rotor resistance 0.0 Ω
+        r[218] = 0               # PC18: rotor inductance 0.0 H
+        r[219] = 0               # PC19: total inductance 0.0 H
 
-        # PD group — I/O
+        # PD group — I/O params
         r[300] = 0               # PD00: AVI min V 0.0 V
         r[301] = 100             # PD01: AVI max V 10.0 V
         r[302] = 1               # PD02: AVI filter 0.1 s
-        r[303] = 40              # PD03: min current 4.0 mA
-        r[304] = 200             # PD04: max current 20.0 mA
-        r[305] = 10              # PD05: current filter 1.0 s
-        r[310] = 0               # PD10: freq at min AVI = 0.0 Hz
+        r[303] = 40              # PD03: AVI min current 4.0 mA
+        r[304] = 200             # PD04: AVI max current 20.0 mA
+        r[305] = 10              # PD05: AVI current filter 1.0 s
+        r[310] = 0               # PD10: freq at min AVI 0.0 Hz
         r[312] = int(self.RATED_FREQ * 10)   # PD12: freq at max AVI
+        r[315] = 0               # PD15: FWD terminal function
+        r[316] = 0               # PD16: REV terminal function
+        r[317] = 0               # PD17: S1 terminal function
+        r[318] = 0               # PD18: S2 terminal function
         r[325] = 1               # PD25: relay = "in operation"
-        r[329] = 0               # PD29: 2-wire mode 1
+        r[329] = 0               # PD29: 2-wire control mode
         r[330] = 100             # PD30: UP/DOWN step 1.00 Hz/s
         r[331] = 0               # PD31: positive logic
+        r[332] = 0               # PD32: FWD response time 0.0 s
+        r[333] = 0               # PD33: REV response time 0.0 s
+        r[334] = 0               # PD34: S1 response time 0.0 s
 
-        # PE group — auxiliary
+        # PE group — auxiliary params
         r[400] = 50              # PE00: jog freq 5.0 Hz
-        r[401] = 100; r[402] = 100   # PE01/02: accel/decel 2 = 10 s
-        r[403] = 100; r[404] = 100   # PE03/04: accel/decel 3 = 10 s
-        r[405] = 100; r[406] = 100   # PE05/06: accel/decel 4 = 10 s
+        r[401] = 100; r[402] = 100   # PE01/02: accel/decel 2 = 10.0 s
+        r[403] = 100; r[404] = 100   # PE03/04: accel/decel 3 = 10.0 s
+        r[405] = 100; r[406] = 100   # PE05/06: accel/decel 4 = 10.0 s
         r[407] = 100             # PE07: counter target
         r[408] = 50              # PE08: counter intermediate
         r[409] = 150             # PE09: OC limit during accel 150 %
@@ -177,6 +188,7 @@ class Inovert:
         r[411] = 1               # PE11: OV protection enabled
         r[412] = 10              # PE12: V overshoot 10 %
         r[413] = 50              # PE13: V limit 50 %
+        r[414] = 0               # PE14: brake module voltage 0.0 V
         r[415] = 100             # PE15: brake duty cycle 100 %
         r[416] = 0               # PE16: power-loss restart disabled
         r[417] = 0               # PE17: no action on power loss
@@ -186,17 +198,60 @@ class Inovert:
         r[421] = 10              # PE21: fault delay 1.0 s
         r[423] = 150             # PE23: OC detect level 150 %
         r[424] = 600             # PE24: OC time 60.0 s
-        r[425] = 0               # PE25: threshold freq 1
-        r[426] = 0               # PE26: threshold freq 2
+        r[425] = 0               # PE25: threshold freq 1 0.0 Hz
+        r[426] = 0               # PE26: threshold freq 2 0.0 Hz
         r[427] = 100             # PE27: timer 1 = 10.0 s
         r[428] = 200             # PE28: timer 2 = 20.0 s
+        r[429] = 0               # PE29: OC time at constant speed 0.0 s
         r[430] = 50              # PE30: freq-reach hysteresis 5.0 %
+        r[431] = 0               # PE31: skip freq 1 0.0 Hz
+        r[432] = 0               # PE32: skip freq 2 0.0 Hz
+        r[433] = 0               # PE33: skip freq band 0.0 Hz
 
-        # PG group — PID
-        r[604] = 25              # PG04: PID setpoint 2.5
-        r[605] = 100             # PG05: PID upper 10.0
+        # PF group — PLC params
+        r[500] = 0               # PF00: PLC cycle memory
+        r[501] = 0               # PF01: PLC enable
+        r[502] = 0               # PF02: PLC mode
+        r[503] = 200             # PF03: preset speed 1 = 20.0 Hz
+        r[504] = 100             # PF04: preset speed 2 = 10.0 Hz
+        r[505] = 200             # PF05: preset speed 3 = 20.0 Hz
+        r[506] = 250             # PF06: preset speed 4 = 25.0 Hz
+        r[507] = 300             # PF07: preset speed 5 = 30.0 Hz
+        r[508] = 350             # PF08: preset speed 6 = 35.0 Hz
+        r[509] = 400             # PF09: preset speed 7 = 40.0 Hz
+        r[510] = 450             # PF10: preset speed 8 = 45.0 Hz
+        r[511] = 500             # PF11: preset speed 9 = 50.0 Hz
+        r[512] = 100             # PF12: preset speed 10 = 10.0 Hz
+        r[513] = 100             # PF13: preset speed 11 = 10.0 Hz
+        r[514] = 100             # PF14: preset speed 12 = 10.0 Hz
+        r[515] = 100             # PF15: preset speed 13 = 10.0 Hz
+        r[516] = 100             # PF16: preset speed 14 = 10.0 Hz
+        r[517] = 100             # PF17: preset speed 15 = 10.0 Hz
+        r[518] = 3               # PF18: PLC segment time 1 = 3 s
+        r[519] = 4               # PF19: PLC segment time 2 = 4 s
+        r[520] = 5               # PF20: PLC segment time 3 = 5 s
+        r[521] = 0; r[522] = 0; r[523] = 0   # PF21-23: PLC times 4-6
+        r[524] = 0; r[525] = 0; r[526] = 0   # PF24-26: PLC times 7-9
+        r[527] = 0; r[528] = 0; r[529] = 0   # PF27-29: PLC times 10-12
+        r[530] = 0; r[531] = 0; r[532] = 0   # PF30-32: PLC times 13-15
+        r[537] = 0               # PF37: PLC time unit (s/min)
+        r[539] = 0; r[540] = 0; r[541] = 0   # PF39-41: accel/decel in PLC 1-3
+        r[542] = 0; r[543] = 0; r[544] = 0   # PF42-44: accel/decel in PLC 4-6
+        r[545] = 0; r[546] = 0; r[547] = 0   # PF45-47: accel/decel in PLC 7-9
+        r[548] = 0; r[549] = 0; r[550] = 0   # PF48-50: accel/decel in PLC 10-12
+        r[551] = 0; r[552] = 0; r[553] = 0   # PF51-53: accel/decel in PLC 13-15
+
+        # PG group — PID params
+        r[600] = 0               # PG00: PID mode
+        r[601] = 0               # PG01: PID operating mode
+        r[602] = 0               # PG02: setpoint source
+        r[603] = 0               # PG03: feedback source
+        r[604] = 25              # PG04: setpoint 2.5
+        r[605] = 100             # PG05: upper value 10.0
+        r[606] = 0               # PG06: lower value 0.0
         r[607] = 1000            # PG07: P gain 100.0 %
         r[608] = 20              # PG08: I time 2.0 s
+        r[609] = 0               # PG09: D gain 0.0
         r[610] = 20              # PG10: tolerance 2.0 %
         r[611] = 250             # PG11: sleep freq 25.0 Hz
         r[612] = 10              # PG12: sleep delay 10 s
@@ -207,15 +262,59 @@ class Inovert:
         r[617] = 480             # PG17: PID upper freq 48.0 Hz
         r[618] = 200             # PG18: PID lower freq 20.0 Hz
         r[620] = 1               # PG20: deadband 0.1 %
+        r[621] = 0               # PG21: feedback loss action
+        r[622] = 5               # PG22: feedback loss level 0.5
+        r[623] = 10              # PG23: feedback loss time 1.0 s
+        r[624] = 0               # PG24: PID reverse cutoff freq
+        r[625] = 10              # PG25: D output limit 0.1
+        r[626] = 0               # PG26: setpoint ramp time 0.0
+        r[627] = 0               # PG27: feedback filter time 0.0
+        r[628] = 0               # PG28: output freq filter time 0.0
         r[630] = 1000            # PG30: P2 gain 100.0 %
         r[631] = 20              # PG31: I2 time 2.0 s
+        r[632] = 0               # PG32: D2 gain 0.0
+        r[633] = 0               # PG33: PID/PID2 switch mode
+        r[634] = 50              # PG34: PID1 switch threshold 5.0
+        r[635] = 100             # PG35: PID2 switch threshold 10.0
+        r[636] = 0               # PG36: PID initial value 0.0
+        r[637] = 0               # PG37: initial value hold time 0.0
+        r[639] = 0               # PG39: integral action at setpoint
+        r[640] = 0               # PG40: PID mode at stop
+        r[641] = 5               # PG41: dry-run feedback level 0.5
+        r[642] = 10              # PG42: high/low pressure reset pause 10 s
+        r[643] = 10              # PG43: low pressure detection time 10 s
+        r[644] = 100             # PG44: dry-run detection time 100 s
+        r[645] = 0               # PG45: restart after power-on
+        r[646] = 600             # PG46: dry-run reset interval 600 s
+        r[647] = 60              # PG47: low-pressure reset interval 60 s
+        r[648] = 0               # PG48: anti-freeze mode
+        r[649] = 900             # PG49: anti-freeze sleep pause 900 s
+        r[650] = 30              # PG50: anti-freeze duration 30 s
+        r[651] = 150             # PG51: anti-freeze freq 15.0 Hz
+        r[652] = 5               # PG52: freq change rate to sleep 0.5 Hz/s
+        r[653] = 6               # PG53: feedback drop to sleep 0.6
+        r[654] = 3               # PG54: freq reduction per second 0.3 Hz
+        r[655] = 10              # PG55: reductions count to enter sleep
+        r[656] = 420             # PG56: sleep transition freq 42.0 Hz
+        r[657] = 4               # PG57: PID step
 
-        # PH group — RS-485
+        # PH group — RS-485 comm params
         r[700] = 1               # PH00: 9600 baud (index 1)
         r[701] = 3               # PH01: 8N1 RTU
         r[702] = self.address    # PH02: device address
         r[703] = 0               # PH03: no error action on timeout
-        r[704] = 0               # PH04: watchdog timer
+        r[704] = 50              # PH04: watchdog timer 5.0 s
+
+        # Extended params group
+        r[800] = 1               # advanced param lock: locked
+        r[801] = 0               # 50/60 Hz selection
+        r[803] = 0               # overvoltage protection level
+        r[804] = 0               # undervoltage protection level
+        r[806] = 20              # display update time 2.0 s
+        r[807] = 0               # AO min value correction
+        r[808] = 0               # AO max value correction
+        r[812] = 0               # UP/DOWN freq memory at power-off
+        r[816] = 1               # motor OC protection enabled
 
     # ── Measurement simulation ────────────────────────────────────────────────
 
@@ -568,8 +667,8 @@ def main():
         description="Virtual Inovert frequency converter (Modbus RTU slave)")
     ap.add_argument("--port",      default="/dev/ttyUSB0",
                     help="Serial port (default: /dev/ttyUSB0)")
-    ap.add_argument("--baud",      type=int, default=9600,
-                    help="Baud rate (default: 9600)")
+    ap.add_argument("--baud",      type=int, default=115200,
+                    help="Baud rate (default: 115200)")
     ap.add_argument("--address",   type=int, default=1,
                     help="Modbus slave address 1-247 (default: 1)")
     ap.add_argument("--parity",    default="N", choices=["N", "E", "O"],
