@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Virtual Inovert Frequency Converter — Modbus RTU slave (FC3 / FC6 / FC16)
+Virtual Innovert Frequency Converter — Modbus RTU slave (FC3 / FC6 / FC16)
 
 Register groups (Modbus holding registers, 0-based):
   PA   0– 50   Display / monitoring (volatile, mostly read-only per spec)
@@ -20,9 +20,9 @@ Control via RS-485 in this virtual device:
 Requirements:  pip install pyserial
 
 Usage:
-    python inovert_virtual.py --port /dev/ttyUSB1
-    python inovert_virtual.py --port /dev/ttyUSB1 --address 1 --baud 9600
-    python inovert_virtual.py --port /dev/ttyUSB1 --freq 50 --current 5.5 --voltage 380 --poles 4
+    python innovert_virtual.py --port /dev/ttyUSB1
+    python innovert_virtual.py --port /dev/ttyUSB1 --address 1 --baud 9600
+    python innovert_virtual.py --port /dev/ttyUSB1 --freq 50 --current 5.5 --voltage 380 --poles 4
 """
 
 import argparse
