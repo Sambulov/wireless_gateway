@@ -392,7 +392,7 @@
 
     // ── WebSocket ─────────────────────────────────────────────────────────────
     function connect() {
-        ws = new WebSocket(`ws://${window.location.hostname}/ws`);
+        ws = new WebSocket(`ws://${window.location.host}/ws`);
         ws.onopen    = onOpen;
         ws.onclose   = onClose;
         ws.onerror   = () => {};

@@ -552,10 +552,10 @@ class InnovertIDDXXX21E {
     }
 
     modbusHandler(arg) {
-        if (!arg?.RA || !arg?.RC || !arg?.RD) return;
-        const start  = parseInt(arg.RA, 16);
-        const count  = parseInt(arg.RC, 16);
-        const values = arg.RD.map(x => parseInt(x, 16));
+        if (arg?.RA == null || !arg?.RC || !arg?.RD) return;
+        const start  = arg.RA;
+        const count  = arg.RC;
+        const values = arg.RD.map(x => parseInt(x));
         for (let i = 0; i < count && i < values.length; i++) {
             const reg = this._regMap.get(start + i);
             if (reg) reg.VALUE = values[i];
@@ -648,7 +648,7 @@ function reconnectWs() {
 
 // ── Init ──────────────────────────────────────────────────────
 
-const gateway = `ws://${window.location.hostname}/ws`;
+const gateway = `ws://${window.location.host}/ws`;
 const gauge_fb  = new Gauge('180px', 'Hz',  '—');
 const gauge_rpm = new Gauge('180px', 'RPM', '—');
 const gauge_i   = new Gauge('180px', 'A',   '—');
