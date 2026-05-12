@@ -72,9 +72,12 @@ void app_main(void)
 
     setup_littlefs();
 
+#ifdef CONFIG_QEMU_BUILD
+    eth_init_openeth();
+#else
     wifi_init_ap_sta(&app_context.ap_cnf, &app_context.sta_cnf);
-
     tftp_example_init_server();
+#endif
 
     // /* Start the server for the first time */
     app_context.web_server = start_webserver();

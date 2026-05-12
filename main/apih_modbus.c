@@ -284,7 +284,7 @@ esp_err_t ws_modbus_run(app_context_t *app) {
             return ESP_FAIL;
         }
 
-        mb_queues[i] = queue_create(5, sizeof(void *));
+        mb_queues[i] = queue_create(32, sizeof(void *));
         w->queue = mb_queues[i];
 
         app->uart.port[i].proto_context = &w->mb;

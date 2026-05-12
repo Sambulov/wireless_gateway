@@ -210,6 +210,49 @@
             <button class="btn" onclick="sendCommParams()">Записать</button>
         </div>
 
+        <!-- UART port config -->
+        <div class="config-card">
+            <h3>UART шлюза (FID 0x1010 / 0x1020)</h3>
+            <div class="cfg-row">
+                <label>Скорость</label>
+                <select id="uart-baud">
+                    <option value="1200">1200</option>
+                    <option value="2400">2400</option>
+                    <option value="4800">4800</option>
+                    <option value="9600">9600</option>
+                    <option value="19200">19200</option>
+                    <option value="38400">38400</option>
+                    <option value="57600">57600</option>
+                    <option value="115200" selected>115200</option>
+                </select>
+            </div>
+            <div class="cfg-row">
+                <label>Биты данных</label>
+                <select id="uart-wl">
+                    <option value="5">5</option>
+                    <option value="6">6</option>
+                    <option value="7">7</option>
+                    <option value="8" selected>8</option>
+                </select>
+            </div>
+            <div class="cfg-row">
+                <label>Чётность</label>
+                <select id="uart-par">
+                    <option value="0" selected>None</option>
+                    <option value="1">Odd</option>
+                    <option value="2">Even</option>
+                </select>
+            </div>
+            <div class="cfg-row">
+                <label>Стоп-биты</label>
+                <select id="uart-sb">
+                    <option value="1" selected>1</option>
+                    <option value="2">2</option>
+                </select>
+            </div>
+            <button class="btn" onclick="sendUartConfig()">Записать</button>
+        </div>
+
         <!-- Reset -->
         <div class="config-card">
             <h3>Сброс (инстр. 1301)</h3>
@@ -349,7 +392,7 @@
 
     // ── WebSocket ─────────────────────────────────────────────────────────────
     function connect() {
-        ws = new WebSocket(`ws://${window.location.hostname}/ws`);
+        ws = new WebSocket(`ws://${window.location.host}/ws`);
         ws.onopen    = onOpen;
         ws.onclose   = onClose;
         ws.onerror   = () => {};
@@ -547,6 +590,20 @@
     function sendReset(type) {
         if (!confirm(`Подтвердите сброс (тип ${type})`)) return;
         sendInstr(1301, [type]);
+    }
+
+    function sendUartConfig() {
+        const modbusReqFid = getFid();
+        // map MODBUS_REQ FID → UART_CNF FID: 0x1113→0x1010, 0x1123→0x1020
+        const cnfFid = modbusReqFid === 0x1113 ? 0x1010 : 0x1020;
+        const arg = {
+            BR:  parseInt(document.getElementById('uart-baud').value),
+            WL:  parseInt(document.getElementById('uart-wl').value),
+            PAR: parseInt(document.getElementById('uart-par').value),
+            SB:  parseInt(document.getElementById('uart-sb').value),
+        };
+        if (!ws || ws.readyState !== WebSocket.OPEN) { alert('Нет соединения'); return; }
+        ws.send(JSON.stringify({ FID: cnfFid, FLAGS: 0, SID: nextSid(), ARG: arg }));
     }
 
     connect();

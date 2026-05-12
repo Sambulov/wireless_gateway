@@ -39,4 +39,13 @@ menu "Project Configuration"
                 Type something klever or add some other options & properties
                 @"Show me the code!!!"
 
+    config QEMU_BUILD
+        bool "Build for QEMU emulator"
+        default n
+        help
+            Skip WiFi, TFTP, and HTTP/WebSocket server initialization.
+            The ESP32 PHY/radio hardware is not emulated by QEMU; enabling
+            this option prevents the LoadStorePIFAddrError crash so that
+            NVS, UART, and filesystem code can be tested under QEMU.
+
 endmenu

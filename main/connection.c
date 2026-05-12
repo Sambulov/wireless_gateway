@@ -23,6 +23,12 @@
 
 #include "app.h"
 
+#ifdef CONFIG_QEMU_BUILD
+#include "esp_eth.h"
+#include "esp_eth_mac.h"
+#include "esp_eth_phy.h"
+#endif
+
 extern httpd_handle_t server;
 
 #define MACSTR "%02x:%02x:%02x:%02x:%02x:%02x"
@@ -359,3 +365,48 @@ void wifi_init_ap_sta(wifi_config_t *ap_cnf, wifi_config_t *sta_cnf) {
         ESP_LOGI(TAG, "STA: Connecting to %s...", sta_cnf->sta.ssid);
     }
 }
+
+#ifdef CONFIG_QEMU_BUILD
+static void eth_event_handler(void *arg, esp_event_base_t event_base,
+                              int32_t event_id, void *event_data)
+{
+    if (event_base == IP_EVENT && event_id == IP_EVENT_ETH_GOT_IP) {
+        ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
+        ESP_LOGI(TAG, "Ethernet got IP: " IPSTR, IP2STR(&event->ip_info.ip));
+    }
+}
+
+void eth_init_openeth(void)
+{
+    for (uint8_t i = 0; i < LINKS_MAX_AMOUNT; i++)
+        linked_list_insert_last(&links_free, linked_list_item(&links_pool[i]));
+
+    ESP_ERROR_CHECK(esp_netif_init());
+    ESP_ERROR_CHECK(esp_event_loop_create_default());
+
+    esp_netif_config_t netif_cfg = ESP_NETIF_DEFAULT_ETH();
+    apxNetIf[NET_IF_ETH_IND] = esp_netif_new(&netif_cfg);
+    assert(apxNetIf[NET_IF_ETH_IND]);
+
+    eth_mac_config_t mac_config = ETH_MAC_DEFAULT_CONFIG();
+    eth_phy_config_t phy_config = ETH_PHY_DEFAULT_CONFIG();
+    phy_config.autonego_timeout_ms = 100;
+    phy_config.reset_gpio_num = -1;
+
+    esp_eth_mac_t *mac = esp_eth_mac_new_openeth(&mac_config);
+    esp_eth_phy_t *phy = esp_eth_phy_new_dp83848(&phy_config);
+
+    esp_eth_config_t eth_config = ETH_DEFAULT_CONFIG(mac, phy);
+    esp_eth_handle_t eth_handle = NULL;
+    ESP_ERROR_CHECK(esp_eth_driver_install(&eth_config, &eth_handle));
+
+    esp_eth_netif_glue_handle_t eth_glue = esp_eth_new_netif_glue(eth_handle);
+    ESP_ERROR_CHECK(esp_netif_attach(apxNetIf[NET_IF_ETH_IND], eth_glue));
+
+    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_ETH_GOT_IP,
+                                               &eth_event_handler, NULL));
+
+    ESP_ERROR_CHECK(esp_eth_start(eth_handle));
+    ESP_LOGI(TAG, "OpenEth Ethernet started, waiting for DHCP...");
+}
+#endif /* CONFIG_QEMU_BUILD */
