@@ -72,6 +72,7 @@ void app_main(void)
 
     setup_littlefs();
 
+#ifndef CONFIG_QEMU_BUILD
     wifi_init_ap_sta(&app_context.ap_cnf, &app_context.sta_cnf);
 
     tftp_example_init_server();
@@ -85,9 +86,11 @@ void app_main(void)
     webserver_register_handler(app_context.web_server, &file_upload);
     webserver_register_handler(app_context.web_server, &file_delete);
     webserver_register_handler(app_context.web_server, &file_server);
+#endif /* CONFIG_QEMU_BUILD */
 
     ESP_LOGI(TAG, "Run");
 
+#ifndef CONFIG_QEMU_BUILD
     ret = ws_uart_run(&app_context);
     if (!ret)
 	ESP_LOGI("app", "can't run ws_uart task");
@@ -105,4 +108,9 @@ void app_main(void)
         /* give other tasks to work, also idle task to reset wdt */
         task_delay(pdMS_TO_TICKS(1));
     }
+#else
+    while (1) {
+        task_delay(pdMS_TO_TICKS(1000));
+    }
+#endif /* CONFIG_QEMU_BUILD */
 }
