@@ -5,6 +5,7 @@
 dependencies.lock
 sdkconfig.old
 sdkconfig
+*__pycache__*
 
 # Prerequisites
 *.d
