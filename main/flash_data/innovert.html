@@ -4,37 +4,202 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta charset="UTF-8">
     <style>
-        body { font-family: sans-serif; font-size: 13px; }
-        table { border-collapse: collapse; margin: 8px 0; width: 100%; }
-        th, td { border: 1px solid #bbb; padding: 4px 7px; text-align: left; }
-        th { background: #e8e8e8; }
-        tr.group-header td { background: #c8dff0; font-weight: bold; font-size: 14px; }
-        tr.ro { color: #555; }
-        button { padding: 2px 8px; }
-        select, input[type="number"], input[type="text"] { width: 130px; }
+        *, *::before, *::after { box-sizing: border-box; }
+
+        body {
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            font-size: 13px;
+            margin: 0;
+            background: #f0f2f5;
+            color: #1a1a2e;
+        }
+
+        /* ── Header ── */
+        .header {
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 60%, #0f3460 100%);
+            color: #fff;
+            padding: 0 16px;
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            flex-wrap: wrap;
+            box-shadow: 0 2px 8px rgba(0,0,0,.35);
+            min-height: 52px;
+        }
+        .header-title {
+            font-size: 15px;
+            font-weight: 600;
+            letter-spacing: .5px;
+            color: #e0e6f0;
+            white-space: nowrap;
+        }
+        .header-sep { flex: 1; }
+        .header label { display: inline-flex; align-items: center; gap: 5px; color: #aab4c8; font-size: 0.82em; white-space: nowrap; }
+        .header select, .header input[type=number] {
+            background: #0f3460;
+            color: #e0e6f0;
+            border: 1px solid #2a4a80;
+            border-radius: 4px;
+            padding: 3px 6px;
+            font-size: 12px;
+            width: auto;
+        }
+        .header button {
+            background: #e94560;
+            color: #fff;
+            border: none;
+            border-radius: 5px;
+            padding: 5px 14px;
+            font-size: 12px;
+            cursor: pointer;
+            transition: background .15s;
+        }
+        .header button:hover { background: #c73652; }
+
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            padding: 3px 12px;
+            border-radius: 20px;
+            font-size: 0.78em;
+            font-weight: 700;
+            letter-spacing: .3px;
+            white-space: nowrap;
+        }
+        .badge::before { content: ''; display: inline-block; width: 7px; height: 7px; border-radius: 50%; }
+        .badge.ok  { background: #1b4332; color: #52c97a; }
+        .badge.ok::before  { background: #52c97a; box-shadow: 0 0 4px #52c97a; }
+        .badge.err { background: #4a1020; color: #f87171; }
+        .badge.err::before { background: #f87171; }
+
+        /* ── UART config strip ── */
+        .uart-config {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            flex-wrap: wrap;
+            padding: 7px 16px;
+            background: #1e2a3a;
+            border-bottom: 1px solid #2a3a50;
+            font-size: 12px;
+            color: #8899aa;
+        }
+        .uart-config b { color: #aab4c8; font-weight: 600; }
+        .uart-config label { display: inline-flex; align-items: center; gap: 4px; }
+        .uart-config select {
+            background: #0f1e2e;
+            color: #c8d6e5;
+            border: 1px solid #2a3a50;
+            border-radius: 4px;
+            padding: 2px 5px;
+            font-size: 12px;
+            width: auto;
+        }
+        .uart-config button {
+            background: #0f3460;
+            color: #c8d6e5;
+            border: 1px solid #2a4a80;
+            border-radius: 4px;
+            padding: 3px 12px;
+            font-size: 12px;
+            cursor: pointer;
+            transition: background .15s;
+        }
+        .uart-config button:hover { background: #1a4a80; }
+
+        /* ── Main layout ── */
+        .main { display: flex; flex-wrap: wrap; gap: 16px; padding: 16px; align-items: flex-start; }
+
+        /* ── Gauge card ── */
+        .gauges-card {
+            background: #fff;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,.08);
+            padding: 12px 16px 8px;
+            flex: 0 0 auto;
+        }
+        .gauges-card h3 {
+            margin: 0 0 8px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: .8px;
+            color: #6b7280;
+        }
+        .gauges { display: flex; flex-wrap: wrap; gap: 4px; }
+        .gauge-wrap { display: flex; flex-direction: column; align-items: center; }
+        .gauge-label { font-size: 11px; font-weight: 600; color: #6b7280; margin-top: 2px; letter-spacing: .3px; }
+
+        /* ── Register table card ── */
+        #reg-table-wrap {
+            flex: 1 1 580px;
+            background: #fff;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,.08);
+            padding: 12px 16px;
+            overflow-x: auto;
+        }
+        #reg-table-wrap h3 {
+            margin: 0 0 10px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: .8px;
+            color: #6b7280;
+        }
+
+        table { border-collapse: collapse; width: 100%; }
+        th, td { border: 1px solid #e5e7eb; padding: 5px 9px; text-align: left; }
+        th {
+            background: #f8fafc;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: .5px;
+            color: #6b7280;
+        }
+        tr:hover td { background: #f0f7ff; }
+        tr.group-header td {
+            background: linear-gradient(90deg, #1a1a2e, #0f3460);
+            color: #c8d6e5;
+            font-weight: 600;
+            font-size: 12px;
+            letter-spacing: .4px;
+            border-color: #0f3460;
+        }
+        tr.ro td { color: #9ca3af; }
+        .updating { background-color: #fef9c3 !important; }
+
+        /* ── Form elements in table ── */
+        select, input[type="number"], input[type="text"] {
+            width: 130px;
+            border: 1px solid #d1d5db;
+            border-radius: 4px;
+            padding: 2px 6px;
+            font-size: 12px;
+            background: #fff;
+        }
+        select:focus, input:focus { outline: 2px solid #0f3460; border-color: transparent; }
         label { display: block; margin: 2px 0; }
-        .updating { background-color: #ffffcc !important; }
-        .main { display: flex; flex-wrap: wrap; }
-        #reg-table-wrap { margin: 10px; flex: 1 1 600px; }
-        .gauges { display: flex; flex-wrap: wrap; }
-
-        .toolbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 8px 10px; background: #f5f5f5; border-bottom: 1px solid #ddd; }
-        .toolbar label { display: inline; margin: 0; font-size: 0.85em; color: #555; }
-        .toolbar select, .toolbar input[type=number] { width: auto; padding: 3px 6px; }
-        .toolbar button { padding: 4px 12px; }
-        .badge { display: inline-block; padding: 2px 10px; border-radius: 10px; font-size: 0.8em; font-weight: bold; }
-        .badge.ok  { background: #d4edda; color: #155724; }
-        .badge.err { background: #f8d7da; color: #721c24; }
-
-        .uart-config { display: flex; gap: 10px; flex-wrap: wrap; padding: 8px 10px; background: #fafafa; border-bottom: 1px solid #ddd; align-items: flex-end; }
-        .uart-config label { display: inline; margin: 0; font-size: 0.82em; color: #555; }
-        .uart-config select { width: auto; padding: 3px 6px; }
+        button {
+            border: 1px solid #d1d5db;
+            border-radius: 4px;
+            padding: 3px 10px;
+            background: #f8fafc;
+            cursor: pointer;
+            font-size: 12px;
+            transition: background .15s;
+        }
+        button:hover { background: #e5e7eb; }
     </style>
 </head>
 <body>
-<div class="toolbar">
+<div class="header">
+    <div class="header-title">⚡ Innovert — Частотный преобразователь</div>
+    <div class="header-sep"></div>
     <span id="ws-status" class="badge err">Нет соединения</span>
-    <label>MB адрес:&nbsp;<input type="number" id="mb-addr" value="1" min="1" max="247" style="width:55px"></label>
+    <label>Адрес MB:&nbsp;<input type="number" id="mb-addr" value="1" min="1" max="247" style="width:52px"></label>
     <label>UART:&nbsp;
         <select id="uart-sel">
             <option value="4371">UART1 (0x1113)</option>
@@ -73,8 +238,13 @@
     <button onclick="sendUartConfig()">Записать</button>
 </div>
 <div class="main">
-    <div class="gauges" id="gauges"></div>
-    <div id="reg-table-wrap"></div>
+    <div class="gauges-card">
+        <h3>Мониторинг</h3>
+        <div class="gauges" id="gauges"></div>
+    </div>
+    <div id="reg-table-wrap">
+        <h3>Регистры</h3>
+    </div>
 </div>
 <script>
 class InnovertIDDXXX21E {
@@ -585,32 +755,45 @@ class InnovertIDDXXX21E {
 // ── Gauge ─────────────────────────────────────────────────────
 
 class Gauge {
-    constructor(size, units, holder) {
+    constructor(size, units, holder, color = '#4CAF50') {
+        const id = 'gv_' + Math.random().toString(36).slice(2);
         this.elem = document.createElement('div');
         this.elem.style.cssText = `width:${size};height:${size};position:relative;margin:5px;`;
         this.elem.innerHTML = `
             <svg viewBox="0 0 200 200" style="position:absolute;width:100%;height:100%;">
-                <path class="arc" style="fill:none;stroke:#4CAF50;stroke-width:10;stroke-linecap:round;"
+                <path class="arc-bg" style="fill:none;stroke:#e2e8f0;stroke-width:10;stroke-linecap:round;"
                       d="M22.06 145 A90 90 0 1 1 177.94 145"/>
-                <text x="50%" y="62%" font-size="20px" dominant-baseline="middle" text-anchor="middle">${units}</text>
-                <text id="gv" x="50%" y="75%" font-size="36px" dominant-baseline="middle" text-anchor="middle">${holder}</text>
+                <path class="arc" style="fill:none;stroke:${color};stroke-width:10;stroke-linecap:round;"
+                      d="M22.06 145 A90 90 0 1 1 177.94 145"/>
+                <text x="50%" y="62%" font-size="18px" fill="#94a3b8" dominant-baseline="middle" text-anchor="middle">${units}</text>
+                <text id="${id}" x="50%" y="77%" font-size="34px" fill="#1e293b" font-weight="600" dominant-baseline="middle" text-anchor="middle">${holder}</text>
             </svg>
             <div class="ndl" style="position:absolute;top:50%;left:50%;width:2px;height:40%;
-                 background:#222;transform-origin:50% 100%;
+                 background:${color};transform-origin:50% 100%;
                  transition:transform .5s ease-in-out;transform:translate(-50%,-100%) rotate(-120deg);"></div>
-            <div style="position:absolute;top:50%;left:50%;width:10px;height:10px;background:#222;
-                 border-radius:50%;transform:translate(-50%,-50%);"></div>`;
+            <div style="position:absolute;top:50%;left:50%;width:10px;height:10px;background:${color};
+                 border-radius:50%;transform:translate(-50%,-50%);box-shadow:0 0 6px ${color};"></div>`;
+        this._totalLen = null;
         this.min = 0; this.max = 10;
         this.ndl = this.elem.querySelector('.ndl');
         this.arc = this.elem.querySelector('.arc');
-        this.gv  = this.elem.querySelector('#gv');
+        this.gv  = this.elem.querySelector(`#${id}`);
+    }
+    _arcLen() {
+        if (!this._totalLen) this._totalLen = this.arc.getTotalLength();
+        return this._totalLen;
     }
     setScale(mn, mx) { this.min = mn; this.max = mx; }
     setValue(v) {
         v = Math.max(this.min, Math.min(this.max, v));
-        const a = -120 + (v - this.min) / (this.max - this.min) * 240;
+        const frac = (v - this.min) / (this.max - this.min);
+        const a = -120 + frac * 240;
         this.ndl.style.transform = `translate(-50%,-100%) rotate(${a}deg)`;
         this.gv.textContent = v.toFixed(1);
+        try {
+            const len = this._arcLen();
+            this.arc.style.strokeDasharray = `${frac * len} ${len}`;
+        } catch(_) {}
     }
     getElement() { return this.elem; }
 }
@@ -649,16 +832,26 @@ function reconnectWs() {
 // ── Init ──────────────────────────────────────────────────────
 
 const gateway = `ws://${window.location.host}/ws`;
-const gauge_fb  = new Gauge('180px', 'Hz',  '—');
-const gauge_rpm = new Gauge('180px', 'RPM', '—');
-const gauge_i   = new Gauge('180px', 'A',   '—');
-const gauge_v   = new Gauge('180px', 'V',   '—');
+const gauge_fb  = new Gauge('160px', 'Hz',  '—', '#3b82f6');
+const gauge_rpm = new Gauge('160px', 'RPM', '—', '#8b5cf6');
+const gauge_i   = new Gauge('160px', 'A',   '—', '#f59e0b');
+const gauge_v   = new Gauge('160px', 'V',   '—', '#10b981');
 gauge_fb.setScale(0, 60);
 gauge_rpm.setScale(0, 2000);
 gauge_i.setScale(0, 20);
 gauge_v.setScale(0, 800);
 const gc = document.getElementById('gauges');
-[gauge_fb, gauge_rpm, gauge_i, gauge_v].forEach(g => gc.appendChild(g.getElement()));
+const gaugeLabels = ['Частота', 'Обороты', 'Ток', 'Напряжение DC'];
+[gauge_fb, gauge_rpm, gauge_i, gauge_v].forEach((g, i) => {
+    const w = document.createElement('div');
+    w.className = 'gauge-wrap';
+    w.appendChild(g.getElement());
+    const lbl = document.createElement('div');
+    lbl.className = 'gauge-label';
+    lbl.textContent = gaugeLabels[i];
+    w.appendChild(lbl);
+    gc.appendChild(w);
+});
 
 const x = new InnovertIDDXXX21E(gateway);
 

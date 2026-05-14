@@ -4,6 +4,7 @@
 
 dependencies.lock
 sdkconfig.old
+sdkconfig
 
 # Prerequisites
 *.d
