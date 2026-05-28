@@ -68,6 +68,8 @@ static void uart_event_task(void *pvParameters) {
             break;
         //Event of UART RX break detected
         case UART_BREAK:
+            gw_uart_event_data_t ev_trig = {.rx_break = 1, .buf = NULL, .size = 0};
+            event_raise(&uart->on_receive, uart, &ev_trig);
             //ESP_LOGI(TAG, "uart rx break");
             break;
         //Event of UART parity check error

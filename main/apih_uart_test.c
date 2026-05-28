@@ -1,5 +1,8 @@
 #include "app.h"
 
+#define UART_TEST_HANDLERS 0
+
+#if UART_TEST_HANDLERS
 static void log_uart_config(app_context_t *app)
 {
     static const char *parity_str[] = { "none", "odd", "even" };
@@ -18,6 +21,7 @@ static void log_uart_config(app_context_t *app)
         }
     }
 }
+
 static void vUartRawRxTest(void *pvParameters)
 {
     static const struct {
@@ -153,8 +157,10 @@ static void vUartRawTxTest(void *pvParameters)
     }
 }
 
+
 void ws_uart_integrational_test_run(app_context_t *app)
 {
 //    xTaskCreate(vUartRawTxTest, "uart_tx_test", 4096, app, 4, NULL);
     xTaskCreate(vUartRawRxTest, "uart_rx_test", 4096, app, 4, NULL);
 }
+#endif

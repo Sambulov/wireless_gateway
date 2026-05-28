@@ -296,6 +296,7 @@ static void handle_msg(app_context_t *app, webapi_msg_t *in_msg)
 	switch (in_msg->fid) {
 	case ESP_WS_API_UART1_CNF:
 		app_uart = &app->uart.port[0];
+        /* fall through */
 	case ESP_WS_API_UART2_CNF:
 		if (!app_uart)
 			app_uart = &app->uart.port[1];
@@ -314,6 +315,7 @@ static void handle_msg(app_context_t *app, webapi_msg_t *in_msg)
 		break;
 	case ESP_WS_API_UART1_RAW_RX:
 		ctx = &uart_context[0];
+        /* fall through */
 	case ESP_WS_API_UART2_RAW_RX:
 		if (!ctx)
 			ctx = &uart_context[1];
@@ -347,6 +349,7 @@ static void handle_msg(app_context_t *app, webapi_msg_t *in_msg)
 		break;
 	case ESP_WS_API_UART1_RAW_TX:
 		ctx = &uart_context[0];
+        /* fall through */
 	case ESP_WS_API_UART2_RAW_TX:
 		if (!ctx)
 			ctx = &uart_context[1];

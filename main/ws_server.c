@@ -59,7 +59,7 @@ static LinkedList_t pxWsApiHandlers = NULL;
 static LinkedList_t pxWsApiCall = NULL;
 static LinkedList_t pxWsApiWaitingForResponse = NULL;
 static queue_handle_t xWsWorkerQueue = NULL;
-static uint32_t call_id = 1; /* 0 is reserved as "broadcast" sentinel in periph_msg.id */
+//static uint32_t call_id = 1; /* 0 is reserved as "broadcast" sentinel in periph_msg.id */
 
 queue_handle_t get_ws_worker_queue(void) {
     return xWsWorkerQueue;
@@ -72,12 +72,12 @@ static uint8_t bHandlerFidMatch(LinkedListItem_t *item, void *arg) {
     return LinkedListGetObject(ApiHandlerItem_t, item)->ulFid == fid;
 }
 
-static uint8_t bCallClientMatch(LinkedListItem_t *item, void *arg) {
-    uint32_t fd = cl_tuple_get(arg, 0, uint32_t);
-    uint32_t fid = cl_tuple_get(arg, 1, uint32_t);
-    ApiCall_t *call = LinkedListGetObject(ApiCall_t, item);
-    return call->session && (call->session->fd == fd) && (call->ulFid == fid);
-}
+// static uint8_t bCallClientMatch(LinkedListItem_t *item, void *arg) {
+//     uint32_t fd = cl_tuple_get(arg, 0, uint32_t);
+//     uint32_t fid = cl_tuple_get(arg, 1, uint32_t);
+//     ApiCall_t *call = LinkedListGetObject(ApiCall_t, item);
+//     return call->session && (call->session->fd == fd) && (call->ulFid == fid);
+// }
 
 static uint8_t bCallClientIdMatch(LinkedListItem_t *item, void *arg) {
     uint32_t fd  = cl_tuple_get(arg, 0, uint32_t);
@@ -713,7 +713,7 @@ static void vWsApiCallWorker(void *pvParameters) {
                     ApiCall_t *c = LinkedListGetObject(ApiCall_t, it);
                     c->fHandler(c, &c->pxHandlerContext, c->ulCallPending, periph_msg.data, periph_msg.len);
                     if (periph_msg.len) {
-                        ESP_LOGI(TAG, "broadcast fid:%lu len:%lu", periph_msg.fid, periph_msg.len);
+                        ESP_LOGI(TAG, "broadcast fid:%d len:%u", periph_msg.fid, periph_msg.len);
                         _bApiCallSendJson(c, 0, periph_msg.data, periph_msg.len);
                     }
                     if (!(c->flags & CALL_FLAG_LONG_TERM)) {
@@ -729,7 +729,7 @@ static void vWsApiCallWorker(void *pvParameters) {
 
             LinkedListItem_t *item = pxLinkedListFindFirst(pxWsApiWaitingForResponse, bCallIdMatch, (void *)periph_msg.id);
             if (!item) {
-                ESP_LOGI(TAG, "Arrived message from peripheral with id %lu that are no tied to any API calls", periph_msg.id);
+                ESP_LOGI(TAG, "Arrived message from peripheral with id %d that are no tied to any API calls", periph_msg.id);
                 goto next;
             }
 
@@ -741,7 +741,7 @@ static void vWsApiCallWorker(void *pvParameters) {
 
             call->fHandler(call, &call->pxHandlerContext, call->ulCallPending, periph_msg.data, periph_msg.len);
             if(periph_msg.len) {
-                ESP_LOGI(TAG, "sent: %s : %lu", periph_msg.data, periph_msg.len);
+                ESP_LOGI(TAG, "sent: %s : %u", periph_msg.data, periph_msg.len);
                 _bApiCallSendJson(call, 0, periph_msg.data, periph_msg.len);
             }
 

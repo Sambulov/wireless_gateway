@@ -13,13 +13,13 @@ static uint32_t mb_timer_fn(const void *ctx) {
 }
 
 static const modbus_iface_t mb_iface = {
-    .pfRead  = gw_uart_read,
     .pfWrite = gw_uart_write,
     .pfTimer = mb_timer_fn,
 };
 
 typedef struct {
     modbus_t          mb;
+    delegate_t        uart_delegate;
     uint8_t           payload[MB_PAYLOAD_SIZE];
     queue_handle_t    queue;
     struct app_uart_t *app_uart;
@@ -41,14 +41,13 @@ queue_handle_t get_modbus_worker_queue(uint32_t fid) {
     return NULL;
 }
 
-static void mb_on_complete(modbus_t *mb, void *ctx, modbus_frame_t *frame) {
+static void mb_on_complete(modbus_frame_t *frame, modbus_t *mb, void *ctx) {
     (void)mb;
     mb_cb_ctx_t *cb = (mb_cb_ctx_t *)ctx;
     if (frame) {
         cb->frame = *frame;
-        if (frame->pucData && frame->ucBufferSize > 0) {
-            uint8_t sz = frame->ucBufferSize < MB_PAYLOAD_SIZE ? frame->ucBufferSize : MB_PAYLOAD_SIZE;
-            memcpy(cb->data, frame->pucData, sz);
+        if (frame->pucData) {
+            memcpy(cb->data, frame->pucData, frame->ucLengthCode);
             cb->frame.pucData = cb->data;
         } else {
             cb->frame.pucData = NULL;
@@ -92,7 +91,7 @@ static void send_mb_error(int id, int fid, int code) {
 static void format_and_send_mb_response(int id, int fid, mb_cb_ctx_t *cb) {
     modbus_frame_t *f = &cb->frame;
     uint8_t code = 0, amount = 0, size = 0;
-    uint8_t *regs = modbus_frame_data(f, &code, &amount, &size);
+    uint8_t *regs = modbus_extruct_frame_data(f, &code, &amount, &size);
 
     /* Estimate buffer: header ~80 bytes + per-register up to 7 bytes each */
     size_t buf_sz = 96 + (amount > 0 ? (size_t)(amount) * 9 : 0);
@@ -172,8 +171,7 @@ static void handle_modbus_msg(modbus_worker_t *w, webapi_msg_t *msg) {
             if (n > 0) {
                 int stride = (frame.ucFunc == MB_FUNC_WRITE_COILS) ? 1 : 2;
                 if (n * stride > MB_PAYLOAD_SIZE) break;
-                frame.ucBufferSize  = (uint8_t)(n * stride);
-                frame.ucLengthCode  = frame.ucBufferSize;
+                frame.ucLengthCode  = (uint8_t)(n * stride);
                 frame.pucData = wr_buf;
                 cJSON *elem = rd->child;
                 for (int i = 0; i < n && elem; i++, elem = elem->next) {
@@ -206,19 +204,20 @@ static void handle_modbus_msg(modbus_worker_t *w, webapi_msg_t *msg) {
     w->payload[0] = 0; /* clear */
     modbus_config_t cfg_update = {
         .pxIface            = &mb_iface,
-        .pxRxContext        = &w->app_uart->desc,
         .pxTxContext        = &w->app_uart->desc,
         .pxTimerContext     = NULL,
+        .pxRequestContext   = NULL, /* for server only */
+        .pfOnRequest        = NULL, /* for server only */
         .pucPayLoadBuffer   = w->payload,
         .ucPayLoadBufferSize = MB_PAYLOAD_SIZE,
-        .rx_timeout         = (uint16_t)(awt_ms),
-        .tx_timeout         = (uint16_t)(awt_ms),
-        .bAsciiMode         = 0,
-        .bPduMode           = 0,
+        .usRxTimeout        = 0, /* for server only */
+        .usTxTimeout        = (uint16_t)(awt_ms),
+        .eMode              = MB_MODE_RTU,
+        .bIsServer          = 0
     };
     modbus_init(&w->mb, &cfg_update);
 
-    uint32_t tid = modbus_request(&w->mb, &frame, mb_on_complete, &cb);
+    uint16_t tid = modbus_request(&w->mb, &frame, mb_on_complete, &cb, (uint16_t)(awt_ms));
     if (!tid) {
         gw_uart_unlock_rx(&w->app_uart->desc);
         send_mb_error(msg->id, msg->fid, 3);
@@ -232,7 +231,7 @@ static void handle_modbus_msg(modbus_worker_t *w, webapi_msg_t *msg) {
     }
 
     if (!cb.done) {
-        modbus_cancel_request(&w->mb, tid);
+        modbus_reset(&w->mb);
         gw_uart_unlock_rx(&w->app_uart->desc);
         send_mb_error(msg->id, msg->fid, 4);
         return;
@@ -260,23 +259,33 @@ static void ws_modbus_task(void *param) {
     }
 }
 
+static void mb_receive(void *event_trigger, void *sender, void *context) {
+    modbus_t *mb = (modbus_t *)context;
+    gw_uart_event_data_t *ev_trig = (gw_uart_event_data_t *)event_trigger;
+    modbus_receive_data(mb, ev_trig->buf, ev_trig->size, ev_trig->rx_break);
+}
+
 esp_err_t ws_modbus_run(app_context_t *app) {
     for (int i = 0; i < 2; i++) {
         modbus_worker_t *w = &mb_workers[i];
         w->app_uart = &app->uart.port[i];
         w->port_no  = i;
+        w->uart_delegate.handler = mb_receive;
+        w->uart_delegate.context = &w->mb;
+        gw_uart_on_receive_subscribe(&app->uart.port[i], &w->uart_delegate);
 
         modbus_config_t cfg = {
             .pxIface            = &mb_iface,
-            .pxRxContext        = &w->app_uart->desc,
             .pxTxContext        = &w->app_uart->desc,
             .pxTimerContext     = NULL,
+            .pxRequestContext   = NULL, /* for server only */
+            .pfOnRequest        = NULL, /* for server only */
             .pucPayLoadBuffer   = w->payload,
             .ucPayLoadBufferSize = MB_PAYLOAD_SIZE,
-            .rx_timeout         = MB_DEFAULT_AWT_MS,
-            .tx_timeout         = MB_DEFAULT_AWT_MS,
-            .bAsciiMode         = 0,
-            .bPduMode           = 0,
+            .usRxTimeout        = 0, /* for server only */
+            .usTxTimeout        = MB_DEFAULT_AWT_MS,
+            .eMode              = MB_MODE_RTU,
+            .bIsServer          = 0
         };
 
         if (!modbus_init(&w->mb, &cfg)) {

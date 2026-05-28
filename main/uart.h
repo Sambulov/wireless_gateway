@@ -47,6 +47,7 @@ extern const gw_uart_config_t gw_uart_config_default;
 typedef struct {
   uint8_t *buf;
   uint32_t size;
+  uint8_t rx_break :1;
 } gw_uart_event_data_t;
 
 uint8_t gw_uart_init(void *desc, gw_uart_port_t port, uint32_t buffer_size);

@@ -278,7 +278,8 @@ static void ip_event_handler(void *arg, esp_event_base_t event_base, int32_t eve
             if(mem_cmp(&link->ip, &data->ip, sizeof(esp_ip4_addr_t))) {
                 ESP_LOGI(TAG, "Wi-Fi AP client new IP assignned");
                 mem_cpy(&link->ip, &data->ip, sizeof(esp_ip4_addr_t));
-                event_raise_clear(&link->event, NULL, NULL); /* drop connections */
+                event_raise(&link->event, NULL, NULL); /* drop connections */
+                event_clear(&link->event);
             }
         }
     }
@@ -297,7 +298,8 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
         if(item != NULL) {
             link_t *link = linked_list_get_object(link_t, item);
             ESP_LOGI(TAG, "Wi-Fi AP client link down IP: " IPSTR " MAC: " MACSTR, IP2STR(&link->ip), MAC2STR(link->mac));
-            event_raise_clear(&link->event, NULL, NULL);
+            event_raise(&link->event, NULL, NULL);
+            event_clear(&link->event);
             linked_list_insert_last(&links_free, item);
         }
     }
