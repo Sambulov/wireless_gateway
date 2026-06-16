@@ -9,7 +9,7 @@
 
 static uint32_t mb_timer_fn(const void *ctx) {
     (void)ctx;
-    return xTaskGetTickCount();
+    return xTaskGetTickCount() * portTICK_PERIOD_MS;
 }
 
 static const modbus_iface_t mb_iface = {
@@ -228,7 +228,7 @@ static void handle_modbus_msg(modbus_worker_t *w, webapi_msg_t *msg) {
     TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(awt_ms + 500);
     while (!cb.done && (int32_t)(xTaskGetTickCount() - deadline) < 0) {
         modbus_work(&w->mb);
-        vTaskDelay(pdMS_TO_TICKS(1));
+        taskYIELD();
     }
 
     if (!cb.done) {
@@ -267,6 +267,7 @@ esp_err_t ws_modbus_run(app_context_t *app) {
         w->port_no  = i;
 
         modbus_config_t cfg = {
+		//todo: ask if it is possible to simplify next 3 lines into pure r/w interface
             .pxIface            = &mb_iface,
             .pxRxContext        = &w->app_uart->desc,
             .pxTxContext        = &w->app_uart->desc,

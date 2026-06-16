@@ -591,20 +591,22 @@ class RTUServer:
         self._running = False
 
     def _frame_gap(self) -> float:
-        return max(0.05, 3.5 * 11.0 / self.baud)
+        # Modbus RTU inter-frame gap is 3.5 char times; floor at 3 ms for USB serial jitter
+        return max(0.003, 3.5 * 11.0 / self.baud)
 
     def _read_frame(self) -> bytes:
         self._ser.timeout = 0.5
         first = self._ser.read(1)
         if not first:
             return b''
+        # Read one byte at a time with inter-byte timeout to detect end-of-frame
         self._ser.timeout = self._frame_gap()
         buf = first
         while True:
-            chunk = self._ser.read(256)
-            if not chunk:
+            b = self._ser.read(1)
+            if not b:
                 break
-            buf += chunk
+            buf += b
         return buf
 
     def _updater(self):
