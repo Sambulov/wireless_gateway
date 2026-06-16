@@ -134,6 +134,7 @@
         .gauge-wrap { display: flex; flex-direction: column; align-items: center; }
         .gauge-label { font-size: 11px; font-weight: 600; color: #6b7280; margin-top: 2px; letter-spacing: .3px; }
 
+
         /* ── Register table card ── */
         #reg-table-wrap {
             flex: 1 1 580px;
@@ -761,6 +762,7 @@ class Gauge {
     constructor(size, units, holder, color = '#4CAF50') {
         const id = 'gv_' + Math.random().toString(36).slice(2);
         this.elem = document.createElement('div');
+        this.elem.className = 'gauge-elem';
         this.elem.style.cssText = `width:${size};height:${size};position:relative;margin:5px;`;
         this.elem.innerHTML = `
             <svg viewBox="0 0 200 200" style="position:absolute;width:100%;height:100%;">
@@ -855,6 +857,21 @@ const gaugeLabels = ['Частота', 'Обороты', 'Ток', 'Напряж
     w.appendChild(lbl);
     gc.appendChild(w);
 });
+
+function applyGaugeSize() {
+    const n = 4; // number of gauges
+    const cardPadding = 32; // 16px each side
+    const gapTotal = n * 4; // 4px margin each
+    const fromWidth  = Math.floor((window.innerWidth - cardPadding - gapTotal) / n);
+    const fromHeight = Math.floor(window.innerHeight * 0.22);
+    const sz = Math.max(48, Math.min(160, fromWidth, fromHeight)) + 'px';
+    document.querySelectorAll('.gauge-elem').forEach(el => {
+        el.style.width = sz;
+        el.style.height = sz;
+    });
+}
+window.addEventListener('resize', applyGaugeSize);
+applyGaugeSize();
 
 const x = new InnovertIDDXXX21E(gateway);
 
