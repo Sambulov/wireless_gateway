@@ -148,6 +148,7 @@ static void vServeApiCall(LinkedListItem_t *item, void *arg) {
             if(httpd_ws_send_frame_async(call->session->hd, call->session->fd, &frame) != ESP_OK) {
                 ESP_LOGW(TAG, "Send ping error");
                 vApiCallComplete(call);
+                return;
             }
             call->session->ulPingTs = xTaskGetTickCount();
         }
