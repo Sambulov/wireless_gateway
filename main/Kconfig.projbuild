@@ -20,17 +20,39 @@ menu "Project Configuration"
         default 1000
         help
             Web socket clients ping delay
+    config WIFI_AP_ENABLE
+        bool "Enable Wi-Fi AP"
+        default y
+        help
+            Start the device in AP+STA mode. Disable to run in STA-only mode
+            (useful when a STA network is configured and AP is not needed).
+
     config WIFI_AP_DEFAULT_SSID
         string "Default AP name"
         default "TestNet"
+        depends on WIFI_AP_ENABLE
         help
             Set default AP ssid.
 
     config WIFI_AP_DEFAULT_PASS
         string "Default AP password"
         default "12345678"
+        depends on WIFI_AP_ENABLE
         help
             Set default AP password.
+
+    config WIFI_STA_DEFAULT_SSID
+        string "Default STA SSID"
+        default ""
+        help
+            SSID of the Wi-Fi network the gateway connects to as a station.
+            Leave empty to disable STA mode by default.
+
+    config WIFI_STA_DEFAULT_PASS
+        string "Default STA password"
+        default ""
+        help
+            Password for the default STA network.
 
     config TEST_STRING
             string "test string config parameter"

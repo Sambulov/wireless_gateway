@@ -34,6 +34,7 @@ void save_wifi_ap_config(const char *ssid, const char *password) {
 }
 
 static bool _load_config_default(app_context_t *app) {
+#if CONFIG_WIFI_AP_ENABLE
     app->ap_cnf.ap.ssid[0] = '\0';
     app->ap_cnf.ap.ssid_len = min(sizeof(CONFIG_WIFI_AP_DEFAULT_SSID), sizeof(app->ap_cnf.ap.ssid));
     strlcpy((char *)app->ap_cnf.ap.ssid, CONFIG_WIFI_AP_DEFAULT_SSID, app->ap_cnf.ap.ssid_len);
@@ -44,9 +45,10 @@ static bool _load_config_default(app_context_t *app) {
 
     app->ap_cnf.ap.max_connection = 4;
     app->ap_cnf.ap.authmode = WIFI_AUTH_WPA2_PSK;
+#endif
 
-    app->sta_cnf.sta.ssid[0] = '\0';
-    app->sta_cnf.sta.password[0] = '\0';
+    strlcpy((char *)app->sta_cnf.sta.ssid,     CONFIG_WIFI_STA_DEFAULT_SSID, sizeof(app->sta_cnf.sta.ssid));
+    strlcpy((char *)app->sta_cnf.sta.password, CONFIG_WIFI_STA_DEFAULT_PASS, sizeof(app->sta_cnf.sta.password));
 
     ESP_LOGI(TAG, "App config loaded default");
     return true;
@@ -57,6 +59,7 @@ bool load_config(app_context_t *app) {
     if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs_handle) != ESP_OK)
         return _load_config_default(app);
 
+#if CONFIG_WIFI_AP_ENABLE
     app->ap_cnf.ap.ssid_len = sizeof(app->ap_cnf.ap.ssid);
     size_t len = sizeof(app->ap_cnf.ap.ssid);
     app->ap_cnf.ap.ssid_len = 0;
@@ -66,14 +69,17 @@ bool load_config(app_context_t *app) {
     len = sizeof(app->ap_cnf.ap.password);
     if(nvs_get_str(nvs_handle, NVS_KEY_AP_PASS, (char *)app->ap_cnf.ap.password, &len) != ESP_OK)
         app->ap_cnf.ap.password[0] = '\0';
+#else
+    size_t len;
+#endif
 
     len = sizeof(app->sta_cnf.sta.ssid);
     if(nvs_get_str(nvs_handle, NVS_KEY_STA_SSID, (char *)app->sta_cnf.sta.ssid, &len) != ESP_OK)
-        app->sta_cnf.sta.ssid[0] = '\0';
+        strlcpy((char *)app->sta_cnf.sta.ssid, CONFIG_WIFI_STA_DEFAULT_SSID, sizeof(app->sta_cnf.sta.ssid));
 
     len = sizeof(app->sta_cnf.sta.password);
     if(nvs_get_str(nvs_handle, NVS_KEY_STA_PASS, (char *)app->sta_cnf.sta.password, &len) != ESP_OK)
-        app->sta_cnf.sta.password[0] = '\0';
+        strlcpy((char *)app->sta_cnf.sta.password, CONFIG_WIFI_STA_DEFAULT_PASS, sizeof(app->sta_cnf.sta.password));
 
     nvs_close(nvs_handle);
     ESP_LOGI(TAG, "App config loaded from NVS");
