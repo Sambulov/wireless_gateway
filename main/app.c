@@ -106,6 +106,6 @@ void app_main(void)
     while (1) {
         api_handler_system_work(&app_context);
         /* give other tasks to work, also idle task to reset wdt */
-        task_delay(pdMS_TO_TICKS(1));
+        task_delay(pdMS_TO_TICKS(10));
     }
 }

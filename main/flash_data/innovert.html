@@ -117,7 +117,10 @@
             border-radius: 10px;
             box-shadow: 0 2px 10px rgba(0,0,0,.08);
             padding: 12px 16px 8px;
-            flex: 0 0 auto;
+            flex: 0 0 100%;
+            position: sticky;
+            top: 0;
+            z-index: 10;
         }
         .gauges-card h3 {
             margin: 0 0 8px;
@@ -130,6 +133,7 @@
         .gauges { display: flex; flex-wrap: wrap; gap: 4px; }
         .gauge-wrap { display: flex; flex-direction: column; align-items: center; }
         .gauge-label { font-size: 11px; font-weight: 600; color: #6b7280; margin-top: 2px; letter-spacing: .3px; }
+
 
         /* ── Register table card ── */
         #reg-table-wrap {
@@ -203,7 +207,7 @@
     <label>UART:&nbsp;
         <select id="uart-sel">
             <option value="4371">UART1 (0x1113)</option>
-            <option value="4387">UART2 (0x1123)</option>
+            <option value="4387" selected>UART2 (0x1123)</option>
         </select>
     </label>
     <button onclick="reconnectWs()">Переподключить</button>
@@ -758,6 +762,7 @@ class Gauge {
     constructor(size, units, holder, color = '#4CAF50') {
         const id = 'gv_' + Math.random().toString(36).slice(2);
         this.elem = document.createElement('div');
+        this.elem.className = 'gauge-elem';
         this.elem.style.cssText = `width:${size};height:${size};position:relative;margin:5px;`;
         this.elem.innerHTML = `
             <svg viewBox="0 0 200 200" style="position:absolute;width:100%;height:100%;">
@@ -852,6 +857,21 @@ const gaugeLabels = ['Частота', 'Обороты', 'Ток', 'Напряж
     w.appendChild(lbl);
     gc.appendChild(w);
 });
+
+function applyGaugeSize() {
+    const n = 4; // number of gauges
+    const cardPadding = 32; // 16px each side
+    const gapTotal = n * 4; // 4px margin each
+    const fromWidth  = Math.floor((window.innerWidth - cardPadding - gapTotal) / n);
+    const fromHeight = Math.floor(window.innerHeight * 0.22);
+    const sz = Math.max(48, Math.min(160, fromWidth, fromHeight)) + 'px';
+    document.querySelectorAll('.gauge-elem').forEach(el => {
+        el.style.width = sz;
+        el.style.height = sz;
+    });
+}
+window.addEventListener('resize', applyGaugeSize);
+applyGaugeSize();
 
 const x = new InnovertIDDXXX21E(gateway);
 

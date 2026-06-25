@@ -1,0 +1,691 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta charset="UTF-8">
+    <style>
+        *, *::before, *::after { box-sizing: border-box; }
+        body { font-family: 'Segoe UI', system-ui, sans-serif; font-size: 13px; margin: 0; background: #f0f2f5; color: #1a1a2e; }
+        .header { background: linear-gradient(135deg, #1a1a2e 0%, #16213e 60%, #0f3460 100%); color: #fff; padding: 0 16px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; box-shadow: 0 2px 8px rgba(0,0,0,.35); min-height: 52px; }
+        .header-title { font-size: 15px; font-weight: 600; letter-spacing: .5px; color: #e0e6f0; white-space: nowrap; }
+        .header-sep { flex: 1; }
+        .header label { display: inline-flex; align-items: center; gap: 5px; color: #aab4c8; font-size: 0.82em; white-space: nowrap; }
+        .header select, .header input[type=number] { background: #0f3460; color: #e0e6f0; border: 1px solid #2a4a80; border-radius: 4px; padding: 3px 6px; font-size: 12px; width: auto; }
+        .header button { background: #e94560; color: #fff; border: none; border-radius: 5px; padding: 5px 14px; font-size: 12px; cursor: pointer; transition: background .15s; }
+        .header button:hover { background: #c73652; }
+        .badge { display: inline-flex; align-items: center; gap: 5px; padding: 3px 12px; border-radius: 20px; font-size: 0.78em; font-weight: 700; letter-spacing: .3px; white-space: nowrap; }
+        .badge::before { content: ''; display: inline-block; width: 7px; height: 7px; border-radius: 50%; }
+        .badge.ok  { background: #1b4332; color: #52c97a; }
+        .badge.ok::before  { background: #52c97a; box-shadow: 0 0 4px #52c97a; }
+        .badge.err { background: #4a1020; color: #f87171; }
+        .badge.err::before { background: #f87171; }
+        .uart-config { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 7px 16px; background: #1e2a3a; border-bottom: 1px solid #2a3a50; font-size: 12px; color: #8899aa; }
+        .uart-config b { color: #aab4c8; font-weight: 600; }
+        .uart-config label { display: inline-flex; align-items: center; gap: 4px; }
+        .uart-config select { background: #0f1e2e; color: #c8d6e5; border: 1px solid #2a3a50; border-radius: 4px; padding: 2px 5px; font-size: 12px; width: auto; }
+        .uart-config button { background: #0f3460; color: #c8d6e5; border: 1px solid #2a4a80; border-radius: 4px; padding: 3px 12px; font-size: 12px; cursor: pointer; transition: background .15s; }
+        .uart-config button:hover { background: #1a4a80; }
+        .main { display: flex; flex-wrap: wrap; gap: 16px; padding: 16px; align-items: flex-start; }
+        .gauges-card { background: #fff; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,.08); padding: 12px 16px 8px; flex: 0 0 100%; position: sticky; top: 0; z-index: 10; }
+        .gauges-card h3 { margin: 0 0 8px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .8px; color: #6b7280; }
+        .gauges { display: flex; flex-wrap: wrap; gap: 4px; }
+        .gauge-wrap { display: flex; flex-direction: column; align-items: center; }
+        .gauge-label { font-size: 11px; font-weight: 600; color: #6b7280; margin-top: 2px; letter-spacing: .3px; }
+        #reg-table-wrap { flex: 1 1 580px; background: #fff; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,.08); padding: 12px 16px; overflow-x: auto; }
+        #reg-table-wrap h3 { margin: 0 0 10px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .8px; color: #6b7280; }
+        table { border-collapse: collapse; width: 100%; }
+        th, td { border: 1px solid #e5e7eb; padding: 5px 9px; text-align: left; }
+        th { background: #f8fafc; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .5px; color: #6b7280; }
+        tr:hover td { background: #f0f7ff; }
+        tr.group-header td { background: linear-gradient(90deg, #1a1a2e, #0f3460); color: #c8d6e5; font-weight: 600; font-size: 12px; letter-spacing: .4px; border-color: #0f3460; }
+        tr.ro td { color: #9ca3af; }
+        select, input[type="number"], input[type="text"] { width: 130px; border: 1px solid #d1d5db; border-radius: 4px; padding: 2px 6px; font-size: 12px; background: #fff; }
+        select:focus, input:focus { outline: 2px solid #0f3460; border-color: transparent; }
+        label { display: block; margin: 2px 0; }
+        button { border: 1px solid #d1d5db; border-radius: 4px; padding: 3px 10px; background: #f8fafc; cursor: pointer; font-size: 12px; transition: background .15s; }
+        button:hover { background: #e5e7eb; }
+    </style>
+</head>
+<body>
+<div class="header">
+    <div class="header-title">⚡ ISD mini PLUS — Частотный преобразователь</div>
+    <div class="header-sep"></div>
+    <span id="ws-status" class="badge err">Нет соединения</span>
+    <label>Адрес MB:&nbsp;<input type="number" id="mb-addr" value="1" min="1" max="247" style="width:52px"></label>
+    <label>UART:&nbsp;
+        <select id="uart-sel">
+            <option value="4371">UART1 (0x1113)</option>
+            <option value="4387" selected>UART2 (0x1123)</option>
+        </select>
+    </label>
+    <button onclick="reconnectWs()">Переподключить</button>
+</div>
+<div class="uart-config">
+    <b>UART шлюза:</b>
+    <label>Скорость&nbsp;
+        <select id="uart-baud">
+            <option value="1200">1200</option>
+            <option value="2400">2400</option>
+            <option value="4800">4800</option>
+            <option value="9600" selected>9600</option>
+            <option value="19200">19200</option>
+            <option value="38400">38400</option>
+            <option value="57600">57600</option>
+            <option value="115200">115200</option>
+        </select>
+    </label>
+    <label>Чётность&nbsp;
+        <select id="uart-par">
+            <option value="0" selected>None</option>
+            <option value="1">Odd</option>
+            <option value="2">Even</option>
+        </select>
+    </label>
+    <label>Стоп-биты&nbsp;
+        <select id="uart-sb">
+            <option value="1" selected>1</option>
+            <option value="2">2</option>
+        </select>
+    </label>
+    <button onclick="sendUartConfig()">Записать</button>
+</div>
+<div class="main">
+    <div class="gauges-card">
+        <h3>Мониторинг</h3>
+        <div class="gauges" id="gauges"></div>
+    </div>
+    <div id="reg-table-wrap">
+        <h3>Регистры</h3>
+    </div>
+</div>
+<script>
+class InnovertISDmini {
+    constructor(gateway) {
+        this.websocket = null;
+        this.gateway = gateway;
+        this.tableElement = null;
+        this._regMap = new Map();
+
+        const ERR_ENUM = [
+            {VAL:0,  DESC:"Без ошибок"},
+            {VAL:2,  DESC:"oc1 — Перегрузка по току при ускорении"},
+            {VAL:3,  DESC:"oc2 — Перегрузка по току при торможении"},
+            {VAL:4,  DESC:"oc3 — Перегрузка по току на пост. скорости"},
+            {VAL:5,  DESC:"oU1 — Перенапряжение при ускорении"},
+            {VAL:6,  DESC:"oU2 — Перенапряжение в работе"},
+            {VAL:7,  DESC:"oU3 — Перенапряжение при торможении"},
+            {VAL:8,  DESC:"POF — Перегрузка зарядного резистора"},
+            {VAL:9,  DESC:"LU — Пониженное напряжение"},
+            {VAL:10, DESC:"oL2 — Перегрузка преобразователя"},
+            {VAL:11, DESC:"oL1 — Перегрузка электродвигателя"},
+            {VAL:14, DESC:"oH — Перегрев силового модуля"},
+            {VAL:15, DESC:"EF — Внешняя ошибка управления"},
+            {VAL:16, DESC:"Co — Нарушение передачи данных"},
+            {VAL:24, DESC:"LP — Обрыв обр. связи PID (ниже нижнего предела)"},
+            {VAL:27, DESC:"HP — Обрыв обр. связи PID (выше верхнего предела)"},
+            {VAL:28, DESC:"LL — Ошибка «сухой ход»"},
+            {VAL:31, DESC:"20 — Обрыв цепи обратной связи"},
+        ];
+
+        const TERM_ENUM = [
+            {VAL:0,  DESC:"Не используется"},
+            {VAL:1,  DESC:"Медленное вращение"},
+            {VAL:2,  DESC:"Медленное вращение вперёд"},
+            {VAL:5,  DESC:"Вращение"},
+            {VAL:6,  DESC:"Вращение вперёд"},
+            {VAL:8,  DESC:"Остановка"},
+            {VAL:9,  DESC:"Вход №1 предустановленной скорости"},
+            {VAL:10, DESC:"Вход №2 предустановленной скорости"},
+            {VAL:11, DESC:"Вход №3 предустановленной скорости"},
+            {VAL:12, DESC:"Вход №4 предустановленной скорости"},
+            {VAL:13, DESC:"Ускорение/замедление 2"},
+            {VAL:14, DESC:"Ускорение/замедление 3"},
+            {VAL:15, DESC:"Сигнал UP"},
+            {VAL:16, DESC:"Сигнал DOWN"},
+            {VAL:17, DESC:"Свободный выбег"},
+            {VAL:18, DESC:"Сброс ошибки"},
+            {VAL:19, DESC:"ПИД-режим"},
+            {VAL:20, DESC:"РСК-режим"},
+            {VAL:21, DESC:"Запуск таймера 1"},
+            {VAL:22, DESC:"Запуск таймера 2"},
+            {VAL:23, DESC:"Импульсный вход счётчика"},
+            {VAL:24, DESC:"Сброс счётчика"},
+            {VAL:25, DESC:"Пауза вращения"},
+            {VAL:26, DESC:"Выбор канала X/Y"},
+        ];
+
+        const FREQ_SRC_ENUM = [
+            {VAL:0, DESC:"Цифровая установка частоты (Pb00)"},
+            {VAL:1, DESC:"Аналоговый сигнал AVI"},
+            {VAL:2, DESC:"Потенциометр внешней клавиатуры"},
+            {VAL:3, DESC:"Встроенный потенциометр панели"},
+            {VAL:4, DESC:"Внешние контакты UP/DOWN"},
+            {VAL:5, DESC:"Через порт RS485"},
+            {VAL:6, DESC:"Предустановленные скорости"},
+            {VAL:7, DESC:"Режим простого PLC"},
+            {VAL:8, DESC:"ПИД-режим"},
+        ];
+
+        const OUT_ENUM = [
+            {VAL:0,  DESC:"Не задействован"},
+            {VAL:1,  DESC:"В работе"},
+            {VAL:2,  DESC:"Частота достигнута"},
+            {VAL:3,  DESC:"Сбой"},
+            {VAL:4,  DESC:"Нужная скорость"},
+            {VAL:5,  DESC:"Частота 1 достигнута"},
+            {VAL:6,  DESC:"Частота 2 достигнута"},
+            {VAL:7,  DESC:"Ускорение"},
+            {VAL:8,  DESC:"Замедление"},
+            {VAL:9,  DESC:"Низкое напряжение"},
+            {VAL:10, DESC:"Таймер 1 достиг значения"},
+            {VAL:11, DESC:"Таймер 2 достиг значения"},
+            {VAL:12, DESC:"Цикл PLC завершён"},
+            {VAL:13, DESC:"Процесс PLC завершён"},
+            {VAL:14, DESC:"PID: верхний предел"},
+            {VAL:15, DESC:"PID: нижний предел"},
+            {VAL:16, DESC:"Обрыв 4–20 мА"},
+            {VAL:17, DESC:"Перегрузка двигателя по току"},
+            {VAL:18, DESC:"Превышение предельного тока"},
+            {VAL:27, DESC:"Счётчик достиг значения"},
+            {VAL:28, DESC:"Промежуточное значение счётчика"},
+            {VAL:29, DESC:"Водоснабжение"},
+            {VAL:30, DESC:"Готовность"},
+        ];
+
+        this.groups = [
+            {name:"PA", desc:"Дисплей (только чтение)", regs:[
+                {ADR:0,  DESC:"Параметр для индикации", ACCESS:2, OPT:{ENUM:[
+                    {VAL:0,DESC:"Заданная частота"},{VAL:1,DESC:"Выходная частота"},
+                    {VAL:2,DESC:"Выходной ток"},{VAL:3,DESC:"Скорость, об/мин"},
+                    {VAL:4,DESC:"Напряжение шины DC"}]}, VALUE:0},
+                {ADR:1,  DESC:"Заданная частота",              ACCESS:0, OPT:{SCALE:10,DESC:"Гц"},     VOLATILE:1, VALUE:0},
+                {ADR:2,  DESC:"Выходная частота",              ACCESS:0, OPT:{SCALE:10,DESC:"Гц"},     VOLATILE:1, VALUE:0},
+                {ADR:3,  DESC:"Выходной ток",                  ACCESS:0, OPT:{SCALE:10,DESC:"А"},      VOLATILE:1, VALUE:0},
+                {ADR:4,  DESC:"Скорость вращения",             ACCESS:0, OPT:{SCALE:1, DESC:"об/мин"}, VOLATILE:1, VALUE:0},
+                {ADR:5,  DESC:"Напряжение на шине DC",         ACCESS:0, OPT:{SCALE:10,DESC:"В"},      VOLATILE:1, VALUE:0},
+                {ADR:7,  DESC:"Обратная связь ПИД-режима",     ACCESS:0, OPT:{SCALE:100},              VOLATILE:1, VALUE:0},
+                {ADR:10, DESC:"Запись об ошибке 1",            ACCESS:0, OPT:{ENUM:ERR_ENUM},          VALUE:0},
+                {ADR:11, DESC:"Запись об ошибке 2",            ACCESS:0, OPT:{ENUM:ERR_ENUM},          VALUE:0},
+                {ADR:12, DESC:"Запись об ошибке 3",            ACCESS:0, OPT:{ENUM:ERR_ENUM},          VALUE:0},
+                {ADR:14, DESC:"Заданная частота в момент последней ошибки",  ACCESS:0, OPT:{SCALE:10,DESC:"Гц"}, VALUE:0},
+                {ADR:15, DESC:"Выходная частота в момент последней ошибки",  ACCESS:0, OPT:{SCALE:10,DESC:"Гц"}, VALUE:0},
+                {ADR:16, DESC:"Выходной ток в момент последней ошибки",      ACCESS:0, OPT:{SCALE:10,DESC:"А"},  VALUE:0},
+                {ADR:17, DESC:"Выходное напряжение в момент последней ошибки", ACCESS:0, OPT:{SCALE:1,DESC:"В"}, VALUE:0},
+                {ADR:18, DESC:"Напряжение шины DC в момент последней ошибки",ACCESS:0, OPT:{SCALE:10,DESC:"В"}, VALUE:0},
+                {ADR:27, DESC:"Текущий код ошибки",            ACCESS:0, OPT:{ENUM:ERR_ENUM},          VOLATILE:1, VALUE:0},
+                {ADR:50, DESC:"Версия программного обеспечения", ACCESS:0, OPT:{BCD:[2,2]},            VALUE:0},
+            ]},
+            {name:"Pb", desc:"Основные функции", regs:[
+                {ADR:100, DESC:"Установка рабочей частоты",        ACCESS:2, OPT:{RANGE:{MIN:0,MAX:999.9},SCALE:10,DESC:"Гц"},     VALUE:0},
+                {ADR:101, DESC:"Способ задания частоты (канал X)", ACCESS:2, OPT:{ENUM:FREQ_SRC_ENUM},                             VALUE:3},
+                {ADR:102, DESC:"Настройка способа пуска",          ACCESS:2, OPT:{ENUM:[{VAL:0,DESC:"Кнопками панели"},{VAL:1,DESC:"Управляющими клеммами"},{VAL:2,DESC:"Через RS485"}]}, VALUE:0},
+                {ADR:103, DESC:"Режим доступа к кнопке СТОП",      ACCESS:2, OPT:{ENUM:[{VAL:0,DESC:"СТОП заблокирован"},{VAL:1,DESC:"СТОП доступен"}]}, VALUE:1},
+                {ADR:104, DESC:"Блокировка вращения назад",        ACCESS:2, OPT:{ENUM:[{VAL:0,DESC:"Вращение назад запрещено"},{VAL:1,DESC:"Вращение назад разрешено"}]}, VALUE:0},
+                {ADR:105, DESC:"Максимальная рабочая частота",     ACCESS:2, OPT:{RANGE:{MIN:0.1,MAX:999.9},SCALE:10,DESC:"Гц"},   VALUE:50.0},
+                {ADR:106, DESC:"Минимальная рабочая частота",      ACCESS:2, OPT:{RANGE:{MIN:0,MAX:999.9},SCALE:10,DESC:"Гц"},     VALUE:0.0},
+                {ADR:107, DESC:"Время ускорения 1",                ACCESS:2, OPT:{RANGE:{MIN:0,MAX:999.9},SCALE:10,DESC:"с"},      VALUE:0},
+                {ADR:108, DESC:"Время замедления 1",               ACCESS:2, OPT:{RANGE:{MIN:0,MAX:999.9},SCALE:10,DESC:"с"},      VALUE:0},
+                {ADR:109, DESC:"V/F — максимальное напряжение",    ACCESS:2, OPT:{RANGE:{MIN:0,MAX:500.0},SCALE:10,DESC:"В"},      VALUE:380},
+                {ADR:110, DESC:"V/F — опорная частота",            ACCESS:2, OPT:{RANGE:{MIN:0,MAX:999.9},SCALE:10,DESC:"Гц"},     VALUE:50.0},
+                {ADR:111, DESC:"V/F — промежуточное напряжение",   ACCESS:2, OPT:{RANGE:{MIN:0,MAX:500.0},SCALE:10,DESC:"В"},      VALUE:0},
+                {ADR:112, DESC:"V/F — промежуточная частота",      ACCESS:2, OPT:{RANGE:{MIN:0,MAX:999.9},SCALE:10,DESC:"Гц"},     VALUE:2.5},
+                {ADR:113, DESC:"V/F — минимальное напряжение",     ACCESS:2, OPT:{RANGE:{MIN:0,MAX:500.0},SCALE:10,DESC:"В"},      VALUE:0},
+                {ADR:114, DESC:"V/F — минимальная частота",        ACCESS:2, OPT:{RANGE:{MIN:0,MAX:999.9},SCALE:10,DESC:"Гц"},     VALUE:1.2},
+                {ADR:115, DESC:"Несущая частота (до 37 кВт)",      ACCESS:2, OPT:{RANGE:{MIN:1,MAX:16},SCALE:1,DESC:"кГц"},        VALUE:4},
+                {ADR:116, DESC:"Несущая частота (до 45 кВт и выше)", ACCESS:2, OPT:{RANGE:{MIN:1,MAX:15},SCALE:1,DESC:"кГц"},     VALUE:3},
+                {ADR:117, DESC:"Инициализация параметров",         ACCESS:2, OPT:{ENUM:[{VAL:0,DESC:"Нет"},{VAL:8,DESC:"Заводские настройки (кроме PC10 и группы PI)"}]}, VALUE:0},
+                {ADR:118, DESC:"Блокировка доступа к параметрам",  ACCESS:2, OPT:{ENUM:[{VAL:0,DESC:"Разблокировано"},{VAL:1,DESC:"Заблокировано"}]}, VALUE:0},
+                {ADR:119, DESC:"Напряжение форсировки при пуске (до 37 кВт)", ACCESS:2, OPT:{RANGE:{MIN:0,MAX:30.0},SCALE:10,DESC:"%"}, VALUE:0},
+                {ADR:120, DESC:"Способ задания частоты (канал Y)", ACCESS:2, OPT:{ENUM:FREQ_SRC_ENUM},                             VALUE:0},
+                {ADR:121, DESC:"Выбор между каналами X и Y",       ACCESS:2, OPT:{ENUM:[
+                    {VAL:0,DESC:"X"},{VAL:1,DESC:"X+Y (сумма)"},{VAL:2,DESC:"X/Y (внешний сигнал)"},
+                    {VAL:3,DESC:"X/(X+Y) (внешний сигнал)"},{VAL:4,DESC:"Y/(X+Y) (внешний сигнал)"},
+                    {VAL:11,DESC:"X-Y (разница)"},{VAL:21,DESC:"Максимальное из X,Y"},
+                    {VAL:31,DESC:"Минимальное из X,Y"}]}, VALUE:0},
+            ]},
+            {name:"PC", desc:"Параметры для основных применений", regs:[
+                {ADR:200, DESC:"Режим пуска",                      ACCESS:2, OPT:{ENUM:[{VAL:0,DESC:"Обычный пуск"},{VAL:1,DESC:"Поиск частоты перед пуском"}]}, VALUE:0},
+                {ADR:201, DESC:"Режим выключения",                 ACCESS:2, OPT:{ENUM:[{VAL:0,DESC:"Замедление до остановки"},{VAL:1,DESC:"Свободный выбег"}]}, VALUE:0},
+                {ADR:202, DESC:"Установка пусковой частоты (до 45 кВт)", ACCESS:2, OPT:{RANGE:{MIN:0,MAX:50.0},SCALE:10,DESC:"Гц"}, VALUE:0.5},
+                {ADR:203, DESC:"Установка частоты остановки (до 45 кВт)", ACCESS:2, OPT:{RANGE:{MIN:1,MAX:100.0},SCALE:10,DESC:"Гц"}, VALUE:0.5},
+                {ADR:204, DESC:"Напряжение DC при старте торможения (до 37 кВт) / Уровень DC торможения перед пуском (до 45 кВт)", ACCESS:2, OPT:{RANGE:{MIN:0,MAX:7.0},SCALE:10,DESC:"%"}, VALUE:0},
+                {ADR:205, DESC:"Уровень DC торможения перед пуском (до 37 кВт)", ACCESS:2, OPT:{RANGE:{MIN:0,MAX:120},SCALE:1,DESC:"%"}, VALUE:50},
+                {ADR:206, DESC:"Напряжение DC при торможении",     ACCESS:2, OPT:{RANGE:{MIN:0,MAX:7.0},SCALE:10,DESC:"%"},         VALUE:0},
+                {ADR:207, DESC:"Уровень DC торможения при останове", ACCESS:2, OPT:{RANGE:{MIN:0,MAX:120},SCALE:1,DESC:"%"},        VALUE:60},
+                {ADR:208, DESC:"Буст (до 37 кВт)",                 ACCESS:2, OPT:{RANGE:{MIN:0,MAX:30.0},SCALE:10,DESC:"%"},        VALUE:0},
+                {ADR:209, DESC:"Номинальное напряжение двигателя (до 37 кВт)", ACCESS:2, OPT:{RANGE:{MIN:0,MAX:999.8},SCALE:10,DESC:"В"}, VALUE:380},
+                {ADR:210, DESC:"Номинальный ток двигателя (до 37 кВт)", ACCESS:2, OPT:{RANGE:{MIN:0,MAX:999.9},SCALE:100,DESC:"А"}, VALUE:0},
+                {ADR:211, DESC:"Номинальный ток двигателя (до 45 кВт, 0.01 А)", ACCESS:2, OPT:{RANGE:{MIN:0,MAX:500.0},SCALE:100,DESC:"А"}, VALUE:0},
+                {ADR:212, DESC:"Номинальная скорость вращения (до 37 кВт)", ACCESS:2, OPT:{RANGE:{MIN:1,MAX:9999},SCALE:1,DESC:"об/мин"}, VALUE:1460},
+                {ADR:213, DESC:"Количество полюсов (до 37 кВт)",   ACCESS:2, OPT:{RANGE:{MIN:1,MAX:20},SCALE:1},                   VALUE:4},
+                {ADR:214, DESC:"Количество полюсов (до 45 кВт)",   ACCESS:2, OPT:{RANGE:{MIN:1,MAX:20},SCALE:1},                   VALUE:4},
+                {ADR:215, DESC:"Номинальная скорость вращения (до 45 кВт)", ACCESS:2, OPT:{RANGE:{MIN:0,MAX:999.9},SCALE:10,DESC:"об/мин"}, VALUE:0},
+            ]},
+            {name:"Pd", desc:"Параметры входов и выходов", regs:[
+                {ADR:300, DESC:"Мин. входное напряжение AVI (до 37 кВт) / FIV (до 45 кВт)", ACCESS:2, OPT:{RANGE:{MIN:0,MAX:10.0},SCALE:100,DESC:"В"}, VALUE:0},
+                {ADR:301, DESC:"Макс. входное напряжение AVI (до 37 кВт) / FIV (до 45 кВт)", ACCESS:2, OPT:{RANGE:{MIN:0,MAX:10.0},SCALE:100,DESC:"В"}, VALUE:10},
+                {ADR:302, DESC:"Постоянная времени фильтра AVI / FIV",  ACCESS:2, OPT:{RANGE:{MIN:0,MAX:10.0},SCALE:100,DESC:"с"}, VALUE:0.1},
+                {ADR:303, DESC:"Мин. входной ток FIC",                  ACCESS:2, OPT:{RANGE:{MIN:0,MAX:20.0},SCALE:10,DESC:"мА"}, VALUE:4},
+                {ADR:304, DESC:"Макс. входной ток FIC",                 ACCESS:2, OPT:{RANGE:{MIN:0,MAX:20.0},SCALE:10,DESC:"мА"}, VALUE:20},
+                {ADR:305, DESC:"Постоянная времени фильтра FIC",        ACCESS:2, OPT:{RANGE:{MIN:0,MAX:25.0},SCALE:100,DESC:"с"}, VALUE:2.5},
+                {ADR:306, DESC:"Мин. входное напряжение FOV (до 45 кВт)", ACCESS:2, OPT:{RANGE:{MIN:0,MAX:10.0},SCALE:100,DESC:"В"}, VALUE:0},
+                {ADR:307, DESC:"Макс. входное напряжение FOV (до 45 кВт)", ACCESS:2, OPT:{RANGE:{MIN:0,MAX:10.0},SCALE:100,DESC:"В"}, VALUE:10},
+                {ADR:308, DESC:"Постоянная времени фильтра FOV (до 45 кВт)", ACCESS:2, OPT:{RANGE:{MIN:0,MAX:10.0},SCALE:100,DESC:"с"}, VALUE:0.1},
+                {ADR:310, DESC:"Частота при мин. аналоговом сигнале (до 37 кВт)", ACCESS:2, OPT:{RANGE:{MIN:0,MAX:999.9},SCALE:10,DESC:"Гц"}, VALUE:0},
+                {ADR:311, DESC:"Частота при макс. аналоговом сигнале (до 37 кВт)", ACCESS:2, OPT:{RANGE:{MIN:0,MAX:999.9},SCALE:10,DESC:"Гц"}, VALUE:50},
+                {ADR:312, DESC:"Частота при мин. аналоговом сигнале (до 45 кВт)", ACCESS:2, OPT:{RANGE:{MIN:0,MAX:999.9},SCALE:10,DESC:"Гц"}, VALUE:0},
+                {ADR:313, DESC:"Направление вращения",     ACCESS:2, OPT:{ENUM:[{VAL:0,DESC:"Вперёд"},{VAL:1,DESC:"Назад"}]}, VALUE:0},
+                {ADR:314, DESC:"Разрешение реверса движения", ACCESS:2, OPT:{ENUM:[{VAL:0,DESC:"Запрещено"},{VAL:1,DESC:"Разрешено"}]}, VALUE:0},
+                {ADR:315, DESC:"Входная клемма FWD",       ACCESS:2, OPT:{ENUM:TERM_ENUM}, VALUE:5},
+                {ADR:316, DESC:"Входная клемма REV",       ACCESS:2, OPT:{ENUM:TERM_ENUM}, VALUE:7},
+                {ADR:317, DESC:"Входная клемма S1",        ACCESS:2, OPT:{ENUM:TERM_ENUM}, VALUE:18},
+                {ADR:318, DESC:"Входная клемма S2",        ACCESS:2, OPT:{ENUM:TERM_ENUM}, VALUE:9},
+                {ADR:325, DESC:"Выход RA, RC (до 37 кВт) / RA, RC, RB (до 45 кВт)", ACCESS:2, OPT:{ENUM:OUT_ENUM}, VALUE:3},
+                {ADR:329, DESC:"Схема подключения управляющих входов", ACCESS:2, OPT:{ENUM:[
+                    {VAL:0,DESC:"Двухпроводная, режим 1"},{VAL:1,DESC:"Двухпроводная, режим 2"},
+                    {VAL:2,DESC:"Трёхпроводная, режим 1"},{VAL:3,DESC:"Трёхпроводная, режим 2"}]}, VALUE:0},
+            ]},
+            {name:"PE", desc:"Группа вспомогательных параметров", regs:[
+                {ADR:400, DESC:"Частота медленного вращения",          ACCESS:2, OPT:{RANGE:{MIN:0,MAX:999.9},SCALE:10,DESC:"Гц"}, VALUE:5.0},
+                {ADR:401, DESC:"Время ускорения 2",                    ACCESS:2, OPT:{RANGE:{MIN:0,MAX:999.9},SCALE:10,DESC:"с"},  VALUE:10},
+                {ADR:402, DESC:"Время замедления 2",                   ACCESS:2, OPT:{RANGE:{MIN:0,MAX:999.9},SCALE:10,DESC:"с"},  VALUE:10},
+                {ADR:403, DESC:"Время ускорения 3",                    ACCESS:2, OPT:{RANGE:{MIN:0,MAX:999.9},SCALE:10,DESC:"с"},  VALUE:10},
+                {ADR:404, DESC:"Время замедления 3",                   ACCESS:2, OPT:{RANGE:{MIN:0,MAX:999.9},SCALE:10,DESC:"с"},  VALUE:10},
+                {ADR:405, DESC:"Время ускорения 4 (медленное вращение)", ACCESS:2, OPT:{RANGE:{MIN:0,MAX:999.9},SCALE:10,DESC:"с"}, VALUE:10},
+                {ADR:406, DESC:"Время замедления 4 (медленное вращение)", ACCESS:2, OPT:{RANGE:{MIN:0,MAX:999.9},SCALE:10,DESC:"с"}, VALUE:10},
+                {ADR:407, DESC:"Уровень срабатывания счётчика",        ACCESS:2, OPT:{RANGE:{MIN:0,MAX:9999},SCALE:1},             VALUE:100},
+                {ADR:408, DESC:"Промежуточное значение счётчика",      ACCESS:2, OPT:{RANGE:{MIN:0,MAX:9999},SCALE:1},             VALUE:50},
+                {ADR:409, DESC:"Ограничение тока при ускорении (до 37 кВт)", ACCESS:2, OPT:{RANGE:{MIN:50,MAX:200},SCALE:1,DESC:"%"}, VALUE:150},
+                {ADR:410, DESC:"Коэффициент подавления тока при перегрузке", ACCESS:2, OPT:{RANGE:{MIN:0,MAX:100},SCALE:1,DESC:"%"}, VALUE:20},
+                {ADR:411, DESC:"Защита от перенапряжения при торможении", ACCESS:2, OPT:{ENUM:[{VAL:0,DESC:"Выключена"},{VAL:1,DESC:"Включена"}]}, VALUE:1},
+                {ADR:412, DESC:"Пороговая частота 1",                  ACCESS:2, OPT:{RANGE:{MIN:0,MAX:999.9},SCALE:10,DESC:"Гц"}, VALUE:5.0},
+                {ADR:413, DESC:"Пороговая частота 2",                  ACCESS:2, OPT:{RANGE:{MIN:0,MAX:999.9},SCALE:10,DESC:"Гц"}, VALUE:5.0},
+                {ADR:424, DESC:"Установка значения таймера 1",         ACCESS:2, OPT:{RANGE:{MIN:0,MAX:999.9},SCALE:10,DESC:"с"}, VALUE:10},
+                {ADR:425, DESC:"Установка значения таймера 2",         ACCESS:2, OPT:{RANGE:{MIN:0,MAX:999.9},SCALE:10,DESC:"с"}, VALUE:20},
+            ]},
+            {name:"PF", desc:"Предустановленные скорости и PLC", regs:[
+                {ADR:500, DESC:"Запоминание цикла PLC",    ACCESS:2, OPT:{ENUM:[{VAL:0,DESC:"Без запоминания"},{VAL:1,DESC:"С запоминанием"}]}, VALUE:0},
+                {ADR:501, DESC:"Включение PLC",            ACCESS:2, OPT:{ENUM:[{VAL:0,DESC:"Автоматически при Pb01=7"},{VAL:1,DESC:"Внешним сигналом"}]}, VALUE:0},
+                {ADR:502, DESC:"Режим работы PLC",         ACCESS:2, OPT:{ENUM:[{VAL:0,DESC:"Стоп после одного цикла"},{VAL:1,DESC:"Удержание последней частоты"},{VAL:2,DESC:"Повторение цикла"}]}, VALUE:0},
+                {ADR:503, DESC:"Предустановленная скорость 1 (до 37 кВт)", ACCESS:2, OPT:{RANGE:{MIN:0,MAX:999.9},SCALE:10,DESC:"Гц"}, VALUE:5.0},
+                {ADR:504, DESC:"Предустановленная скорость 2",  ACCESS:2, OPT:{RANGE:{MIN:0,MAX:999.9},SCALE:10,DESC:"Гц"}, VALUE:20},
+                {ADR:505, DESC:"Предустановленная скорость 3",  ACCESS:2, OPT:{RANGE:{MIN:0,MAX:999.9},SCALE:10,DESC:"Гц"}, VALUE:10},
+                {ADR:506, DESC:"Предустановленная скорость 4",  ACCESS:2, OPT:{RANGE:{MIN:0,MAX:999.9},SCALE:10,DESC:"Гц"}, VALUE:20},
+                {ADR:507, DESC:"Предустановленная скорость 5",  ACCESS:2, OPT:{RANGE:{MIN:0,MAX:999.9},SCALE:10,DESC:"Гц"}, VALUE:25},
+                {ADR:508, DESC:"Предустановленная скорость 6",  ACCESS:2, OPT:{RANGE:{MIN:0,MAX:999.9},SCALE:10,DESC:"Гц"}, VALUE:30},
+                {ADR:509, DESC:"Предустановленная скорость 7",  ACCESS:2, OPT:{RANGE:{MIN:0,MAX:999.9},SCALE:10,DESC:"Гц"}, VALUE:35},
+                {ADR:510, DESC:"Предустановленная скорость 8",  ACCESS:2, OPT:{RANGE:{MIN:0,MAX:999.9},SCALE:10,DESC:"Гц"}, VALUE:40},
+                {ADR:511, DESC:"Предустановленная скорость 9",  ACCESS:2, OPT:{RANGE:{MIN:0,MAX:999.9},SCALE:10,DESC:"Гц"}, VALUE:45},
+                {ADR:512, DESC:"Предустановленная скорость 10", ACCESS:2, OPT:{RANGE:{MIN:0,MAX:999.9},SCALE:10,DESC:"Гц"}, VALUE:50},
+                {ADR:513, DESC:"Предустановленная скорость 11", ACCESS:2, OPT:{RANGE:{MIN:0,MAX:999.9},SCALE:10,DESC:"Гц"}, VALUE:10},
+                {ADR:514, DESC:"Предустановленная скорость 12", ACCESS:2, OPT:{RANGE:{MIN:0,MAX:999.9},SCALE:10,DESC:"Гц"}, VALUE:10},
+                {ADR:515, DESC:"Предустановленная скорость 13", ACCESS:2, OPT:{RANGE:{MIN:0,MAX:999.9},SCALE:10,DESC:"Гц"}, VALUE:10},
+                {ADR:516, DESC:"Предустановленная скорость 14", ACCESS:2, OPT:{RANGE:{MIN:0,MAX:999.9},SCALE:10,DESC:"Гц"}, VALUE:10},
+                {ADR:517, DESC:"Предустановленная скорость 15", ACCESS:2, OPT:{RANGE:{MIN:0,MAX:999.9},SCALE:10,DESC:"Гц"}, VALUE:10},
+                {ADR:518, DESC:"Время работы PLC 1",  ACCESS:2, OPT:{RANGE:{MIN:0,MAX:9999},SCALE:1,DESC:"с"}, VALUE:3},
+                {ADR:519, DESC:"Время работы PLC 2",  ACCESS:2, OPT:{RANGE:{MIN:0,MAX:9999},SCALE:1,DESC:"с"}, VALUE:4},
+                {ADR:520, DESC:"Время работы PLC 3",  ACCESS:2, OPT:{RANGE:{MIN:0,MAX:9999},SCALE:1,DESC:"с"}, VALUE:5},
+                {ADR:521, DESC:"Время работы PLC 4",  ACCESS:2, OPT:{RANGE:{MIN:0,MAX:9999},SCALE:1,DESC:"с"}, VALUE:0},
+                {ADR:522, DESC:"Время работы PLC 5",  ACCESS:2, OPT:{RANGE:{MIN:0,MAX:9999},SCALE:1,DESC:"с"}, VALUE:0},
+                {ADR:523, DESC:"Время работы PLC 6",  ACCESS:2, OPT:{RANGE:{MIN:0,MAX:9999},SCALE:1,DESC:"с"}, VALUE:0},
+                {ADR:524, DESC:"Время работы PLC 7",  ACCESS:2, OPT:{RANGE:{MIN:0,MAX:9999},SCALE:1,DESC:"с"}, VALUE:0},
+                {ADR:525, DESC:"Время работы PLC 8",  ACCESS:2, OPT:{RANGE:{MIN:0,MAX:9999},SCALE:1,DESC:"с"}, VALUE:0},
+                {ADR:526, DESC:"Время работы PLC 9",  ACCESS:2, OPT:{RANGE:{MIN:0,MAX:9999},SCALE:1,DESC:"с"}, VALUE:0},
+                {ADR:527, DESC:"Время работы PLC 10", ACCESS:2, OPT:{RANGE:{MIN:0,MAX:9999},SCALE:1,DESC:"с"}, VALUE:0},
+                {ADR:528, DESC:"Время работы PLC 11", ACCESS:2, OPT:{RANGE:{MIN:0,MAX:9999},SCALE:1,DESC:"с"}, VALUE:0},
+                {ADR:529, DESC:"Время работы PLC 12", ACCESS:2, OPT:{RANGE:{MIN:0,MAX:9999},SCALE:1,DESC:"с"}, VALUE:0},
+                {ADR:530, DESC:"Время работы PLC 13", ACCESS:2, OPT:{RANGE:{MIN:0,MAX:9999},SCALE:1,DESC:"с"}, VALUE:0},
+                {ADR:531, DESC:"Время работы PLC 14", ACCESS:2, OPT:{RANGE:{MIN:0,MAX:9999},SCALE:1,DESC:"с"}, VALUE:0},
+                {ADR:532, DESC:"Время работы PLC 15", ACCESS:2, OPT:{RANGE:{MIN:0,MAX:9999},SCALE:1,DESC:"с"}, VALUE:0},
+            ]},
+            {name:"PG", desc:"Параметры ПИД-режима", regs:[
+                {ADR:600, DESC:"Режим включения ПИД-регулятора", ACCESS:2, OPT:{ENUM:[
+                    {VAL:0,DESC:"Включён если Pb01=8"},{VAL:1,DESC:"Всегда включён"},
+                    {VAL:2,DESC:"Включается внешним сигналом"}]}, VALUE:0},
+                {ADR:601, DESC:"Рабочий режим ПИД-регулятора",  ACCESS:2, OPT:{ENUM:[
+                    {VAL:0,DESC:"Отрицательная обратная связь"},{VAL:1,DESC:"Положительная обратная связь"}]}, VALUE:0},
+                {ADR:602, DESC:"Источник задания ПИД (до 37 кВт)", ACCESS:2, OPT:{ENUM:[
+                    {VAL:0,DESC:"Цифровое задание (PG04)"},{VAL:1,DESC:"AVI"},{VAL:2,DESC:"Зарезервировано"}]}, VALUE:0},
+                {ADR:603, DESC:"Источник задания ПИД (до 45 кВт)", ACCESS:2, OPT:{ENUM:[
+                    {VAL:0,DESC:"Цифровое задание (PG04)"},{VAL:1,DESC:"FIV"},{VAL:2,DESC:"FIC"}]}, VALUE:0},
+                {ADR:604, DESC:"Числовое значение задания ПИД", ACCESS:2, OPT:{RANGE:{MIN:0,MAX:999.9},SCALE:100}, VALUE:2.5},
+                {ADR:605, DESC:"Верхний предел ПИД",            ACCESS:2, OPT:{RANGE:{MIN:0,MAX:999.9},SCALE:100}, VALUE:50},
+                {ADR:606, DESC:"Нижний предел ПИД",             ACCESS:2, OPT:{RANGE:{MIN:0,MAX:999.9},SCALE:100}, VALUE:0},
+                {ADR:607, DESC:"Коэффициент P ПИД (до 37 кВт)", ACCESS:2, OPT:{RANGE:{MIN:0.1,MAX:600.0},SCALE:10,DESC:"%"}, VALUE:100},
+                {ADR:608, DESC:"Коэффициент I ПИД (постоянная времени)", ACCESS:2, OPT:{RANGE:{MIN:0.01,MAX:10.0},SCALE:100,DESC:"с"}, VALUE:2.0},
+                {ADR:609, DESC:"Коэффициент D ПИД",             ACCESS:2, OPT:{RANGE:{MIN:0,MAX:10.0},SCALE:1000,DESC:"с"}, VALUE:0},
+                {ADR:610, DESC:"Допустимая ошибка вычислений ПИД (до 37 кВт)", ACCESS:2, OPT:{RANGE:{MIN:0,MAX:100.0},SCALE:100,DESC:"%"}, VALUE:2.0},
+                {ADR:611, DESC:"Частота перехода в режим ожидания", ACCESS:2, OPT:{RANGE:{MIN:0,MAX:999.9},SCALE:10,DESC:"Гц"}, VALUE:25.0},
+                {ADR:612, DESC:"Пауза при переходе в режим ожидания", ACCESS:2, OPT:{RANGE:{MIN:0,MAX:200},SCALE:1,DESC:"с"}, VALUE:10},
+                {ADR:613, DESC:"Обратная связь для выхода из режима ожидания", ACCESS:2, OPT:{RANGE:{MIN:0,MAX:200.0},SCALE:10,DESC:"%"}, VALUE:90.0},
+                {ADR:614, DESC:"Отображение величины обратной связи ПИД (до 37 кВт)", ACCESS:2, OPT:{RANGE:{MIN:0,MAX:99.99},SCALE:100}, VALUE:10.0},
+                {ADR:617, DESC:"Верхний предел частоты ПИД",    ACCESS:2, OPT:{RANGE:{MIN:0,MAX:999.9},SCALE:10,DESC:"Гц"}, VALUE:48.0},
+                {ADR:618, DESC:"Нижний предел частоты ПИД",     ACCESS:2, OPT:{RANGE:{MIN:0,MAX:999.9},SCALE:10,DESC:"Гц"}, VALUE:20.0},
+                {ADR:620, DESC:"Зона нечувствительности ПИД",   ACCESS:2, OPT:{RANGE:{MIN:0,MAX:100.0},SCALE:10,DESC:"%"}, VALUE:0.1},
+                {ADR:621, DESC:"Действие при потере сигнала датчика", ACCESS:2, OPT:{ENUM:[
+                    {VAL:0,DESC:"Нет действий"},{VAL:1,DESC:'Ошибка "20" без аварийного останова'},
+                    {VAL:2,DESC:'Ошибка "20" с аварийным остановом'}]}, VALUE:0},
+                {ADR:622, DESC:"Обратная связь для индикации обрыва", ACCESS:2, OPT:{RANGE:{MIN:0,MAX:10.0},SCALE:100,DESC:"В"}, VALUE:0.5},
+            ]},
+            {name:"PH", desc:"Последовательный канал RS485", regs:[
+                {ADR:700, DESC:"Скорость передачи данных", ACCESS:2, OPT:{ENUM:[
+                    {VAL:0,DESC:"4800"},{VAL:1,DESC:"9600"},{VAL:2,DESC:"19200"},
+                    {VAL:3,DESC:"38400"},{VAL:4,DESC:"57600"},{VAL:5,DESC:"115200"}]}, VALUE:1},
+                {ADR:701, DESC:"Формат данных", ACCESS:2, OPT:{ENUM:[
+                    {VAL:0,DESC:"8N1 ASCII"},{VAL:1,DESC:"8E1 ASCII"},{VAL:2,DESC:"8O1 ASCII"},
+                    {VAL:3,DESC:"8N1 RTU"}, {VAL:4,DESC:"8E1 RTU"}, {VAL:5,DESC:"8O1 RTU"}]}, VALUE:3},
+                {ADR:702, DESC:"Адрес преобразователя (до 37 кВт, 0–240)", ACCESS:2, OPT:{RANGE:{MIN:0,MAX:240},SCALE:1,DESC:"Адрес"}, VALUE:1},
+                {ADR:703, DESC:"Действие при ошибке обмена данными", ACCESS:2, OPT:{ENUM:[
+                    {VAL:0,DESC:'Нет действий'},{VAL:1,DESC:'Отображение ошибки "Co"'},
+                    {VAL:2,DESC:'Ошибка "Co" и останов'}]}, VALUE:0},
+            ]},
+        ];
+
+        for (const g of this.groups)
+            for (const r of g.regs)
+                this._regMap.set(r.ADR, r);
+
+        this.runExchange();
+        this.createRegistersTable();
+    }
+
+    getReg(addr) { return this._regMap.get(addr) || null; }
+
+    getRegDescription(reg) {
+        if (reg.OPT?.ENUM) {
+            return reg.OPT.ENUM.find(e => e.VAL === reg.VALUE)?.DESC || '';
+        }
+        if (reg.OPT?.MASK) {
+            return reg.OPT.MASK.map(m => (reg.VALUE & m.VAL) ? m.DESC : null)
+                             .filter(Boolean).join(', ') || 'None';
+        }
+        if (reg.OPT?.BCD) {
+            const parts = [];
+            let rem = reg.VALUE;
+            for (let i = reg.OPT.BCD.length - 1; i >= 0; i--) {
+                const bits = reg.OPT.BCD[i] * 4;
+                const mask = (1 << bits) - 1;
+                parts.unshift((rem & mask).toString(16).padStart(reg.OPT.BCD[i], '0'));
+                rem >>= bits;
+            }
+            return parts.join('.');
+        }
+        if (reg.OPT?.SCALE) {
+            return (reg.VALUE / reg.OPT.SCALE).toFixed(
+                reg.OPT.SCALE >= 100 ? 2 : reg.OPT.SCALE >= 10 ? 1 : 0
+            ) + (reg.OPT.DESC ? ' ' + reg.OPT.DESC : '');
+        }
+        return '';
+    }
+
+    createRegistersTable() {
+        if (this.tableElement) this.tableElement.remove();
+        const table = document.createElement('table');
+        table.id = 'registers_table';
+        table.innerHTML = `<tr><th>Адрес</th><th>Описание</th><th>Значение</th><th>Описание значения</th><th>Управление</th></tr>`;
+
+        for (const g of this.groups) {
+            const hrow = table.insertRow();
+            hrow.className = 'group-header';
+            const hcell = hrow.insertCell();
+            hcell.colSpan = 5;
+            hcell.textContent = g.name + ' — ' + g.desc;
+
+            for (const reg of g.regs) {
+                const row = table.insertRow();
+                if (reg.ACCESS < 2) row.className = 'ro';
+                row.insertCell().textContent = reg.ADR;
+                row.insertCell().textContent = reg.DESC;
+                const vc = row.insertCell(); vc.id = `rv_${reg.ADR}`; vc.textContent = reg.VALUE;
+                const od = row.insertCell(); od.id = `rd_${reg.ADR}`; od.textContent = this.getRegDescription(reg);
+                const cc = row.insertCell();
+                if (reg.ACCESS >= 2) {
+                    const wrap = document.createElement('div');
+                    let inp;
+                    if (reg.OPT?.ENUM) {
+                        inp = document.createElement('select');
+                        for (const opt of reg.OPT.ENUM) {
+                            const o = document.createElement('option');
+                            o.value = opt.VAL; o.text = opt.DESC;
+                            inp.appendChild(o);
+                        }
+                        inp.value = reg.VALUE;
+                    } else if (reg.OPT?.BCD) {
+                        inp = document.createElement('input');
+                        inp.type = 'text';
+                        inp.placeholder = reg.OPT.BCD.map(n => '0'.repeat(n)).join('.');
+                    } else {
+                        inp = document.createElement('input');
+                        inp.type = 'number';
+                        if (reg.OPT?.RANGE) {
+                            inp.min = reg.OPT.RANGE.MIN;
+                            inp.max = reg.OPT.RANGE.MAX;
+                            inp.step = reg.OPT.SCALE ? 1 / reg.OPT.SCALE : 1;
+                        }
+                        inp.value = reg.OPT?.SCALE ? reg.VALUE / reg.OPT.SCALE : reg.VALUE;
+                    }
+                    const btn = document.createElement('button');
+                    btn.textContent = 'Записать';
+                    btn.onclick = () => this.writeRegister(reg.ADR, inp);
+                    wrap.appendChild(inp);
+                    wrap.appendChild(btn);
+                    cc.appendChild(wrap);
+                }
+            }
+        }
+        this.tableElement = table;
+        document.getElementById('reg-table-wrap').appendChild(table);
+    }
+
+    updateRegistersTable() {
+        for (const [adr, reg] of this._regMap) {
+            const vc = document.getElementById(`rv_${adr}`);
+            if (vc) vc.textContent = reg.VALUE;
+            const od = document.getElementById(`rd_${adr}`);
+            if (od) od.textContent = this.getRegDescription(reg);
+        }
+    }
+
+    writeRegister(addr, inp) {
+        const reg = this.getReg(addr);
+        if (!reg) { alert('Регистр не найден'); return; }
+        let val;
+        if (inp.tagName === 'SELECT') {
+            val = parseInt(inp.value);
+        } else if (reg.OPT?.BCD) {
+            const parts = inp.value.toLowerCase().split('.');
+            if (parts.length !== reg.OPT.BCD.length) { alert('Неверный формат BCD'); return; }
+            val = 0;
+            for (let i = 0; i < reg.OPT.BCD.length; i++)
+                val = (val << (reg.OPT.BCD[i] * 4)) | parseInt(parts[i].padStart(reg.OPT.BCD[i],'0'), 16);
+        } else {
+            const fval = parseFloat(inp.value);
+            if (isNaN(fval)) { alert('Некорректное значение'); return; }
+            val = reg.OPT?.SCALE ? Math.round(fval * reg.OPT.SCALE) : Math.round(fval);
+        }
+        const req = `{"FID":${getMbFid()},"FLAGS":0,"SID":${nextSid()},"ARG":{"FN":6,"ADR":${getMbAddr()},"RA":${addr},"RVC":${val}}}`;
+        if (this.websocket?.readyState === WebSocket.OPEN) this.websocket.send(req);
+        else alert('Соединение не установлено');
+    }
+
+    runExchange() {
+        this.websocket = new WebSocket(this.gateway);
+        this.websocket.onopen = () => {
+            setWsStatus(true);
+            sendUartConfig();
+            this.subscribeRegs();
+        };
+        this.websocket.onclose = () => {
+            setWsStatus(false);
+            setTimeout(() => this.runExchange(), 500);
+        };
+        this.websocket.onmessage = (e) => this.wsMessage(e);
+        this.websocket.onerror   = (e) => console.error('WS error', e);
+    }
+
+    wsMessage(e) {
+        const obj = JSON.parse(e.data);
+        const fid = parseInt(obj.FID, 16);
+        if (fid === 0x1010 || fid === 0x1020) return;
+        if (fid === getMbFid()) this.modbusHandler(obj.ARG);
+    }
+
+    modbusHandler(arg) {
+        if (arg?.RA == null || !arg?.RC || !arg?.RD) return;
+        const start = arg.RA, count = arg.RC;
+        const values = arg.RD.map(x => parseInt(x));
+        for (let i = 0; i < count && i < values.length; i++) {
+            const reg = this._regMap.get(start + i);
+            if (reg) reg.VALUE = values[i];
+        }
+        this.updateRegistersTable();
+    }
+
+    subscribeRegs() {
+        const fid  = getMbFid();
+        const addr = getMbAddr();
+        const addrs = [...this._regMap.keys()].sort((a, b) => a - b);
+        const ranges = [];
+        let s = addrs[0], e = addrs[0];
+        for (let i = 1; i < addrs.length; i++) {
+            if (addrs[i] === e + 1 && e - s < 99) { e = addrs[i]; }
+            else { ranges.push({s, n: e - s + 1}); s = e = addrs[i]; }
+        }
+        ranges.push({s, n: e - s + 1});
+        for (const {s, n} of ranges) {
+            const req = `{"FID":${fid},"FLAGS":4,"SID":${nextSid()},"ARG":{"AWT":500,"RDL":250,"FN":3,"ADR":${addr},"RA":${s},"RVC":${n}}}`;
+            if (this.websocket?.readyState === WebSocket.OPEN) this.websocket.send(req);
+        }
+    }
+}
+
+// ── Gauge ──────────────────────────────────────────────────────
+
+class Gauge {
+    constructor(size, units, holder, color = '#4CAF50') {
+        const id = 'gv_' + Math.random().toString(36).slice(2);
+        this.elem = document.createElement('div');
+        this.elem.className = 'gauge-elem';
+        this.elem.style.cssText = `width:${size};height:${size};position:relative;margin:5px;`;
+        this.elem.innerHTML = `
+            <svg viewBox="0 0 200 200" style="position:absolute;width:100%;height:100%;">
+                <path style="fill:none;stroke:#e2e8f0;stroke-width:10;stroke-linecap:round;"
+                      d="M22.06 145 A90 90 0 1 1 177.94 145"/>
+                <path class="arc" style="fill:none;stroke:${color};stroke-width:10;stroke-linecap:round;"
+                      d="M22.06 145 A90 90 0 1 1 177.94 145"/>
+                <text x="50%" y="62%" font-size="18px" fill="#94a3b8" dominant-baseline="middle" text-anchor="middle">${units}</text>
+                <text id="${id}" x="50%" y="77%" font-size="34px" fill="#1e293b" font-weight="600" dominant-baseline="middle" text-anchor="middle">${holder}</text>
+            </svg>
+            <div class="ndl" style="position:absolute;top:50%;left:50%;width:2px;height:40%;
+                 background:${color};transform-origin:50% 100%;
+                 transition:transform .5s ease-in-out;transform:translate(-50%,-100%) rotate(-120deg);"></div>
+            <div style="position:absolute;top:50%;left:50%;width:10px;height:10px;background:${color};
+                 border-radius:50%;transform:translate(-50%,-50%);box-shadow:0 0 6px ${color};"></div>`;
+        this._totalLen = null;
+        this.min = 0; this.max = 10;
+        this.ndl = this.elem.querySelector('.ndl');
+        this.arc = this.elem.querySelector('.arc');
+        this.gv  = this.elem.querySelector(`#${id}`);
+    }
+    _arcLen() {
+        if (!this._totalLen) this._totalLen = this.arc.getTotalLength();
+        return this._totalLen;
+    }
+    setScale(mn, mx) { this.min = mn; this.max = mx; }
+    setValue(v) {
+        v = Math.max(this.min, Math.min(this.max, v));
+        const frac = (v - this.min) / (this.max - this.min);
+        this.ndl.style.transform = `translate(-50%,-100%) rotate(${-120 + frac * 240}deg)`;
+        this.gv.textContent = v.toFixed(1);
+        try {
+            const len = this._arcLen();
+            this.arc.style.strokeDasharray = `${frac * len} ${len}`;
+        } catch(_) {}
+    }
+    getElement() { return this.elem; }
+}
+
+// ── Helpers ────────────────────────────────────────────────────
+
+function getMbFid()  { return parseInt(document.getElementById('uart-sel').value); }
+function getCnfFid() { return getMbFid() === 0x1113 ? 0x1010 : 0x1020; }
+function getMbAddr() { return parseInt(document.getElementById('mb-addr').value) || 1; }
+
+let _sid = 1;
+function nextSid() { return _sid++ & 0xffff; }
+
+function setWsStatus(ok) {
+    const el = document.getElementById('ws-status');
+    el.className = 'badge ' + (ok ? 'ok' : 'err');
+    el.textContent = ok ? 'Подключено' : 'Нет соединения';
+}
+
+function sendUartConfig() {
+    const arg = {
+        BR:  parseInt(document.getElementById('uart-baud').value),
+        PAR: parseInt(document.getElementById('uart-par').value),
+        SB:  parseInt(document.getElementById('uart-sb').value),
+    };
+    if (x?.websocket?.readyState === WebSocket.OPEN)
+        x.websocket.send(JSON.stringify({ FID: getCnfFid(), FLAGS: 0, SID: nextSid(), ARG: arg }));
+}
+
+function reconnectWs() {
+    if (x?.websocket) { x.websocket.onclose = null; x.websocket.close(); }
+    setWsStatus(false);
+    x.runExchange();
+}
+
+// ── Init ───────────────────────────────────────────────────────
+
+const gateway    = `ws://${window.location.host}/ws`;
+const gauge_fb   = new Gauge('160px', 'Hz',  '—', '#3b82f6');
+const gauge_rpm  = new Gauge('160px', 'RPM', '—', '#8b5cf6');
+const gauge_i    = new Gauge('160px', 'A',   '—', '#f59e0b');
+const gauge_v    = new Gauge('160px', 'V',   '—', '#10b981');
+gauge_fb.setScale(0, 60);
+gauge_rpm.setScale(0, 3000);
+gauge_i.setScale(0, 50);
+gauge_v.setScale(0, 800);
+
+const gc = document.getElementById('gauges');
+const gaugeLabels = ['Частота', 'Обороты', 'Ток', 'Напряжение DC'];
+[gauge_fb, gauge_rpm, gauge_i, gauge_v].forEach((g, i) => {
+    const w = document.createElement('div');
+    w.className = 'gauge-wrap';
+    w.appendChild(g.getElement());
+    const lbl = document.createElement('div');
+    lbl.className = 'gauge-label';
+    lbl.textContent = gaugeLabels[i];
+    w.appendChild(lbl);
+    gc.appendChild(w);
+});
+
+function applyGaugeSize() {
+    const n = 4;
+    const sz = Math.max(48, Math.min(160,
+        Math.floor((window.innerWidth - 32 - n * 4) / n),
+        Math.floor(window.innerHeight * 0.22)
+    )) + 'px';
+    document.querySelectorAll('.gauge-elem').forEach(el => {
+        el.style.width = sz;
+        el.style.height = sz;
+    });
+}
+window.addEventListener('resize', applyGaugeSize);
+applyGaugeSize();
+
+const x = new InnovertISDmini(gateway);
+
+function refreshGauges() {
+    const gv = (adr, scale) => { const r = x.getReg(adr); return r ? r.VALUE / (scale||1) : 0; };
+    gauge_fb.setValue(gv(2, 10));
+    gauge_rpm.setValue(gv(4, 1));
+    gauge_i.setValue(gv(3, 10));
+    gauge_v.setValue(gv(5, 10));
+    setTimeout(refreshGauges, 150);
+}
+setTimeout(refreshGauges, 0);
+</script>
+</body>
+</html>

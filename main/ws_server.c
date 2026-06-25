@@ -148,6 +148,7 @@ static void vServeApiCall(LinkedListItem_t *item, void *arg) {
             if(httpd_ws_send_frame_async(call->session->hd, call->session->fd, &frame) != ESP_OK) {
                 ESP_LOGW(TAG, "Send ping error");
                 vApiCallComplete(call);
+                return;
             }
             call->session->ulPingTs = xTaskGetTickCount();
         }
@@ -773,7 +774,7 @@ httpd_uri_t *pxWsServerInit(char *uri) {
         static StaticSemaphore_t xSemBuffer;
         xWsApiMutex = xSemaphoreCreateRecursiveMutexStatic( &xSemBuffer );
         xWsWorkerQueue = queue_create(10, sizeof(webapi_msg_t));
-        xTaskCreate(vWsApiCallWorker, "ApiCallWork", 8192, NULL, uxTaskPriorityGet(NULL), NULL); /* todo add context */
+        xTaskCreate(vWsApiCallWorker, "ApiCallWork", 8192, NULL, 6, NULL); /* above ws_mb (5) so responses are forwarded immediately */
     }
     return ws_h;
 }

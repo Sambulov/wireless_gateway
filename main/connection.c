@@ -335,8 +335,10 @@ void wifi_init_ap_sta(wifi_config_t *ap_cnf, wifi_config_t *sta_cnf) {
     apxNetIf[NET_IF_STA_IND] = esp_netif_create_default_wifi_sta();
     assert(apxNetIf[NET_IF_STA_IND]);
 
+#if CONFIG_WIFI_AP_ENABLE
     apxNetIf[NET_IF_AP_IND] = esp_netif_create_default_wifi_ap();
     assert(apxNetIf[NET_IF_AP_IND]);
+#endif
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
@@ -344,26 +346,33 @@ void wifi_init_ap_sta(wifi_config_t *ap_cnf, wifi_config_t *sta_cnf) {
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL));
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, ESP_EVENT_ANY_ID, &ip_event_handler, NULL));
 
+#if CONFIG_WIFI_AP_ENABLE
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
+#else
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+#endif
 
     if ((sta_cnf != NULL) && (sta_cnf->sta.ssid[0] != '\0') && (sta_cnf->sta.password[0] != '\0')) {
         ESP_LOGI(TAG, "Station connecting: SSID=%s, Password=%s", sta_cnf->sta.ssid, sta_cnf->sta.password);
-
         ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_STA, sta_cnf));
     }
 
+#if CONFIG_WIFI_AP_ENABLE
     ESP_LOGI(TAG, "Starting AP: SSID=%s, Password=%s", ap_cnf->ap.ssid, ap_cnf->ap.password);
     ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_AP, ap_cnf));
+#endif
 
     ESP_ERROR_CHECK(esp_wifi_start());
     if ((sta_cnf != NULL) && (sta_cnf->sta.ssid[0] != '\0')) {
         ESP_ERROR_CHECK(esp_wifi_connect());
-    }
-
-    ESP_LOGI(TAG, "Wi-Fi initialized in AP+STA mode");
-    if ((sta_cnf != NULL) && (sta_cnf->sta.ssid[0] != '\0')) {
         ESP_LOGI(TAG, "STA: Connecting to %s...", sta_cnf->sta.ssid);
     }
+
+#if CONFIG_WIFI_AP_ENABLE
+    ESP_LOGI(TAG, "Wi-Fi initialized in AP+STA mode");
+#else
+    ESP_LOGI(TAG, "Wi-Fi initialized in STA-only mode");
+#endif
 }
 
 #ifdef CONFIG_QEMU_BUILD
