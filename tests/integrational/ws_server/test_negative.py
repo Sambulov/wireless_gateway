@@ -689,8 +689,9 @@ async def test_concurrent_bad_request_clients():
 
 @pytest.mark.asyncio
 async def test_max_clients_bad_data():
-    """Open 5 concurrent connections each sending one bad JSON frame, then
-    verify the gateway recovers and accepts a new connection."""
+    """Open connections up to the gateway limit each sending one bad JSON frame,
+    then verify the gateway recovers and accepts a new connection.
+    Limited to 3 concurrent connections (web_server.c hardcodes ws_connections_left=3)."""
     async def one(_: int) -> None:
         try:
             async with websockets.connect(WS_URL) as ws:
@@ -699,8 +700,8 @@ async def test_max_clients_bad_data():
         except Exception:
             pass
 
-    await asyncio.gather(*[one(i) for i in range(5)], return_exceptions=True)
-    await asyncio.sleep(1.0)   # give httpd time to reclaim session slots
+    await asyncio.gather(*[one(i) for i in range(3)], return_exceptions=True)
+    await asyncio.sleep(1.5)   # give httpd time to reclaim session slots
     async with websockets.connect(WS_URL) as ws:
         assert await is_alive(ws), "Gateway unresponsive after concurrent bad-JSON clients"
 
