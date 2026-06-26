@@ -84,7 +84,8 @@ typedef struct {
     } uart;
 } app_context_t;
 
-httpd_uri_t *pxWsServerInit(char *uri);
+void ws_server_init(void);
+httpd_uri_t *ws_transport_httpd_init(char *uri);
 
 /*==========================*/
 

@@ -83,7 +83,8 @@ void app_main(void)
     app_context.web_server = start_webserver();
 
     ESP_LOGI(TAG, "Registering URI handlers");
-    webserver_register_handler(app_context.web_server, pxWsServerInit("/ws"));
+    ws_server_init();
+    webserver_register_handler(app_context.web_server, ws_transport_httpd_init("/ws"));
     webserver_register_handler(app_context.web_server, &dir_list);
     webserver_register_handler(app_context.web_server, &file_upload);
     webserver_register_handler(app_context.web_server, &file_delete);
