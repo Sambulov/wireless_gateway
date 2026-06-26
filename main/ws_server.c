@@ -61,6 +61,8 @@ static LinkedList_t pxWsApiWaitingForResponse = NULL;
 static queue_handle_t xWsWorkerQueue = NULL;
 static uint32_t call_id = 1; /* 0 is reserved as "broadcast" sentinel in periph_msg.id */
 
+static queue_handle_t ws_get_fid_queue(uint32_t ulFid);
+
 queue_handle_t get_ws_worker_queue(void) {
     return xWsWorkerQueue;
 }
@@ -405,20 +407,22 @@ static esp_err_t frame_handle_text(httpd_req_t *req, httpd_ws_frame_t *ws_pkt, u
     xSemaphoreTakeRecursive(xWsApiMutex, portMAX_DELAY);
     wscd->ulId = (uint32_t)sid_json->valueint & 0xffff;
 
-    /* New call: bind the registered handler (if any) and enqueue */
+    /* Bind handler if registered; queue-routed FIDs may have no handler */
     ApiHandlerItem_t *hlr = LinkedListGetObject(ApiHandlerItem_t,
                                                 pxLinkedListFindFirst(pxWsApiHandlers,
                                                                       bHandlerFidMatch,
                                                                       (void *)wscd->ulFid));
-    if (!hlr) {
-        /* No handler registered for this FID — reply with error and free the call */
-        ESP_LOGW(TAG, "No handler for FID %lu, dropping call id:%lu", wscd->ulFid, wscd->ulId);
+    uint8_t has_queue = (ws_get_fid_queue(wscd->ulFid) != NULL);
+    if (!hlr && !has_queue) {
+        ESP_LOGW(TAG, "No handler or queue for FID %lu, dropping call id:%lu", wscd->ulFid, wscd->ulId);
         bApiCallSendStatus(wscd, API_CALL_ERROR_STATUS_NO_HANDLER);
         free(wscd->pucReqData);
         free(wscd);
     } else {
-        wscd->fHandler = hlr->fHandler;
-        wscd->pxHandlerContext = hlr->xHandlerContext;
+        if(hlr) {
+            wscd->fHandler = hlr->fHandler;
+            wscd->pxHandlerContext = hlr->xHandlerContext;
+        }
         vLinkedListInsertLast(&pxWsApiCall, LinkedListItem(wscd));
         ESP_LOGI(TAG, "New api call %lu enqueued with id:%lu", wscd->ulFid, wscd->ulId);
     }
@@ -559,33 +563,43 @@ static esp_err_t eWsHandler(httpd_req_t *req) {
 }
 
 
-static uint8_t is_uart_fid(uint32_t fid) {
-    switch(fid) {
-    case ESP_WS_API_UART1_CNF:
-    case ESP_WS_API_UART1_RAW_RX:
-    case ESP_WS_API_UART1_RAW_TX:
-    case ESP_WS_API_UART2_CNF:
-    case ESP_WS_API_UART2_RAW_RX:
-    case ESP_WS_API_UART2_RAW_TX:
-        return 1;
-    default:
+typedef struct {
+    __LinkedListObject__
+    uint32_t ulFid;
+    void *xQueue;
+} FidQueueItem_t;
+
+static LinkedList_t pxWsFidQueues = NULL;
+
+static uint8_t bFidQueueMatch(LinkedListItem_t *item, void *arg) {
+    return LinkedListGetObject(FidQueueItem_t, item)->ulFid == (uint32_t)(uintptr_t)arg;
+}
+
+uint8_t ws_server_register_fid_queue(uint32_t ulFid, void *xQueue) {
+    if(xSemaphoreTakeRecursive(xWsApiMutex, pdMS_TO_TICKS(10)) != pdTRUE) return 0;
+    FidQueueItem_t *existing = LinkedListGetObject(FidQueueItem_t,
+        pxLinkedListFindFirst(pxWsFidQueues, bFidQueueMatch, (void *)(uintptr_t)ulFid));
+    if(existing) {
+        xSemaphoreGiveRecursive(xWsApiMutex);
         return 0;
     }
+    FidQueueItem_t *fq = malloc(sizeof(FidQueueItem_t));
+    if(!fq) {
+        xSemaphoreGiveRecursive(xWsApiMutex);
+        return 0;
+    }
+    fq->ulFid = ulFid;
+    fq->xQueue = xQueue;
+    vLinkedListInsertLast(&pxWsFidQueues, LinkedListItem(fq));
+    ESP_LOGI(TAG, "FID queue registered 0x%lx", ulFid);
+    xSemaphoreGiveRecursive(xWsApiMutex);
+    return 1;
 }
 
-/* RX FIDs use broadcast (id=0) responses — only one poll per FID per cycle */
-static uint8_t is_uart_rx_fid(uint32_t fid) {
-    return fid == ESP_WS_API_UART1_RAW_RX || fid == ESP_WS_API_UART2_RAW_RX;
-}
-
-static uint8_t is_modbus_fid(uint32_t fid) {
-    return fid == ESP_WS_API_UART1_MODBUS_REQ || fid == ESP_WS_API_UART2_MODBUS_REQ;
-}
-
-static queue_handle_t get_periph_queue(uint32_t fid) {
-    if(is_uart_fid(fid))   return get_uart_worker_queue();
-    if(is_modbus_fid(fid)) return get_modbus_worker_queue(fid);
-    return NULL;
+static queue_handle_t ws_get_fid_queue(uint32_t ulFid) {
+    FidQueueItem_t *fq = LinkedListGetObject(FidQueueItem_t,
+        pxLinkedListFindFirst(pxWsFidQueues, bFidQueueMatch, (void *)(uintptr_t)ulFid));
+    return fq ? fq->xQueue : NULL;
 }
 
 static void vForwardCallToPeripheral(ApiCall_t *call, queue_handle_t queue) {
@@ -671,27 +685,20 @@ static void vWsApiCallWorker(void *pvParameters) {
                 continue;
             }
 
-            queue_handle_t queue = get_periph_queue(call->ulFid);
+            queue_handle_t queue = ws_get_fid_queue(call->ulFid);
             if(queue) {
-                /* RX broadcast FIDs: only one poll message per FID per cycle.
-                 * All subscriber calls are parked in the waiting list; the single
-                 * peripheral response (id=0) will fan-out to all of them. */
-                if (!is_uart_rx_fid(call->ulFid) ||
-                    !pxLinkedListFindFirst(pxWsApiWaitingForResponse, bCallFidMatch, (void *)call->ulFid)) {
-                    vForwardCallToPeripheral(call, queue);
-                }
+                vForwardCallToPeripheral(call, queue);
                 vLinkedListInsertLast(&pxWsApiWaitingForResponse, item);
 
                 if (call->flags & CALL_FLAG_NEW) {
-                    bool sent = false; 
+                    bool sent = false;
                     ESP_LOGI(TAG, "send status DELIVERED");
                     sent = bApiCallSendStatus(call, API_CALL_STATUS_DELIVERED);
                     if (sent == true)
                         call->flags &= ~CALL_FLAG_NEW;
                 }
             } else {
-                /* No available peripheral */
-                ESP_LOGI(TAG, "no available peripheral. send status INVALID");
+                ESP_LOGI(TAG, "no handler or queue for FID %lu, send status INVALID", call->ulFid);
                 bApiCallSendStatus(call, API_CALL_STATUS_INVALID);
                 vLinkedListUnlink(item);
                 free(call->pucReqData);
@@ -712,7 +719,8 @@ static void vWsApiCallWorker(void *pvParameters) {
                 while (it != NULL) {
                     LinkedListItem_t *next_it = pxLinkedListFindNextNoOverlap(it, bCallFidMatch, (void *)periph_msg.fid);
                     ApiCall_t *c = LinkedListGetObject(ApiCall_t, it);
-                    c->fHandler(c, &c->pxHandlerContext, c->ulCallPending, periph_msg.data, periph_msg.len);
+                    if(c->fHandler)
+                        c->fHandler(c, &c->pxHandlerContext, c->ulCallPending, periph_msg.data, periph_msg.len);
                     if (periph_msg.len) {
                         ESP_LOGI(TAG, "broadcast fid:%lu len:%lu", periph_msg.fid, periph_msg.len);
                         _bApiCallSendJson(c, 0, periph_msg.data, periph_msg.len);
@@ -740,7 +748,8 @@ static void vWsApiCallWorker(void *pvParameters) {
                 goto next;
             }
 
-            call->fHandler(call, &call->pxHandlerContext, call->ulCallPending, periph_msg.data, periph_msg.len);
+            if(call->fHandler)
+                call->fHandler(call, &call->pxHandlerContext, call->ulCallPending, periph_msg.data, periph_msg.len);
             if(periph_msg.len) {
                 ESP_LOGI(TAG, "sent: %s : %lu", periph_msg.data, periph_msg.len);
                 _bApiCallSendJson(call, 0, periph_msg.data, periph_msg.len);
