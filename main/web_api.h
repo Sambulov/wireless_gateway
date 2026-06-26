@@ -1,6 +1,16 @@
 #ifndef NWWEB_H_INCLUDED
 #define NWWEB_H_INCLUDED
 
+#include <stdint.h>
+#include <stddef.h>
+
+typedef struct webapi_msg {
+    int      fid;
+    int      id;
+    uint8_t *data;
+    size_t   len;
+} webapi_msg_t;
+
 #define API_HANDLER_ID_GENEGAL                      0x00000000
 
 #define API_CALL_STATUS_COMPLETE                    0x00000000

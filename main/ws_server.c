@@ -1,17 +1,20 @@
-#include <esp_wifi.h>
-#include <esp_log.h>
-#include "cJSON.h"
+#include <stdio.h>
+#include <stdbool.h>
 
+#include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 
-#include <stdio.h>
+#include <esp_log.h>
+#include "esp_http_server.h"
 
-#include "app.h"
-
+#include "cJSON.h"
 #include "CodeLib.h"
-
+#include "sys_def.h"
 #include "web_api.h"
+#include "connection.h"
+
+static const char *TAG = "ws_server";
 
 typedef struct {
     __LinkedListObject__

@@ -126,17 +126,7 @@ void ws_uart_integrational_test_run(app_context_t *app);
 //#define ESP_WS_API_UART2_MODBUS_UDP  0x1126
 esp_err_t ws_modbus_run(app_context_t *app);
 
-/* Is used to send "short" ApiCall_t from ws_server to peripheral workers (uart, modbus) */
-typedef struct webapi_msg
-{
-	int fid;
-	int id;
-	uint8_t *data;
-	size_t len;
-}webapi_msg_t;
-
 queue_handle_t get_ws_worker_queue(void);
-
 
 #ifdef __cplusplus
 }
