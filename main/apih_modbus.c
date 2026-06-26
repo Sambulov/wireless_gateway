@@ -291,8 +291,8 @@ esp_err_t ws_modbus_run(app_context_t *app) {
         app->uart.port[i].proto_context = &w->mb;
     }
 
-    api_call_register(&mb_api_handler, ESP_WS_API_UART1_MODBUS_REQ, NULL);
-    api_call_register(&mb_api_handler, ESP_WS_API_UART2_MODBUS_REQ, NULL);
+    ws_server_register_fid_queue(ESP_WS_API_UART1_MODBUS_REQ, mb_queues[0]);
+    ws_server_register_fid_queue(ESP_WS_API_UART2_MODBUS_REQ, mb_queues[1]);
 
     BaseType_t r0 = xTaskCreatePinnedToCore(ws_modbus_task, "ws_mb0", 4096,
                                             &mb_workers[0], 5, NULL, tskNO_AFFINITY);

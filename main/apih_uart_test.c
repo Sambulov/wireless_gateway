@@ -1,5 +1,7 @@
 #include "app.h"
 
+queue_handle_t get_uart_worker_queue(void);
+
 static void log_uart_config(app_context_t *app)
 {
     static const char *parity_str[] = { "none", "odd", "even" };
