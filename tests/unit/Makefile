@@ -12,8 +12,8 @@ INCLUDES := \
     -I$(CPPUTEST)/include \
     -Istubs
 
-CFLAGS   := -Wall -Wextra -g $(INCLUDES)
-CXXFLAGS := -Wall -Wextra -g $(INCLUDES)
+CFLAGS   := -Wall -Wextra -g -DWS_SERVER_TEST $(INCLUDES)
+CXXFLAGS := -Wall -Wextra -g -DWS_SERVER_TEST $(INCLUDES)
 LDFLAGS  := -L$(CPPUTEST)/lib -lCppUTest -lCppUTestExt
 
 # ── Source → object mapping ───────────────────────────────────────────────
@@ -37,7 +37,8 @@ C_SRCS := \
 
 CPP_SRCS := \
     AllTests.cpp \
-    WsFrameParserTest.cpp
+    WsFrameParserTest.cpp \
+    WsServerTest.cpp
 
 C_OBJS   := $(patsubst %.c,  $(BUILD)/%.o, $(C_SRCS))
 CPP_OBJS := $(patsubst %.cpp,$(BUILD)/%.o, $(CPP_SRCS))

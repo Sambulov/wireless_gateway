@@ -687,6 +687,35 @@ void ws_server_init(void) {
     ws_hal_task_create(vWsApiCallWorker, "ApiCallWork", 8192, NULL, 6);
 }
 
+#ifdef WS_SERVER_TEST
+/* Reset all global state between unit tests. Never call in production. */
+void ws_server_test_reset(void) {
+    LinkedListItem_t *item;
+    while ((item = pxLinkedListFindFirst(pxWsApiCall, NULL, NULL)) != NULL) {
+        ApiCall_t *c = LinkedListGetObject(ApiCall_t, item);
+        vLinkedListUnlink(item);
+        free(c->pucReqData);
+        free(c);
+    }
+    while ((item = pxLinkedListFindFirst(pxWsApiWaitingForResponse, NULL, NULL)) != NULL) {
+        ApiCall_t *c = LinkedListGetObject(ApiCall_t, item);
+        vLinkedListUnlink(item);
+        free(c->pucReqData);
+        free(c);
+    }
+    while ((item = pxLinkedListFindFirst(pxWsApiHandlers, NULL, NULL)) != NULL) {
+        ApiHandlerItem_t *h = LinkedListGetObject(ApiHandlerItem_t, item);
+        vLinkedListUnlink(item);
+        free(h);
+    }
+    while ((item = pxLinkedListFindFirst(pxWsFidQueues, NULL, NULL)) != NULL) {
+        FidQueueItem_t *fq = LinkedListGetObject(FidQueueItem_t, item);
+        vLinkedListUnlink(item);
+        free(fq);
+    }
+}
+#endif
+
 
 uint8_t api_call_register(api_handler_t, uint32_t, void *) __attribute__ ((alias ("bApiCallRegister")));
 uint8_t api_call_unregister(uint32_t) __attribute__ ((alias ("bApiCallUnregister")));
