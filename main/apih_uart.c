@@ -1,7 +1,12 @@
-#include "app.h"
+#ifdef APIH_UART_TEST
+#  include "apih_uart_app_types.h"
+#else
+#  include "app.h"
+#endif
 #include "uart.h"
 #include "cJSON_helpers.h"
 #include "web_api.h"
+#include "ws_hal.h"
 
 typedef struct {
     __linked_list_object__
@@ -19,9 +24,9 @@ typedef struct {
     uint32_t boud;
 } api_cmd_uart_t;
 
-queue_handle_t cmd_queue;
+ws_queue_t cmd_queue;
 
-queue_handle_t get_uart_worker_queue(void)
+ws_queue_t get_uart_worker_queue(void)
 {
 	return cmd_queue;
 }
@@ -30,7 +35,7 @@ typedef struct {
     uint32_t amount;
     uint32_t size;
     uint8_t *buf;
-    SemaphoreHandle_t lock;
+    ws_mutex_t lock;
 } uart_subscription_context_t;
 
 
@@ -42,13 +47,13 @@ static void uart_event_on_rx(void *event_trigger, void *sender, void *context) {
     uart_subscription_context_t *buf_desc = (uart_subscription_context_t *)context;
     gw_uart_event_data_t *data = (gw_uart_event_data_t *)event_trigger;
 
-    xSemaphoreTake(buf_desc->lock, portMAX_DELAY);
+    ws_hal_mutex_take(buf_desc->lock, WS_HAL_WAIT_FOREVER);
     size_t sz = buf_desc->size - buf_desc->amount;
     if(sz > data->size)
         sz = data->size;
     mem_cpy(&buf_desc->buf[buf_desc->amount], data->buf, sz);
     buf_desc->amount += sz;
-    xSemaphoreGive(buf_desc->lock);
+    ws_hal_mutex_give(buf_desc->lock);
 }
 
 
@@ -112,7 +117,7 @@ static void send_uart_response(int id, int fid, cJSON *json)
 
 	msg.id  = id;
 	msg.fid = fid;
-	queue_send(get_ws_worker_queue(), &msg, pdMS_TO_TICKS(0));
+	ws_hal_queue_send(get_ws_worker_queue(), &msg, WS_HAL_WAIT_NONE);
 }
 
 static uint8_t parse_uart_params(const uint8_t *data, size_t len,
@@ -172,13 +177,13 @@ static void handle_msg(app_context_t *app, webapi_msg_t *in_msg)
 		if (!ctx)
 			ctx = &uart_context[1];
 
-		xSemaphoreTake(ctx->lock, portMAX_DELAY);
+		ws_hal_mutex_take(ctx->lock, WS_HAL_WAIT_FOREVER);
 		amount = ctx->amount;
 		if (amount > 0) {
 			mem_cpy(tmp, ctx->buf, amount);
 			ctx->amount = 0;
 		}
-		xSemaphoreGive(ctx->lock);
+		ws_hal_mutex_give(ctx->lock);
 
 		if (amount > 0) {
 			int32_t b64_size = base64_encode_buffer_required(amount);
@@ -254,7 +259,7 @@ static void handle_msg(app_context_t *app, webapi_msg_t *in_msg)
 		}
 		break;
 	default:
-		ESP_LOGI(TAG, "UART have no FID (%d) handler\n", in_msg->fid);
+		ws_hal_log_i(TAG, "UART have no FID (%d) handler\n", in_msg->fid);
 		break;
 	}
 }
@@ -265,7 +270,7 @@ void ws_uart_task(void *param) {
     app_context_t *app = param;
 
     for (;;) {
-        if (queue_receive(cmd_queue, &in_msg, portMAX_DELAY) == pdPASS) {
+        if (ws_hal_queue_receive(cmd_queue, &in_msg, WS_HAL_WAIT_FOREVER) != 0) {
             handle_msg(app, in_msg);
             free(in_msg->data);
             free(in_msg);
@@ -276,7 +281,7 @@ void ws_uart_task(void *param) {
 
 esp_err_t ws_uart_run(app_context_t *app)
 {
-        cmd_queue = queue_create(10, sizeof(void *));
+        cmd_queue = ws_hal_queue_create(10, sizeof(void *));
         ws_server_register_fid_queue(ESP_WS_API_UART1_CNF,    cmd_queue);
         ws_server_register_fid_queue(ESP_WS_API_UART1_RAW_RX, cmd_queue);
         ws_server_register_fid_queue(ESP_WS_API_UART1_RAW_TX, cmd_queue);
@@ -289,20 +294,50 @@ esp_err_t ws_uart_run(app_context_t *app)
         uart_context[0].buf = uart1_buf;
         uart_context[0].amount = 0;
         uart_context[0].size = sizeof(uart1_buf);
-        uart_context[0].lock = xSemaphoreCreateMutex();
+        uart_context[0].lock = ws_hal_mutex_create();
         uart1_delegate.handler = &uart_event_on_rx;
         uart1_delegate.context = &uart_context[0];
 
         uart_context[1].buf = uart2_buf;
         uart_context[1].amount = 0;
         uart_context[1].size = sizeof(uart2_buf);
-        uart_context[1].lock = xSemaphoreCreateMutex();
+        uart_context[1].lock = ws_hal_mutex_create();
         uart2_delegate.context = &uart_context[1];
         uart2_delegate.handler = &uart_event_on_rx;
 
         gw_uart_on_receive_subscribe(&app->uart.port[0].desc, &uart1_delegate);
         gw_uart_on_receive_subscribe(&app->uart.port[1].desc, &uart2_delegate);
 
-        return xTaskCreatePinnedToCore(ws_uart_task, "ws_uart", 4096, app, 5, NULL, tskNO_AFFINITY);
+        ws_hal_task_create(ws_uart_task, "ws_uart", 4096, app, 5);
+        return ESP_OK;
 }
+
+#ifdef APIH_UART_TEST
+void apih_uart_test_init(void) {
+    uart_context[0].buf    = uart1_buf;
+    uart_context[0].size   = sizeof(uart1_buf);
+    uart_context[0].amount = 0;
+    uart_context[0].lock   = ws_hal_mutex_create();
+    uart_context[1].buf    = uart2_buf;
+    uart_context[1].size   = sizeof(uart2_buf);
+    uart_context[1].amount = 0;
+    uart_context[1].lock   = ws_hal_mutex_create();
+}
+
+void apih_uart_test_reset(void) {
+    uart_context[0].amount = 0;
+    uart_context[1].amount = 0;
+}
+
+void apih_uart_test_fill_rx(int port, const uint8_t *data, uint32_t len) {
+    uart_subscription_context_t *ctx = &uart_context[port];
+    uint32_t sz = ctx->size < len ? ctx->size : len;
+    mem_cpy(ctx->buf, data, sz);
+    ctx->amount = sz;
+}
+
+void apih_uart_test_handle_msg(app_context_t *app, webapi_msg_t *msg) {
+    handle_msg(app, msg);
+}
+#endif
 
