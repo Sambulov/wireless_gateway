@@ -503,6 +503,7 @@ static void ws_server_on_text(ws_conn_t *conn, uint8_t *data, size_t len) {
 void ws_server_on_disconnect(ws_conn_t *conn) {
     ApiSession_t *sess = ws_conn_get_user_data(conn);
     if(!sess) return;
+    ws_conn_set_user_data(conn, NULL);
     ws_hal_log_i(TAG, "Disconnect fd=%d sess=%p", sess->fd, (void *)sess);
     vBreakApiCallsByFd(WS_HAL_WAIT_FOREVER, sess->fd);
     free(sess);
