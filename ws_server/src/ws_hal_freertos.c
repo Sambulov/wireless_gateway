@@ -1,6 +1,7 @@
 #include "ws_hal.h"
 
 #include <stdarg.h>
+#include <stdio.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
@@ -52,16 +53,27 @@ void ws_hal_task_self_delete(void) {
     vTaskDelete(NULL);
 }
 
+static void ws_hal_log_write(esp_log_level_t level, const char *tag, const char *fmt, va_list args) {
+    char buf[160];
+    int len = vsnprintf(buf, sizeof(buf), fmt, args);
+    if(len < 0) return;
+    if((size_t)len >= sizeof(buf) - 1)
+        len = sizeof(buf) - 2; /* leave room for '\n' + '\0' */
+    buf[len]     = '\n';
+    buf[len + 1] = '\0';
+    esp_log_write(level, tag, "%s", buf);
+}
+
 void ws_hal_log_i(const char *tag, const char *fmt, ...) {
     va_list args;
     va_start(args, fmt);
-    esp_log_writev(ESP_LOG_INFO, tag, fmt, args);
+    ws_hal_log_write(ESP_LOG_INFO, tag, fmt, args);
     va_end(args);
 }
 
 void ws_hal_log_w(const char *tag, const char *fmt, ...) {
     va_list args;
     va_start(args, fmt);
-    esp_log_writev(ESP_LOG_WARN, tag, fmt, args);
+    ws_hal_log_write(ESP_LOG_WARN, tag, fmt, args);
     va_end(args);
 }
