@@ -44,6 +44,10 @@ uint32_t ws_hal_tick(void) {
     return (uint32_t)xTaskGetTickCount();
 }
 
+uint32_t ws_hal_ms_to_ticks(uint32_t ms) {
+    return (uint32_t)pdMS_TO_TICKS(ms);
+}
+
 void ws_hal_task_create(void (*fn)(void *), const char *name,
                         uint32_t stack_words, void *arg, int priority) {
     xTaskCreate(fn, name, stack_words, arg, priority, NULL);

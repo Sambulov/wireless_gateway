@@ -48,6 +48,13 @@ typedef struct {
     uint32_t ulFid;
     uint32_t ulCallPending;
     call_flags_t flags;
+    /* CALL_FLAG_LONG_TERM throttling: client-supplied ARG.RDL (re-poll delay,
+     * ms) converted to ticks at parse time. ulNextPollTick is armed each time
+     * a response comes back in, so the call isn't re-forwarded to its
+     * peripheral queue before that delay elapses. Both are 0 (poll again
+     * immediately) for calls that don't send RDL, preserving prior behavior. */
+    uint32_t ulPollIntervalTicks;
+    uint32_t ulNextPollTick;
 } ApiCall_t;
 
 typedef struct {
@@ -453,6 +460,12 @@ static void ws_server_on_text(ws_conn_t *conn, uint8_t *data, size_t len) {
         wscd->pucReqData   = (uint8_t *)cJSON_PrintUnformatted(arg_json);
         wscd->ulReqDataLen = lStrLen((char *)wscd->pucReqData);
         ws_hal_log_i(TAG, "Api arg %s", wscd->pucReqData);
+
+        /* ARG.RDL (re-poll delay, ms) throttles CALL_FLAG_LONG_TERM re-arming;
+         * generic framework field, meaningful to any FID that uses FLAGS:4. */
+        cJSON *rdl_json = cJSON_GetObjectItem(arg_json, "RDL");
+        if(cJSON_IsNumber(rdl_json) && rdl_json->valueint > 0)
+            wscd->ulPollIntervalTicks = ws_hal_ms_to_ticks((uint32_t)rdl_json->valueint);
     }
 
     cJSON *flags_json = cJSON_GetObjectItem(json, "FLAGS");
@@ -596,6 +609,15 @@ static void vWsApiCallWorker(void *pvParameters) {
                 continue;
             }
 
+            /* Long-term calls that haven't earned another poll yet (ARG.RDL)
+             * stay put in pxWsApiCall until ulNextPollTick elapses, instead
+             * of being re-forwarded to the peripheral queue immediately. */
+            if((call->flags & CALL_FLAG_LONG_TERM) && !(call->flags & CALL_FLAG_NEW)
+               && ((int32_t)(ws_hal_tick() - call->ulNextPollTick) < 0)) {
+                item = next;
+                continue;
+            }
+
             ws_queue_t queue = ws_get_fid_queue(call->ulFid);
             if(queue) {
                 vForwardCallToPeripheral(call, queue);
@@ -639,6 +661,7 @@ static void vWsApiCallWorker(void *pvParameters) {
                         vLinkedListUnlink(it);
                         free(c);
                     } else {
+                        c->ulNextPollTick = ws_hal_tick() + c->ulPollIntervalTicks;
                         vLinkedListInsertLast(&pxWsApiCall, it);
                     }
                     it = next_it;
@@ -669,6 +692,7 @@ static void vWsApiCallWorker(void *pvParameters) {
                 vLinkedListUnlink(it2);
                 free(call2);
             } else {
+                call2->ulNextPollTick = ws_hal_tick() + call2->ulPollIntervalTicks;
                 vLinkedListInsertLast(&pxWsApiCall, it2);
             }
 next:
@@ -683,8 +707,15 @@ next:
 void ws_server_init(void) {
     xWsApiMutex    = ws_hal_mutex_create();
     xWsWorkerQueue = ws_hal_queue_create(10, sizeof(webapi_msg_t));
-    /* Priority above ws_mb (5) so responses are forwarded immediately */
-    ws_hal_task_create(vWsApiCallWorker, "ApiCallWork", 8192, NULL, 6);
+    /* Same priority as ws_mb (5) and the HTTP server's default task priority.
+     * Used to run one level above (6) "so responses are forwarded
+     * immediately", but under sustained CALL_FLAG_LONG_TERM load this task
+     * rarely blocks (its queue-receive keeps finding work), and being
+     * strictly higher priority than httpd starved it of CPU entirely rather
+     * than just delaying it. Matching priority lets FreeRTOS's time-slicing
+     * round-robin give httpd (and ws_mb) a fair share even while this task
+     * is continuously busy. */
+    ws_hal_task_create(vWsApiCallWorker, "ApiCallWork", 8192, NULL, 5);
 }
 
 #ifdef WS_SERVER_TEST

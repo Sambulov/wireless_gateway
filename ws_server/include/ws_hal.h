@@ -20,6 +20,7 @@ int        ws_hal_queue_receive(ws_queue_t q, void *item, uint32_t timeout_ms);
 
 /* Time — monotonic ticks; same unit as FreeRTOS xTaskGetTickCount() on target */
 uint32_t   ws_hal_tick(void);
+uint32_t   ws_hal_ms_to_ticks(uint32_t ms);
 
 /* Task */
 void ws_hal_task_create(void (*fn)(void *), const char *name,
