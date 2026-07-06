@@ -14,6 +14,9 @@ uint32_t ws_hal_tick(void) { return stub_tick; }
 void ws_hal_stub_set_tick(uint32_t t)     { stub_tick = t; }
 void ws_hal_stub_advance_tick(uint32_t d) { stub_tick += d; }
 
+/* Tests treat 1 stub tick == 1 ms; no conversion needed. */
+uint32_t ws_hal_ms_to_ticks(uint32_t ms) { return ms; }
+
 /* ── Mutex ────────────────────────────────────────────────────────────── */
 
 /* Tracks recursive depth so tests can catch unbalanced take/give. */
