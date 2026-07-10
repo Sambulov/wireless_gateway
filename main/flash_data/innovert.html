@@ -836,7 +836,8 @@ function reconnectWs() {
 
 // ── Init ──────────────────────────────────────────────────────
 
-const gateway = `ws://${window.location.host}/ws`;
+const WS_PORT = 81; // must match Kconfig CONFIG_WEB_SOCKET_SERVER_PORT
+const gateway = `ws://${window.location.hostname}:${WS_PORT}/ws`;
 const gauge_fb  = new Gauge('160px', 'Hz',  '—', '#3b82f6');
 const gauge_rpm = new Gauge('160px', 'RPM', '—', '#8b5cf6');
 const gauge_i   = new Gauge('160px', 'A',   '—', '#f59e0b');

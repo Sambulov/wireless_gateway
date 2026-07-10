@@ -10,6 +10,15 @@ menu "Project Configuration"
         default 10
         help
             Maximum allowed web clients connections.
+    config WEB_SOCKET_SERVER_PORT
+        int "WebSocket server port"
+        range 0 65535
+        default 81
+        help
+            Port for the WebSocket API, kept on its own httpd instance
+            (own FreeRTOS task/select loop) separate from the HTTP file
+            server on WEB_SERVER_PORT. This way a slow file transfer on
+            the HTTP server cannot block WebSocket connections/handshakes.
     config WEB_SOCKET_MAX_PENDING_API
         int "Pending number"
         default 20

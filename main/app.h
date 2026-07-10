@@ -61,6 +61,7 @@ esp_err_t setup_littlefs(void);
 #define WEB_FILE_HANDLER_NAME "/*"
 
 httpd_handle_t start_webserver(void);
+httpd_handle_t start_ws_server(void);
 uint8_t webserver_register_handler(httpd_handle_t server, httpd_uri_t *uri_handler);
 
 extern httpd_uri_t file_server;
@@ -74,6 +75,7 @@ typedef struct {
     wifi_config_t ap_cnf;
     wifi_config_t sta_cnf;
     httpd_handle_t web_server;
+    httpd_handle_t ws_server;
     struct {
       uint32_t raw_sent_ts;
       struct app_uart_t {

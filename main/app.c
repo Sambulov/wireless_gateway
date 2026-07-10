@@ -1,6 +1,9 @@
 #include "app.h"
 #include "onewire_bus.h"
 #include "ds18b20.h"
+#include "driver/gpio.h"
+
+#define LED_D2_GPIO GPIO_NUM_2
 
 static void vDallasSensorTask( void * pvParameters ) {
     #define EXAMPLE_ONEWIRE_BUS_GPIO    0
@@ -64,6 +67,9 @@ void app_main(void)
     ESP_ERROR_CHECK(ret);
     load_config(&app_context);
 
+    gpio_reset_pin(LED_D2_GPIO);
+    gpio_set_direction(LED_D2_GPIO, GPIO_MODE_OUTPUT);
+
     /* system HW */
     if(gw_uart_init(&(app_context.uart.port[0].desc) , GW_UART_PORT_0, 2048))
         ESP_LOGI("app", "Uart0 ok");
@@ -81,10 +87,11 @@ void app_main(void)
 
     // /* Start the server for the first time */
     app_context.web_server = start_webserver();
+    app_context.ws_server  = start_ws_server();
 
     ESP_LOGI(TAG, "Registering URI handlers");
     ws_server_init();
-    webserver_register_handler(app_context.web_server, ws_transport_httpd_init("/ws"));
+    webserver_register_handler(app_context.ws_server, ws_transport_httpd_init("/ws"));
     webserver_register_handler(app_context.web_server, &dir_list);
     webserver_register_handler(app_context.web_server, &file_upload);
     webserver_register_handler(app_context.web_server, &file_delete);
@@ -104,9 +111,16 @@ void app_main(void)
     ws_uart_integrational_test_run(&app_context);
 #endif
 
+    uint32_t led_tick = 0;
+    uint8_t led_state = 0;
     while (1) {
         api_handler_system_work(&app_context);
+        if (++led_tick >= CONFIG_FREERTOS_HZ) {
+            led_tick = 0;
+            led_state ^= 1;
+            gpio_set_level(LED_D2_GPIO, led_state);
+        }
         /* give other tasks to work, also idle task to reset wdt */
-        task_delay(pdMS_TO_TICKS(10));
+        task_delay(1);
     }
 }
