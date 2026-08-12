@@ -1,4 +1,9 @@
 CONFIG_HTTPD_WS_SUPPORT=y
+# Two httpd instances (HTTP file server + dedicated WS server, see
+# start_webserver()/start_ws_server() in main/web_server.c) plus the TFTP
+# server share this single global socket pool; the IDF default of 10 is
+# not enough headroom for two httpd instances at once.
+CONFIG_LWIP_MAX_SOCKETS=16
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
