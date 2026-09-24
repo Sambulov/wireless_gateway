@@ -603,6 +603,11 @@ static void vWsApiCallWorkerStep(void) {
                         free(fc->pucReqData);
                         free(fc);
                     }
+                    /* The loop above may have freed the call `next` points to
+                     * (same fd/FID/SID queued right after this TO_DELETE) —
+                     * re-read it; `item` is still linked and never matches
+                     * itself since its session was cleared above. */
+                    next = pxLinkedListFindNextNoOverlap(item, NULL, NULL);
                 }
                 vLinkedListUnlink(item);
                 free(call->pucReqData);

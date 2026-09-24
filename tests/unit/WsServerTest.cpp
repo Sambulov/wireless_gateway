@@ -22,6 +22,9 @@
  *
  * [x] bApiCallGetId — NULL call → fails
  * [x] bApiCallGetId — NULL out_id → fails
+ *
+ * Regression (built with ASan/UBSan, see Makefile):
+ * [x] TO_DELETE followed by same fd/FID/SID call → both freed, no UAF
  */
 
 extern "C" {
@@ -44,6 +47,7 @@ extern "C" {
                             uint8_t *data, size_t len);
     void ws_server_on_disconnect(ws_conn_t *conn);
     void ws_server_test_reset(void);
+    void ws_server_test_worker_step(void);
 }
 
 /* ── Helpers ──────────────────────────────────────────────────────────── */
@@ -374,4 +378,54 @@ TEST(WsServerApiCallGetId, NullCallReturnsFail) {
 TEST(WsServerApiCallGetId, NullOutIdReturnsFail) {
     uint32_t dummy = 0;
     LONGS_EQUAL(0, bApiCallGetId(&dummy, NULL));
+}
+
+/* ── TEST_GROUP: WsServerRegression ───────────────────────────────────── */
+/* One test per fixed bug. The failures here are memory errors, so they are
+ * only reliable under ASan (enabled in the Makefile). */
+
+#define REG_FID_HANDLER  0x6001   /* handler only, no peripheral queue */
+#define REG_FID_QUEUE    0x6002   /* routed to periph_q                */
+
+TEST_GROUP(WsServerRegression) {
+    ws_conn_t *conn;
+    void *periph_q;
+    void setup() {
+        ws_hal_stub_reset();
+        ws_server_init();
+        conn = ws_conn_stub_make(1);
+        ws_server_on_connect(conn);
+        periph_q = ws_hal_queue_create(4, sizeof(webapi_msg_t *));
+        bApiCallRegister(dummy_handler, REG_FID_HANDLER, NULL);
+        ws_server_register_fid_queue(REG_FID_QUEUE, periph_q);
+    }
+    void teardown() {
+        webapi_msg_t *msg;
+        while (ws_hal_queue_receive(periph_q, &msg, WS_HAL_WAIT_NONE)) {
+            free(msg->data);
+            free(msg);
+        }
+        ws_server_on_disconnect(conn);
+        ws_server_test_reset();
+        free(conn);
+    }
+};
+
+TEST(WsServerRegression, ToDeleteFreesSameCallQueuedRightAfterIt) {
+    /* The worker cached `next` before handling TO_DELETE, then freed every
+     * call with the same fd/FID/SID — including `next` when the client sent
+     * the target call right after the delete. `item = next` then walked
+     * freed memory. */
+    send_text(conn, "{\"FID\":24578,\"FLAGS\":8,\"SID\":7}");  /* 0x6002 */
+    send_text(conn, "{\"FID\":24578,\"FLAGS\":4,\"SID\":7}");
+
+    ws_server_test_worker_step();
+
+    /* Both calls are gone: nothing forwarded, one DELIVERED for the delete */
+    LONGS_EQUAL(0, ws_hal_stub_queue_count(periph_q));
+    LONGS_EQUAL(1, ws_conn_stub_send_calls(conn));
+
+    ws_server_test_worker_step();
+    LONGS_EQUAL(0, ws_hal_stub_queue_count(periph_q));
+    LONGS_EQUAL(1, ws_conn_stub_send_calls(conn));
 }

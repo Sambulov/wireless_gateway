@@ -12,9 +12,14 @@ INCLUDES := \
     -I$(ROOT)/main \
     -I$(CPPUTEST)/include
 
-CFLAGS   := -Wall -Wextra -g -DWS_SERVER_TEST -DAPIH_UART_TEST $(INCLUDES)
-CXXFLAGS := -Wall -Wextra -g -DWS_SERVER_TEST -DAPIH_UART_TEST $(INCLUDES)
-LDFLAGS  := -L$(CPPUTEST)/lib -lCppUTest -lCppUTestExt
+# ASan/UBSan: regression tests for memory bugs (use-after-free, NULL
+# writes) only fail reliably under a sanitizer. UBSan is made fatal —
+# by default it only prints and the run still reports OK.
+SANITIZE := -fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer
+
+CFLAGS   := -Wall -Wextra -g -DWS_SERVER_TEST -DAPIH_UART_TEST $(SANITIZE) $(INCLUDES)
+CXXFLAGS := -Wall -Wextra -g -DWS_SERVER_TEST -DAPIH_UART_TEST $(SANITIZE) $(INCLUDES)
+LDFLAGS  := -L$(CPPUTEST)/lib -lCppUTest -lCppUTestExt $(SANITIZE)
 
 # ── Source → object mapping ───────────────────────────────────────────────
 # VPATH lets Make find sources by basename without per-rule path repetition.
@@ -58,8 +63,14 @@ TARGET := $(BUILD)/test_runner
 
 all: $(TARGET)
 
+# detect_leaks=0: existing tests don't free everything they allocate yet.
+# The caller's ASAN_OPTIONS go last so they can override it.
 run: $(TARGET)
-	$< -v
+	ASAN_OPTIONS="detect_leaks=0:$$ASAN_OPTIONS" $< -v
+
+# Rebuild everything when flags change here (e.g. objects left from a build
+# without sanitizers would otherwise link silently uninstrumented).
+$(OBJS): Makefile
 
 $(TARGET): $(OBJS) | $(BUILD)
 	g++ $^ $(LDFLAGS) -o $@
