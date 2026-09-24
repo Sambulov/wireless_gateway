@@ -23,7 +23,7 @@
  * [x] bApiCallGetId — NULL call → fails
  * [x] bApiCallGetId — NULL out_id → fails
  *
- * Regression (need ASan — `make run` builds with it):
+ * Regression (built with ASan/UBSan, see Makefile):
  * [x] Ping send fails on last pending call → no write through NULL session
  * [x] TO_DELETE followed by same fd/FID/SID call → both freed, no UAF
  */
