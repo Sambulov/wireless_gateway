@@ -233,6 +233,7 @@ static esp_err_t common_http_handler(httpd_req_t *req)
     if(chunk == NULL) {
         fclose(fd);
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to read existing file");
+        return ESP_FAIL;
     }
     size_t data_len;
     do {

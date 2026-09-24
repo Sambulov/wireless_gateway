@@ -61,6 +61,7 @@ esp_err_t setup_littlefs(void);
 #define WEB_FILE_HANDLER_NAME "/*"
 
 httpd_handle_t start_webserver(void);
+httpd_handle_t start_ws_server(void);
 uint8_t webserver_register_handler(httpd_handle_t server, httpd_uri_t *uri_handler);
 
 extern httpd_uri_t file_server;
@@ -74,6 +75,7 @@ typedef struct {
     wifi_config_t ap_cnf;
     wifi_config_t sta_cnf;
     httpd_handle_t web_server;
+    httpd_handle_t ws_server;
     struct {
       uint32_t raw_sent_ts;
       struct app_uart_t {
@@ -84,7 +86,8 @@ typedef struct {
     } uart;
 } app_context_t;
 
-httpd_uri_t *pxWsServerInit(char *uri);
+void ws_server_init(void);
+httpd_uri_t *ws_transport_httpd_init(char *uri);
 
 /*==========================*/
 
@@ -126,19 +129,7 @@ void ws_uart_integrational_test_run(app_context_t *app);
 //#define ESP_WS_API_UART2_MODBUS_UDP  0x1126
 esp_err_t ws_modbus_run(app_context_t *app);
 
-/* Is used to send "short" ApiCall_t from ws_server to peripheral workers (uart, modbus) */
-typedef struct webapi_msg
-{
-	int fid;
-	int id;
-	uint8_t *data;
-	size_t len;
-}webapi_msg_t;
-
-queue_handle_t get_uart_worker_queue(void);
-queue_handle_t get_modbus_worker_queue(uint32_t fid);
-queue_handle_t get_ws_worker_queue(void);
-
+void *get_ws_worker_queue(void);
 
 #ifdef __cplusplus
 }

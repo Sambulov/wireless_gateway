@@ -352,7 +352,7 @@ void wifi_init_ap_sta(wifi_config_t *ap_cnf, wifi_config_t *sta_cnf) {
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
 #endif
 
-    if ((sta_cnf != NULL) && (sta_cnf->sta.ssid[0] != '\0') && (sta_cnf->sta.password[0] != '\0')) {
+    if ((sta_cnf != NULL) && (sta_cnf->sta.ssid[0] != '\0')) {
         ESP_LOGI(TAG, "Station connecting: SSID=%s, Password=%s", sta_cnf->sta.ssid, sta_cnf->sta.password);
         ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_STA, sta_cnf));
     }

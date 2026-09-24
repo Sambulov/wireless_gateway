@@ -42,7 +42,8 @@
     const fileManager = document.getElementById('fileManager');
     const fileInput = document.getElementById('fileInput');
     const deleteFileButton = document.getElementById('deleteFileButton');
-    const gateway = `ws://${window.location.hostname}/ws`;
+    const WS_PORT = 81; // must match Kconfig CONFIG_WEB_SOCKET_SERVER_PORT
+    const gateway = `ws://${window.location.hostname}:${WS_PORT}/ws`;
     let websocket;
     let selectedFile = null;
 

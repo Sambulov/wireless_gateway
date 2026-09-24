@@ -1,6 +1,16 @@
 #ifndef NWWEB_H_INCLUDED
 #define NWWEB_H_INCLUDED
 
+#include <stdint.h>
+#include <stddef.h>
+
+typedef struct webapi_msg {
+    int      fid;
+    int      id;
+    uint8_t *data;
+    size_t   len;
+} webapi_msg_t;
+
 #define API_HANDLER_ID_GENEGAL                      0x00000000
 
 #define API_CALL_STATUS_COMPLETE                    0x00000000
@@ -31,6 +41,7 @@
 typedef uint8_t (*ApiHandler_t)(void *pxApiCall, void **ppxContext, uint32_t ulPending, uint8_t *pucData, uint32_t ulDataLen);
 
 uint8_t bApiCallRegister(ApiHandler_t fHandler, uint32_t ulFid, void *pxContext);
+uint8_t ws_server_register_fid_queue(uint32_t ulFid, void *xQueue);
 uint8_t bApiCallUnregister(uint32_t ulFid);
 
 uint8_t bApiCallGetId(void *pxApiCall, uint32_t *ulOutId);

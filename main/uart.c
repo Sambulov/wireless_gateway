@@ -39,7 +39,7 @@ static void uart_event_task(void *pvParameters) {
             while (size) {
                 ev_trig.size = CL_MIN(size, 128);
                 int sz = uart_read_bytes(uart->port, ev_trig.buf, ev_trig.size, 0);
-                if(sz < 0) break;
+                if(sz <= 0) break;
                 ev_trig.size = sz;
                 if(uart->echo_enabled) {
                     uart_write_bytes(uart->port, ev_trig.buf, ev_trig.size);

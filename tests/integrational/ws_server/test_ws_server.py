@@ -173,7 +173,7 @@ async def test_connection_usable_after_bad_req():
 @pytest.mark.asyncio
 async def test_concurrent_clients():
     """N concurrent clients each send a valid call and must each receive a response."""
-    N = 5
+    N = 3  # gateway hard-limits to 3 concurrent connections (web_server.c)
 
     async def one_client(sid):
         async with websockets.connect(WS_URL) as ws:
