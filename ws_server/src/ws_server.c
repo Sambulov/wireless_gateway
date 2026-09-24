@@ -565,8 +565,10 @@ static void vForwardCallToPeripheral(ApiCall_t *call, ws_queue_t queue) {
 
 /* --- Worker task --------------------------------------------------------- */
 
-static void vWsApiCallWorker(void *pvParameters) {
-    for(;;) {
+/* One full pass of the worker: ping/GC, forward to peripherals, handle
+ * peripheral responses. Split out of the task loop so host tests/fuzzers
+ * can drive it synchronously (see ws_server_test_worker_step()). */
+static void vWsApiCallWorkerStep(void) {
         /* 1. Keep connections alive and garbage-collect completed/dead calls */
         ws_hal_mutex_take(xWsApiMutex, WS_HAL_WAIT_FOREVER);
         ulLinkedListDoForeach(pxWsApiCall, vServeApiCall, NULL);
@@ -699,7 +701,11 @@ next:
             ws_hal_mutex_give(xWsApiMutex);
             free(periph_msg.data);
         }
-    }
+}
+
+static void vWsApiCallWorker(void *pvParameters) {
+    for(;;)
+        vWsApiCallWorkerStep();
 
     ws_hal_task_self_delete();
 }
@@ -719,6 +725,11 @@ void ws_server_init(void) {
 }
 
 #ifdef WS_SERVER_TEST
+/* Run one worker iteration synchronously — the host has no worker task. */
+void ws_server_test_worker_step(void) {
+    vWsApiCallWorkerStep();
+}
+
 /* Reset all global state between unit tests. Never call in production. */
 void ws_server_test_reset(void) {
     LinkedListItem_t *item;

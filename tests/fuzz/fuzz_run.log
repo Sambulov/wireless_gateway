@@ -1,0 +1,352 @@
+INFO: Running with entropic power schedule (0xFF, 100).
+INFO: Seed: 1283543837
+INFO: Loaded 1 modules   (5081 inline 8-bit counters): 5081 [0x626d24835768, 0x626d24836b41), 
+INFO: Loaded 1 PC tables (5081 PCs): 5081 [0x626d24836b48,0x626d2484a8d8), 
+INFO: -fork=6: fuzzing in separate process(s)
+INFO: -fork=6: 517 seed inputs, starting to fuzz in /tmp/libFuzzerTemp.FuzzWithFork2173065.dir
+#9221: cov: 5417 ft: 5417 corp: 517 exec/s: 4610 oom/timeout/crash: 0/0/0 time: 2s job: 1 dft_time: 0
+#25131: cov: 5417 ft: 5417 corp: 517 exec/s: 5303 oom/timeout/crash: 0/0/0 time: 3s job: 2 dft_time: 0
+#54790: cov: 5417 ft: 5417 corp: 517 exec/s: 7414 oom/timeout/crash: 0/0/0 time: 4s job: 3 dft_time: 0
+#100089: cov: 5417 ft: 5417 corp: 517 exec/s: 9059 oom/timeout/crash: 0/0/0 time: 5s job: 4 dft_time: 0
+#193947: cov: 5417 ft: 5417 corp: 517 exec/s: 15643 oom/timeout/crash: 0/0/0 time: 6s job: 5 dft_time: 0
+  NEW_FUNC: 0x626d247ae0d8 in _bApiCallSendJson /home/vvmitrofanov/projects/proj/wireless_gateway/ws_server/src/ws_server.c:253
+  NEW_FUNC: 0x626d247af298 in ws_server_on_frame /home/vvmitrofanov/projects/proj/wireless_gateway/ws_server/src/ws_server.c:375
+  NEW_FUNC: 0x626d247b47a8 in ws_server_test_reset /home/vvmitrofanov/projects/proj/wireless_gateway/ws_server/src/ws_server.c:723
+  NEW_FUNC: 0x626d247b4ea8 in _send_to_session /home/vvmitrofanov/projects/proj/wireless_gateway/ws_server/src/ws_server.c:244
+  NEW_FUNC: 0x626d247b53b8 in vWsTransferComplete_cb /home/vvmitrofanov/projects/proj/wireless_gateway/ws_server/src/ws_server.c:170
+  NEW_FUNC: 0x626d247b6af8 in cJSON_IsString /home/vvmitrofanov/projects/proj/wireless_gateway/json/cJSON/cJSON.c:3018
+  NEW_FUNC: 0x626d247b6da8 in cJSON_IsNumber /home/vvmitrofanov/projects/proj/wireless_gateway/json/cJSON/cJSON.c:3008
+  NEW_FUNC: 0x626d247b8928 in cJSON_ParseWithLengthOpts /home/vvmitrofanov/projects/proj/wireless_gateway/json/cJSON/cJSON.c:1143
+  NEW_FUNC: 0x626d247b90d8 in cJSON_New_Item /home/vvmitrofanov/projects/proj/wireless_gateway/json/cJSON/cJSON.c:242
+  NEW_FUNC: 0x626d247b9238 in parse_value /home/vvmitrofanov/projects/proj/wireless_gateway/json/cJSON/cJSON.c:1364
+  NEW_FUNC: 0x626d247bf418 in buffer_skip_whitespace /home/vvmitrofanov/projects/proj/wireless_gateway/json/cJSON/cJSON.c:1086
+  NEW_FUNC: 0x626d247bfc18 in print /home/vvmitrofanov/projects/proj/wireless_gateway/json/cJSON/cJSON.c:1235
+  NEW_FUNC: 0x626d247c0178 in cJSON_PrintUnformatted /home/vvmitrofanov/projects/proj/wireless_gateway/json/cJSON/cJSON.c:1308
+  NEW_FUNC: 0x626d247c0498 in print_value /home/vvmitrofanov/projects/proj/wireless_gateway/json/cJSON/cJSON.c:1419
+  NEW_FUNC: 0x626d247c32e8 in cJSON_GetObjectItem /home/vvmitrofanov/projects/proj/wireless_gateway/json/cJSON/cJSON.c:1969
+  NEW_FUNC: 0x626d247c3318 in get_object_item /home/vvmitrofanov/projects/proj/wireless_gateway/json/cJSON/cJSON.c:1937
+  NEW_FUNC: 0x626d247cfb38 in update_offset /home/vvmitrofanov/projects/proj/wireless_gateway/json/cJSON/cJSON.c:572
+  NEW_FUNC: 0x626d247cfe48 in parse_string /home/vvmitrofanov/projects/proj/wireless_gateway/json/cJSON/cJSON.c:820
+  NEW_FUNC: 0x626d247d23b8 in ensure /home/vvmitrofanov/projects/proj/wireless_gateway/json/cJSON/cJSON.c:486
+  NEW_FUNC: 0x626d247d3808 in print_string_ptr /home/vvmitrofanov/projects/proj/wireless_gateway/json/cJSON/cJSON.c:950
+  NEW_FUNC: 0x626d247d59b8 in linked_list_find_first /home/vvmitrofanov/projects/proj/wireless_gateway/CodeLibrary/CL/DataStructures/Src/LinkedList.c:107
+  NEW_FUNC: 0x626d247d59f8 in _pxLinkedListFind /home/vvmitrofanov/projects/proj/wireless_gateway/CodeLibrary/CL/DataStructures/Src/LinkedList.c:84
+  NEW_FUNC: 0x626d247d6d98 in mem_cpy /home/vvmitrofanov/projects/proj/wireless_gateway/CodeLibrary/CL/DataStructures/Src/Mem.c:5
+  NEW_FUNC: 0x626d247d7388 in str_len /home/vvmitrofanov/projects/proj/wireless_gateway/CodeLibrary/CL/DataStructures/Src/Str.c:29
+  NEW_FUNC: 0x626d247dbf98 in ws_hal_tick /home/vvmitrofanov/projects/proj/wireless_gateway/tests/unit/stubs/ws_hal_stub.c:12
+  NEW_FUNC: 0x626d247dc058 in ws_hal_mutex_take /home/vvmitrofanov/projects/proj/wireless_gateway/tests/unit/stubs/ws_hal_stub.c:29
+  NEW_FUNC: 0x626d247dc158 in ws_hal_mutex_give /home/vvmitrofanov/projects/proj/wireless_gateway/tests/unit/stubs/ws_hal_stub.c:35
+  NEW_FUNC: 0x626d247dd3e8 in ws_hal_log_i /home/vvmitrofanov/projects/proj/wireless_gateway/tests/unit/stubs/ws_hal_stub.c:103
+  NEW_FUNC: 0x626d247dd408 in ws_hal_log_w /home/vvmitrofanov/projects/proj/wireless_gateway/tests/unit/stubs/ws_hal_stub.c:108
+  NEW_FUNC: 0x626d247dd8f8 in ws_conn_send_async /home/vvmitrofanov/projects/proj/wireless_gateway/tests/unit/stubs/ws_conn_stub.c:42
+  NEW_FUNC: 0x626d247dddb8 in ws_conn_get_user_data /home/vvmitrofanov/projects/proj/wireless_gateway/tests/unit/stubs/ws_conn_stub.c:58
+  NEW_FUNC: 0x626d247dded8 in LLVMFuzzerTestOneInput /home/vvmitrofanov/projects/proj/wireless_gateway/tests/fuzz/ws_server_fuzz.c:41
+#259916: cov: 6098 ft: 5423 corp: 520 exec/s: 9424 oom/timeout/crash: 0/0/0 time: 19s job: 6 dft_time: 0
+#371166: cov: 6098 ft: 5423 corp: 520 exec/s: 13906 oom/timeout/crash: 0/0/0 time: 19s job: 7 dft_time: 0
+#523063: cov: 6107 ft: 5426 corp: 522 exec/s: 16877 oom/timeout/crash: 0/0/0 time: 19s job: 8 dft_time: 0
+#657690: cov: 6107 ft: 5426 corp: 522 exec/s: 13462 oom/timeout/crash: 0/0/0 time: 19s job: 9 dft_time: 0
+#837271: cov: 6113 ft: 5427 corp: 523 exec/s: 16325 oom/timeout/crash: 0/0/0 time: 19s job: 10 dft_time: 0
+#986903: cov: 6200 ft: 5436 corp: 527 exec/s: 12469 oom/timeout/crash: 0/0/0 time: 31s job: 11 dft_time: 0
+#1097317: cov: 6211 ft: 5442 corp: 530 exec/s: 8493 oom/timeout/crash: 0/0/0 time: 32s job: 12 dft_time: 0
+#1203623: cov: 6222 ft: 5443 corp: 531 exec/s: 7593 oom/timeout/crash: 0/0/0 time: 34s job: 13 dft_time: 0
+#1438930: cov: 6233 ft: 5445 corp: 532 exec/s: 15687 oom/timeout/crash: 0/0/0 time: 35s job: 14 dft_time: 0
+#1651744: cov: 6233 ft: 5445 corp: 532 exec/s: 13300 oom/timeout/crash: 0/0/0 time: 36s job: 15 dft_time: 0
+  NEW_FUNC: 0x626d247d1eb8 in parse_hex4 /home/vvmitrofanov/projects/proj/wireless_gateway/json/cJSON/cJSON.c:662
+#1851585: cov: 6257 ft: 5450 corp: 535 exec/s: 11755 oom/timeout/crash: 0/0/0 time: 37s job: 16 dft_time: 0
+#1941638: cov: 6257 ft: 5453 corp: 536 exec/s: 5002 oom/timeout/crash: 0/0/0 time: 51s job: 17 dft_time: 0
+#2050891: cov: 6257 ft: 5453 corp: 536 exec/s: 5750 oom/timeout/crash: 0/0/0 time: 52s job: 18 dft_time: 0
+#2274403: cov: 6257 ft: 5453 corp: 536 exec/s: 11175 oom/timeout/crash: 0/0/0 time: 54s job: 19 dft_time: 0
+#2411102: cov: 6260 ft: 5501 corp: 537 exec/s: 6509 oom/timeout/crash: 0/0/0 time: 57s job: 20 dft_time: 0
+#2582883: cov: 6260 ft: 5501 corp: 537 exec/s: 7808 oom/timeout/crash: 0/0/0 time: 59s job: 21 dft_time: 0
+#2768814: cov: 6272 ft: 5511 corp: 541 exec/s: 8083 oom/timeout/crash: 0/0/0 time: 61s job: 22 dft_time: 0
+#2964882: cov: 6272 ft: 5512 corp: 542 exec/s: 8169 oom/timeout/crash: 0/0/0 time: 76s job: 23 dft_time: 0
+#3207524: cov: 6272 ft: 5514 corp: 543 exec/s: 9705 oom/timeout/crash: 0/0/0 time: 78s job: 24 dft_time: 0
+#3406842: cov: 6272 ft: 5514 corp: 543 exec/s: 7666 oom/timeout/crash: 0/0/0 time: 81s job: 25 dft_time: 0
+#3644060: cov: 6272 ft: 5514 corp: 543 exec/s: 8785 oom/timeout/crash: 0/0/0 time: 84s job: 26 dft_time: 0
+#3858653: cov: 6272 ft: 5517 corp: 544 exec/s: 7664 oom/timeout/crash: 0/0/0 time: 88s job: 27 dft_time: 0
+#4112969: cov: 6272 ft: 5521 corp: 547 exec/s: 8769 oom/timeout/crash: 0/0/0 time: 91s job: 28 dft_time: 0
+#4335008: cov: 6272 ft: 5521 corp: 547 exec/s: 7162 oom/timeout/crash: 0/0/0 time: 112s job: 29 dft_time: 0
+#4534898: cov: 6276 ft: 5545 corp: 557 exec/s: 5879 oom/timeout/crash: 0/0/0 time: 113s job: 30 dft_time: 0
+#4677458: cov: 6276 ft: 5545 corp: 557 exec/s: 4455 oom/timeout/crash: 0/0/0 time: 114s job: 31 dft_time: 0
+#4781793: cov: 6280 ft: 5554 corp: 561 exec/s: 3161 oom/timeout/crash: 0/0/0 time: 118s job: 32 dft_time: 0
+#4936141: cov: 6280 ft: 5554 corp: 561 exec/s: 4539 oom/timeout/crash: 0/0/0 time: 122s job: 33 dft_time: 0
+#5197583: cov: 6288 ft: 5560 corp: 565 exec/s: 7469 oom/timeout/crash: 0/0/0 time: 126s job: 34 dft_time: 0
+#5343488: cov: 6288 ft: 5560 corp: 565 exec/s: 3741 oom/timeout/crash: 0/0/0 time: 161s job: 36 dft_time: 0
+#5536252: cov: 6288 ft: 5586 corp: 571 exec/s: 4819 oom/timeout/crash: 0/0/0 time: 162s job: 35 dft_time: 0
+#5711661: cov: 6288 ft: 5586 corp: 571 exec/s: 3813 oom/timeout/crash: 0/0/0 time: 162s job: 37 dft_time: 0
+#5862651: cov: 6295 ft: 5625 corp: 574 exec/s: 3595 oom/timeout/crash: 0/0/0 time: 162s job: 38 dft_time: 0
+#5963641: cov: 6295 ft: 5625 corp: 574 exec/s: 2524 oom/timeout/crash: 0/0/0 time: 163s job: 39 dft_time: 0
+#6045797: cov: 6295 ft: 5626 corp: 575 exec/s: 2003 oom/timeout/crash: 0/0/0 time: 168s job: 40 dft_time: 0
+#6295341: cov: 6295 ft: 5626 corp: 575 exec/s: 5941 oom/timeout/crash: 0/0/0 time: 204s job: 41 dft_time: 0
+#6703275: cov: 6295 ft: 5639 corp: 579 exec/s: 9486 oom/timeout/crash: 0/0/0 time: 205s job: 42 dft_time: 0
+#7010034: cov: 6303 ft: 5642 corp: 580 exec/s: 6971 oom/timeout/crash: 0/0/0 time: 207s job: 43 dft_time: 0
+#7313176: cov: 6303 ft: 5642 corp: 580 exec/s: 6736 oom/timeout/crash: 0/0/0 time: 208s job: 44 dft_time: 0
+#7735760: cov: 6303 ft: 5687 corp: 583 exec/s: 9186 oom/timeout/crash: 0/0/0 time: 210s job: 45 dft_time: 0
+#8033507: cov: 6303 ft: 5688 corp: 584 exec/s: 6335 oom/timeout/crash: 0/0/0 time: 216s job: 46 dft_time: 0
+#8453026: cov: 6303 ft: 5690 corp: 585 exec/s: 8739 oom/timeout/crash: 0/0/0 time: 253s job: 47 dft_time: 0
+#8907172: cov: 6303 ft: 5690 corp: 585 exec/s: 9268 oom/timeout/crash: 0/0/0 time: 256s job: 48 dft_time: 0
+#9510101: cov: 6303 ft: 5690 corp: 585 exec/s: 12058 oom/timeout/crash: 0/0/0 time: 258s job: 49 dft_time: 0
+#9918773: cov: 6303 ft: 5690 corp: 585 exec/s: 8013 oom/timeout/crash: 0/0/0 time: 260s job: 50 dft_time: 0
+#10208607: cov: 6303 ft: 5692 corp: 586 exec/s: 5573 oom/timeout/crash: 0/0/0 time: 263s job: 51 dft_time: 0
+#10583454: cov: 6303 ft: 5702 corp: 591 exec/s: 7072 oom/timeout/crash: 0/0/0 time: 270s job: 52 dft_time: 0
+#10923086: cov: 6303 ft: 5746 corp: 594 exec/s: 6289 oom/timeout/crash: 0/0/0 time: 308s job: 53 dft_time: 0
+#11178048: cov: 6303 ft: 5746 corp: 594 exec/s: 4635 oom/timeout/crash: 0/0/0 time: 312s job: 54 dft_time: 0
+#11457424: cov: 6303 ft: 5749 corp: 595 exec/s: 4988 oom/timeout/crash: 0/0/0 time: 316s job: 55 dft_time: 0
+#11740034: cov: 6303 ft: 5749 corp: 595 exec/s: 4958 oom/timeout/crash: 0/0/0 time: 318s job: 56 dft_time: 0
+#12129758: cov: 6310 ft: 5774 corp: 601 exec/s: 6719 oom/timeout/crash: 0/0/0 time: 322s job: 57 dft_time: 0
+#12486389: cov: 6310 ft: 5774 corp: 601 exec/s: 6044 oom/timeout/crash: 0/0/0 time: 330s job: 58 dft_time: 0
+#12679821: cov: 6310 ft: 5778 corp: 602 exec/s: 3223 oom/timeout/crash: 0/0/0 time: 369s job: 59 dft_time: 0
+#12905908: cov: 6310 ft: 5778 corp: 602 exec/s: 3706 oom/timeout/crash: 0/0/0 time: 374s job: 60 dft_time: 0
+#13205183: cov: 6310 ft: 5808 corp: 605 exec/s: 4827 oom/timeout/crash: 0/0/0 time: 379s job: 61 dft_time: 0
+#13561458: cov: 6310 ft: 5808 corp: 605 exec/s: 5655 oom/timeout/crash: 0/0/0 time: 382s job: 62 dft_time: 0
+#13941950: cov: 6310 ft: 5832 corp: 608 exec/s: 5945 oom/timeout/crash: 0/0/0 time: 387s job: 63 dft_time: 0
+#14239354: cov: 6310 ft: 5832 corp: 608 exec/s: 4575 oom/timeout/crash: 0/0/0 time: 396s job: 64 dft_time: 0
+#14516845: cov: 6310 ft: 5832 corp: 608 exec/s: 4204 oom/timeout/crash: 0/0/0 time: 437s job: 65 dft_time: 0
+#14951466: cov: 6310 ft: 5837 corp: 610 exec/s: 6486 oom/timeout/crash: 0/0/0 time: 442s job: 66 dft_time: 0
+#15229938: cov: 6310 ft: 5837 corp: 610 exec/s: 4095 oom/timeout/crash: 0/0/0 time: 448s job: 67 dft_time: 0
+#15611931: cov: 6310 ft: 5837 corp: 610 exec/s: 5536 oom/timeout/crash: 0/0/0 time: 452s job: 68 dft_time: 0
+#15944745: cov: 6310 ft: 5837 corp: 610 exec/s: 4754 oom/timeout/crash: 0/0/0 time: 458s job: 69 dft_time: 0
+#16321791: cov: 6311 ft: 5843 corp: 611 exec/s: 5310 oom/timeout/crash: 0/0/0 time: 468s job: 70 dft_time: 0
+#16591157: cov: 6311 ft: 5843 corp: 611 exec/s: 3741 oom/timeout/crash: 0/0/0 time: 509s job: 71 dft_time: 0
+#16935984: cov: 6311 ft: 5844 corp: 612 exec/s: 4723 oom/timeout/crash: 0/0/0 time: 516s job: 72 dft_time: 0
+#17239689: cov: 6311 ft: 5844 corp: 612 exec/s: 4104 oom/timeout/crash: 0/0/0 time: 523s job: 73 dft_time: 0
+#17532941: cov: 6311 ft: 5844 corp: 612 exec/s: 3910 oom/timeout/crash: 0/0/0 time: 528s job: 74 dft_time: 0
+#17957939: cov: 6311 ft: 5848 corp: 614 exec/s: 5592 oom/timeout/crash: 0/0/0 time: 535s job: 75 dft_time: 0
+#18454806: cov: 6311 ft: 5848 corp: 614 exec/s: 6452 oom/timeout/crash: 0/0/0 time: 546s job: 76 dft_time: 0
+#18833118: cov: 6324 ft: 5870 corp: 619 exec/s: 4850 oom/timeout/crash: 0/0/0 time: 588s job: 77 dft_time: 0
+#19156805: cov: 6324 ft: 5871 corp: 620 exec/s: 4097 oom/timeout/crash: 0/0/0 time: 596s job: 78 dft_time: 0
+#19670968: cov: 6324 ft: 5873 corp: 621 exec/s: 6427 oom/timeout/crash: 0/0/0 time: 604s job: 79 dft_time: 0
+#20252772: cov: 6324 ft: 5873 corp: 621 exec/s: 7182 oom/timeout/crash: 0/0/0 time: 610s job: 80 dft_time: 0
+#20584659: cov: 6324 ft: 5873 corp: 621 exec/s: 4047 oom/timeout/crash: 0/0/0 time: 617s job: 81 dft_time: 0
+#21011602: cov: 6324 ft: 5873 corp: 621 exec/s: 5143 oom/timeout/crash: 0/0/0 time: 630s job: 82 dft_time: 0
+#21333936: cov: 6324 ft: 5873 corp: 621 exec/s: 3837 oom/timeout/crash: 0/0/0 time: 674s job: 83 dft_time: 0
+#21728376: cov: 6324 ft: 5873 corp: 621 exec/s: 4640 oom/timeout/crash: 0/0/0 time: 682s job: 84 dft_time: 0
+#22032185: cov: 6324 ft: 5876 corp: 623 exec/s: 3532 oom/timeout/crash: 0/0/0 time: 691s job: 85 dft_time: 0
+#22375306: cov: 6324 ft: 5876 corp: 623 exec/s: 3943 oom/timeout/crash: 0/0/0 time: 698s job: 86 dft_time: 0
+#22867992: cov: 6324 ft: 5883 corp: 625 exec/s: 5598 oom/timeout/crash: 0/0/0 time: 707s job: 87 dft_time: 0
+#23277936: cov: 6324 ft: 5886 corp: 626 exec/s: 4606 oom/timeout/crash: 0/0/0 time: 720s job: 88 dft_time: 0
+#23890366: cov: 6324 ft: 5886 corp: 626 exec/s: 6804 oom/timeout/crash: 0/0/0 time: 765s job: 89 dft_time: 0
+#24287051: cov: 6324 ft: 5886 corp: 626 exec/s: 4359 oom/timeout/crash: 0/0/0 time: 774s job: 90 dft_time: 0
+#24795986: cov: 6324 ft: 5886 corp: 626 exec/s: 5531 oom/timeout/crash: 0/0/0 time: 784s job: 91 dft_time: 0
+#25118922: cov: 6324 ft: 5886 corp: 626 exec/s: 3472 oom/timeout/crash: 0/0/0 time: 792s job: 92 dft_time: 0
+#25745761: cov: 6324 ft: 5886 corp: 626 exec/s: 6668 oom/timeout/crash: 0/0/0 time: 802s job: 93 dft_time: 0
+#26215911: cov: 6325 ft: 5900 corp: 627 exec/s: 4948 oom/timeout/crash: 0/0/0 time: 815s job: 94 dft_time: 0
+#26742381: cov: 6325 ft: 5901 corp: 628 exec/s: 5484 oom/timeout/crash: 0/0/0 time: 861s job: 95 dft_time: 0
+#27271542: cov: 6325 ft: 5901 corp: 628 exec/s: 5455 oom/timeout/crash: 0/0/0 time: 872s job: 96 dft_time: 0
+#27959915: cov: 6325 ft: 5901 corp: 628 exec/s: 7024 oom/timeout/crash: 0/0/0 time: 883s job: 97 dft_time: 0
+#28679543: cov: 6326 ft: 5955 corp: 630 exec/s: 7268 oom/timeout/crash: 0/0/0 time: 892s job: 98 dft_time: 0
+#29302532: cov: 6326 ft: 5958 corp: 632 exec/s: 6229 oom/timeout/crash: 0/0/0 time: 903s job: 99 dft_time: 0
+#30150517: cov: 6326 ft: 5960 corp: 633 exec/s: 8395 oom/timeout/crash: 0/0/0 time: 918s job: 100 dft_time: 0
+#30707317: cov: 6326 ft: 5973 corp: 636 exec/s: 5458 oom/timeout/crash: 0/0/0 time: 964s job: 101 dft_time: 0
+#31277114: cov: 6326 ft: 5973 corp: 636 exec/s: 5532 oom/timeout/crash: 0/0/0 time: 975s job: 102 dft_time: 0
+#31762794: cov: 6326 ft: 5973 corp: 636 exec/s: 4670 oom/timeout/crash: 0/0/0 time: 988s job: 103 dft_time: 0
+#32847730: cov: 6326 ft: 6001 corp: 640 exec/s: 10332 oom/timeout/crash: 0/0/0 time: 998s job: 104 dft_time: 0
+#34110890: cov: 6326 ft: 6013 corp: 641 exec/s: 11916 oom/timeout/crash: 0/0/0 time: 1010s job: 105 dft_time: 0
+#34666141: cov: 6326 ft: 6013 corp: 641 exec/s: 5189 oom/timeout/crash: 0/0/0 time: 1026s job: 106 dft_time: 0
+#35762077: cov: 6326 ft: 6013 corp: 641 exec/s: 10147 oom/timeout/crash: 0/0/0 time: 1073s job: 107 dft_time: 0
+#36203136: cov: 6326 ft: 6013 corp: 641 exec/s: 4046 oom/timeout/crash: 0/0/0 time: 1085s job: 108 dft_time: 0
+#37240596: cov: 6326 ft: 6013 corp: 641 exec/s: 9431 oom/timeout/crash: 0/0/0 time: 1099s job: 109 dft_time: 0
+#38107200: cov: 6327 ft: 6023 corp: 644 exec/s: 7807 oom/timeout/crash: 0/0/0 time: 1109s job: 110 dft_time: 0
+#38789716: cov: 6330 ft: 6070 corp: 650 exec/s: 6093 oom/timeout/crash: 0/0/0 time: 1122s job: 111 dft_time: 0
+#39369759: cov: 6330 ft: 6070 corp: 650 exec/s: 5133 oom/timeout/crash: 0/0/0 time: 1139s job: 112 dft_time: 0
+#40206230: cov: 6330 ft: 6070 corp: 650 exec/s: 7337 oom/timeout/crash: 0/0/0 time: 1188s job: 113 dft_time: 0
+#40936578: cov: 6330 ft: 6072 corp: 652 exec/s: 6350 oom/timeout/crash: 0/0/0 time: 1201s job: 114 dft_time: 0
+#41688654: cov: 6338 ft: 6090 corp: 654 exec/s: 6483 oom/timeout/crash: 0/0/0 time: 1216s job: 115 dft_time: 0
+#42827717: cov: 6338 ft: 6090 corp: 654 exec/s: 9735 oom/timeout/crash: 0/0/0 time: 1227s job: 116 dft_time: 0
+#43610037: cov: 6338 ft: 6091 corp: 655 exec/s: 6629 oom/timeout/crash: 0/0/0 time: 1241s job: 117 dft_time: 0
+#44382353: cov: 6338 ft: 6091 corp: 655 exec/s: 6490 oom/timeout/crash: 0/0/0 time: 1259s job: 118 dft_time: 0
+#45350867: cov: 6338 ft: 6091 corp: 655 exec/s: 8070 oom/timeout/crash: 0/0/0 time: 1309s job: 119 dft_time: 0
+#46249921: cov: 6338 ft: 6094 corp: 657 exec/s: 7430 oom/timeout/crash: 0/0/0 time: 1323s job: 120 dft_time: 0
+#47140299: cov: 6338 ft: 6098 corp: 661 exec/s: 7298 oom/timeout/crash: 0/0/0 time: 1339s job: 121 dft_time: 0
+#48117974: cov: 6338 ft: 6098 corp: 661 exec/s: 7948 oom/timeout/crash: 0/0/0 time: 1351s job: 122 dft_time: 0
+#48853369: cov: 6338 ft: 6136 corp: 667 exec/s: 5930 oom/timeout/crash: 0/0/0 time: 1366s job: 123 dft_time: 0
+#49664799: cov: 6338 ft: 6136 corp: 667 exec/s: 6491 oom/timeout/crash: 0/0/0 time: 1385s job: 124 dft_time: 0
+#50580446: cov: 6338 ft: 6136 corp: 667 exec/s: 7267 oom/timeout/crash: 0/0/0 time: 1436s job: 125 dft_time: 0
+#51316422: cov: 6338 ft: 6136 corp: 667 exec/s: 5795 oom/timeout/crash: 0/0/0 time: 1451s job: 126 dft_time: 0
+#52098767: cov: 6338 ft: 6136 corp: 667 exec/s: 6112 oom/timeout/crash: 0/0/0 time: 1468s job: 127 dft_time: 0
+#53019942: cov: 6338 ft: 6157 corp: 670 exec/s: 7140 oom/timeout/crash: 0/0/0 time: 1481s job: 128 dft_time: 0
+#53856827: cov: 6338 ft: 6160 corp: 672 exec/s: 6437 oom/timeout/crash: 0/0/0 time: 1497s job: 129 dft_time: 0
+#54860601: cov: 6338 ft: 6160 corp: 672 exec/s: 7662 oom/timeout/crash: 0/0/0 time: 1516s job: 130 dft_time: 0
+#55590157: cov: 6338 ft: 6160 corp: 672 exec/s: 5526 oom/timeout/crash: 0/0/0 time: 1569s job: 131 dft_time: 0
+#56487818: cov: 6338 ft: 6160 corp: 672 exec/s: 6749 oom/timeout/crash: 0/0/0 time: 1585s job: 132 dft_time: 0
+#57411868: cov: 6338 ft: 6160 corp: 672 exec/s: 6895 oom/timeout/crash: 0/0/0 time: 1602s job: 133 dft_time: 0
+#58098238: cov: 6338 ft: 6160 corp: 672 exec/s: 5084 oom/timeout/crash: 0/0/0 time: 1617s job: 134 dft_time: 0
+#59305268: cov: 6338 ft: 6160 corp: 672 exec/s: 8875 oom/timeout/crash: 0/0/0 time: 1633s job: 135 dft_time: 0
+#59975343: cov: 6338 ft: 6160 corp: 672 exec/s: 4891 oom/timeout/crash: 0/0/0 time: 1654s job: 136 dft_time: 0
+#60634278: cov: 6338 ft: 6160 corp: 672 exec/s: 4774 oom/timeout/crash: 0/0/0 time: 1708s job: 137 dft_time: 0
+#61552830: cov: 6338 ft: 6160 corp: 672 exec/s: 6608 oom/timeout/crash: 0/0/0 time: 1724s job: 138 dft_time: 0
+#62755510: cov: 6338 ft: 6160 corp: 672 exec/s: 8590 oom/timeout/crash: 0/0/0 time: 1743s job: 139 dft_time: 0
+#63525984: cov: 6338 ft: 6160 corp: 672 exec/s: 5464 oom/timeout/crash: 0/0/0 time: 1758s job: 140 dft_time: 0
+#64803703: cov: 6338 ft: 6160 corp: 672 exec/s: 8998 oom/timeout/crash: 0/0/0 time: 1776s job: 141 dft_time: 0
+#65535759: cov: 6338 ft: 6160 corp: 672 exec/s: 5119 oom/timeout/crash: 0/0/0 time: 1798s job: 142 dft_time: 0
+#66492268: cov: 6338 ft: 6160 corp: 672 exec/s: 6642 oom/timeout/crash: 0/0/0 time: 1853s job: 143 dft_time: 0
+#67066135: cov: 6338 ft: 6169 corp: 673 exec/s: 3957 oom/timeout/crash: 0/0/0 time: 1870s job: 144 dft_time: 0
+#68020579: cov: 6338 ft: 6169 corp: 673 exec/s: 6537 oom/timeout/crash: 0/0/0 time: 1889s job: 145 dft_time: 0
+#68946951: cov: 6338 ft: 6169 corp: 673 exec/s: 6301 oom/timeout/crash: 0/0/0 time: 1906s job: 146 dft_time: 0
+#70154420: cov: 6338 ft: 6169 corp: 673 exec/s: 8158 oom/timeout/crash: 0/0/0 time: 1925s job: 147 dft_time: 0
+#70805617: cov: 6338 ft: 6169 corp: 673 exec/s: 4370 oom/timeout/crash: 0/0/0 time: 1947s job: 148 dft_time: 0
+#71693018: cov: 6338 ft: 6169 corp: 673 exec/s: 5916 oom/timeout/crash: 0/0/0 time: 2003s job: 149 dft_time: 0
+#72472501: cov: 6338 ft: 6171 corp: 674 exec/s: 5162 oom/timeout/crash: 0/0/0 time: 2022s job: 150 dft_time: 0
+#73293314: cov: 6338 ft: 6171 corp: 674 exec/s: 5400 oom/timeout/crash: 0/0/0 time: 2042s job: 151 dft_time: 0
+#74262757: cov: 6338 ft: 6176 corp: 675 exec/s: 6336 oom/timeout/crash: 0/0/0 time: 2060s job: 152 dft_time: 0
+#75436812: cov: 6338 ft: 6176 corp: 675 exec/s: 7623 oom/timeout/crash: 0/0/0 time: 2079s job: 153 dft_time: 0
+#76455109: cov: 6338 ft: 6176 corp: 675 exec/s: 6569 oom/timeout/crash: 0/0/0 time: 2103s job: 154 dft_time: 0
+#77593171: cov: 6338 ft: 6176 corp: 675 exec/s: 7295 oom/timeout/crash: 0/0/0 time: 2160s job: 155 dft_time: 0
+#78907236: cov: 6338 ft: 6178 corp: 676 exec/s: 8369 oom/timeout/crash: 0/0/0 time: 2180s job: 156 dft_time: 0
+#79977209: cov: 6338 ft: 6182 corp: 677 exec/s: 6771 oom/timeout/crash: 0/0/0 time: 2201s job: 157 dft_time: 0
+#81005226: cov: 6338 ft: 6182 corp: 677 exec/s: 6465 oom/timeout/crash: 0/0/0 time: 2219s job: 158 dft_time: 0
+#81942706: cov: 6338 ft: 6182 corp: 677 exec/s: 5859 oom/timeout/crash: 0/0/0 time: 2240s job: 159 dft_time: 0
+#83245260: cov: 6338 ft: 6182 corp: 677 exec/s: 8090 oom/timeout/crash: 0/0/0 time: 2265s job: 160 dft_time: 0
+#84151617: cov: 6338 ft: 6182 corp: 677 exec/s: 5594 oom/timeout/crash: 0/0/0 time: 2323s job: 161 dft_time: 0
+#85398802: cov: 6338 ft: 6184 corp: 678 exec/s: 7651 oom/timeout/crash: 0/0/0 time: 2343s job: 162 dft_time: 0
+#86393165: cov: 6338 ft: 6184 corp: 678 exec/s: 6063 oom/timeout/crash: 0/0/0 time: 2366s job: 163 dft_time: 0
+#87831236: cov: 6338 ft: 6184 corp: 678 exec/s: 8715 oom/timeout/crash: 0/0/0 time: 2385s job: 164 dft_time: 0
+#88911017: cov: 6338 ft: 6184 corp: 678 exec/s: 6504 oom/timeout/crash: 0/0/0 time: 2407s job: 165 dft_time: 0
+#89861430: cov: 6338 ft: 6184 corp: 678 exec/s: 5691 oom/timeout/crash: 0/0/0 time: 2432s job: 166 dft_time: 0
+#90822304: cov: 6338 ft: 6184 corp: 678 exec/s: 5719 oom/timeout/crash: 0/0/0 time: 2492s job: 167 dft_time: 0
+#92060158: cov: 6338 ft: 6184 corp: 678 exec/s: 7324 oom/timeout/crash: 0/0/0 time: 2513s job: 168 dft_time: 0
+#93244424: cov: 6338 ft: 6184 corp: 678 exec/s: 6966 oom/timeout/crash: 0/0/0 time: 2537s job: 169 dft_time: 0
+#94438374: cov: 6338 ft: 6184 corp: 678 exec/s: 6982 oom/timeout/crash: 0/0/0 time: 2557s job: 170 dft_time: 0
+#95536385: cov: 6338 ft: 6185 corp: 679 exec/s: 6383 oom/timeout/crash: 0/0/0 time: 2580s job: 171 dft_time: 0
+#96616964: cov: 6338 ft: 6185 corp: 679 exec/s: 6246 oom/timeout/crash: 0/0/0 time: 2606s job: 172 dft_time: 0
+#97749510: cov: 6338 ft: 6185 corp: 679 exec/s: 6508 oom/timeout/crash: 0/0/0 time: 2666s job: 173 dft_time: 0
+#98741864: cov: 6338 ft: 6185 corp: 679 exec/s: 5670 oom/timeout/crash: 0/0/0 time: 2689s job: 174 dft_time: 0
+#99709725: cov: 6338 ft: 6185 corp: 679 exec/s: 5499 oom/timeout/crash: 0/0/0 time: 2713s job: 175 dft_time: 0
+#100570625: cov: 6338 ft: 6185 corp: 679 exec/s: 4863 oom/timeout/crash: 0/0/0 time: 2735s job: 176 dft_time: 0
+#102056770: cov: 6338 ft: 6185 corp: 679 exec/s: 8349 oom/timeout/crash: 0/0/0 time: 2758s job: 177 dft_time: 0
+#102927012: cov: 6338 ft: 6185 corp: 679 exec/s: 4861 oom/timeout/crash: 0/0/0 time: 2786s job: 178 dft_time: 0
+#104603402: cov: 6338 ft: 6185 corp: 679 exec/s: 9313 oom/timeout/crash: 0/0/0 time: 2847s job: 179 dft_time: 0
+#105747204: cov: 6338 ft: 6191 corp: 680 exec/s: 6319 oom/timeout/crash: 0/0/0 time: 2871s job: 180 dft_time: 0
+#106864983: cov: 6338 ft: 6191 corp: 680 exec/s: 6141 oom/timeout/crash: 0/0/0 time: 2896s job: 181 dft_time: 0
+#108108773: cov: 6338 ft: 6191 corp: 680 exec/s: 6796 oom/timeout/crash: 0/0/0 time: 2918s job: 182 dft_time: 0
+#109114589: cov: 6338 ft: 6191 corp: 680 exec/s: 5466 oom/timeout/crash: 0/0/0 time: 2943s job: 183 dft_time: 0
+#110040334: cov: 6338 ft: 6191 corp: 680 exec/s: 5004 oom/timeout/crash: 0/0/0 time: 2972s job: 184 dft_time: 0
+#111272009: cov: 6338 ft: 6191 corp: 680 exec/s: 6621 oom/timeout/crash: 0/0/0 time: 3034s job: 185 dft_time: 0
+#112559618: cov: 6338 ft: 6191 corp: 680 exec/s: 6885 oom/timeout/crash: 0/0/0 time: 3059s job: 186 dft_time: 0
+#114037745: cov: 6338 ft: 6191 corp: 680 exec/s: 7862 oom/timeout/crash: 0/0/0 time: 3085s job: 187 dft_time: 0
+#115076912: cov: 6338 ft: 6191 corp: 680 exec/s: 5498 oom/timeout/crash: 0/0/0 time: 3108s job: 188 dft_time: 0
+#116020781: cov: 6338 ft: 6191 corp: 680 exec/s: 4967 oom/timeout/crash: 0/0/0 time: 3134s job: 189 dft_time: 0
+#116752378: cov: 6338 ft: 6191 corp: 680 exec/s: 3830 oom/timeout/crash: 0/0/0 time: 3164s job: 190 dft_time: 0
+#118324279: cov: 6338 ft: 6191 corp: 680 exec/s: 8186 oom/timeout/crash: 0/0/0 time: 3227s job: 191 dft_time: 0
+#119556869: cov: 6338 ft: 6191 corp: 680 exec/s: 6386 oom/timeout/crash: 0/0/0 time: 3252s job: 192 dft_time: 0
+#120399372: cov: 6338 ft: 6191 corp: 680 exec/s: 4342 oom/timeout/crash: 0/0/0 time: 3280s job: 193 dft_time: 0
+#121368950: cov: 6338 ft: 6191 corp: 680 exec/s: 4972 oom/timeout/crash: 0/0/0 time: 3304s job: 194 dft_time: 0
+#122852327: cov: 6338 ft: 6191 corp: 680 exec/s: 7568 oom/timeout/crash: 0/0/0 time: 3330s job: 195 dft_time: 0
+#124274934: cov: 6338 ft: 6191 corp: 680 exec/s: 7221 oom/timeout/crash: 0/0/0 time: 3362s job: 196 dft_time: 0
+#125476559: cov: 6338 ft: 6191 corp: 680 exec/s: 6068 oom/timeout/crash: 0/0/0 time: 3425s job: 197 dft_time: 0
+#126677239: cov: 6338 ft: 6191 corp: 680 exec/s: 6033 oom/timeout/crash: 0/0/0 time: 3452s job: 198 dft_time: 0
+#127775864: cov: 6338 ft: 6191 corp: 680 exec/s: 5493 oom/timeout/crash: 0/0/0 time: 3481s job: 199 dft_time: 0
+#128819903: cov: 6338 ft: 6191 corp: 680 exec/s: 5194 oom/timeout/crash: 0/0/0 time: 3506s job: 200 dft_time: 0
+#130104745: cov: 6338 ft: 6191 corp: 680 exec/s: 6360 oom/timeout/crash: 0/0/0 time: 3533s job: 201 dft_time: 0
+#131120984: cov: 6338 ft: 6191 corp: 680 exec/s: 5006 oom/timeout/crash: 0/0/0 time: 3566s job: 202 dft_time: 0
+#132845635: cov: 6338 ft: 6191 corp: 680 exec/s: 8454 oom/timeout/crash: 0/0/0 time: 3630s job: 203 dft_time: 0
+#134303881: cov: 6338 ft: 6191 corp: 680 exec/s: 7113 oom/timeout/crash: 0/0/0 time: 3658s job: 204 dft_time: 0
+#135145480: cov: 6338 ft: 6191 corp: 680 exec/s: 4085 oom/timeout/crash: 0/0/0 time: 3687s job: 205 dft_time: 0
+#136702392: cov: 6338 ft: 6191 corp: 680 exec/s: 7521 oom/timeout/crash: 0/0/0 time: 3714s job: 206 dft_time: 0
+#138233367: cov: 6338 ft: 6191 corp: 680 exec/s: 7360 oom/timeout/crash: 0/0/0 time: 3742s job: 207 dft_time: 0
+#139423875: cov: 6338 ft: 6191 corp: 680 exec/s: 5696 oom/timeout/crash: 0/0/0 time: 3776s job: 208 dft_time: 0
+#141071026: cov: 6338 ft: 6191 corp: 680 exec/s: 7843 oom/timeout/crash: 0/0/0 time: 3840s job: 209 dft_time: 0
+#142190080: cov: 6338 ft: 6191 corp: 680 exec/s: 5303 oom/timeout/crash: 0/0/0 time: 3870s job: 210 dft_time: 0
+#143530102: cov: 6338 ft: 6191 corp: 680 exec/s: 6320 oom/timeout/crash: 0/0/0 time: 3900s job: 211 dft_time: 0
+#144715453: cov: 6338 ft: 6191 corp: 680 exec/s: 5565 oom/timeout/crash: 0/0/0 time: 3928s job: 212 dft_time: 0
+#145735297: cov: 6342 ft: 6192 corp: 681 exec/s: 4765 oom/timeout/crash: 0/0/0 time: 3957s job: 213 dft_time: 0
+#146890629: cov: 6342 ft: 6192 corp: 681 exec/s: 5373 oom/timeout/crash: 0/0/0 time: 3991s job: 214 dft_time: 0
+#147984958: cov: 6342 ft: 6192 corp: 681 exec/s: 5066 oom/timeout/crash: 0/0/0 time: 4057s job: 215 dft_time: 0
+#149442035: cov: 6342 ft: 6192 corp: 681 exec/s: 6714 oom/timeout/crash: 0/0/0 time: 4088s job: 216 dft_time: 0
+#150631567: cov: 6342 ft: 6192 corp: 681 exec/s: 5456 oom/timeout/crash: 0/0/0 time: 4119s job: 217 dft_time: 0
+#151993876: cov: 6342 ft: 6192 corp: 681 exec/s: 6220 oom/timeout/crash: 0/0/0 time: 4147s job: 218 dft_time: 0
+#153000445: cov: 6342 ft: 6192 corp: 681 exec/s: 4575 oom/timeout/crash: 0/0/0 time: 4178s job: 219 dft_time: 0
+#154092696: cov: 6342 ft: 6192 corp: 681 exec/s: 4942 oom/timeout/crash: 0/0/0 time: 4214s job: 220 dft_time: 0
+#155248772: cov: 6342 ft: 6194 corp: 683 exec/s: 5207 oom/timeout/crash: 0/0/0 time: 4280s job: 221 dft_time: 0
+#157064989: cov: 6342 ft: 6194 corp: 683 exec/s: 8144 oom/timeout/crash: 0/0/0 time: 4311s job: 222 dft_time: 0
+#158126020: cov: 6342 ft: 6194 corp: 683 exec/s: 4736 oom/timeout/crash: 0/0/0 time: 4344s job: 223 dft_time: 0
+#159730774: cov: 6342 ft: 6194 corp: 683 exec/s: 7132 oom/timeout/crash: 0/0/0 time: 4373s job: 224 dft_time: 0
+#161206100: cov: 6342 ft: 6194 corp: 683 exec/s: 6527 oom/timeout/crash: 0/0/0 time: 4404s job: 225 dft_time: 0
+#162675143: cov: 6342 ft: 6194 corp: 683 exec/s: 6471 oom/timeout/crash: 0/0/0 time: 4441s job: 226 dft_time: 0
+#163738521: cov: 6342 ft: 6194 corp: 683 exec/s: 4663 oom/timeout/crash: 0/0/0 time: 4509s job: 227 dft_time: 0
+#165352523: cov: 6342 ft: 6194 corp: 683 exec/s: 7048 oom/timeout/crash: 0/0/0 time: 4541s job: 228 dft_time: 0
+#166544560: cov: 6342 ft: 6194 corp: 683 exec/s: 5182 oom/timeout/crash: 0/0/0 time: 4575s job: 229 dft_time: 0
+#167699167: cov: 6342 ft: 6194 corp: 683 exec/s: 4998 oom/timeout/crash: 0/0/0 time: 4605s job: 230 dft_time: 0
+#168995131: cov: 6342 ft: 6194 corp: 683 exec/s: 5586 oom/timeout/crash: 0/0/0 time: 4637s job: 231 dft_time: 0
+#170295925: cov: 6342 ft: 6194 corp: 683 exec/s: 5582 oom/timeout/crash: 0/0/0 time: 4675s job: 232 dft_time: 0
+#171343873: cov: 6342 ft: 6194 corp: 683 exec/s: 4478 oom/timeout/crash: 0/0/0 time: 4743s job: 233 dft_time: 0
+#172643572: cov: 6342 ft: 6194 corp: 683 exec/s: 5530 oom/timeout/crash: 0/0/0 time: 4777s job: 234 dft_time: 0
+#173980741: cov: 6342 ft: 6194 corp: 683 exec/s: 5665 oom/timeout/crash: 0/0/0 time: 4811s job: 235 dft_time: 0
+#175358883: cov: 6342 ft: 6194 corp: 683 exec/s: 5814 oom/timeout/crash: 0/0/0 time: 4843s job: 236 dft_time: 0
+#176359929: cov: 6342 ft: 6194 corp: 683 exec/s: 4206 oom/timeout/crash: 0/0/0 time: 4876s job: 237 dft_time: 0
+#177922445: cov: 6342 ft: 6194 corp: 683 exec/s: 6537 oom/timeout/crash: 0/0/0 time: 4914s job: 238 dft_time: 0
+#179685300: cov: 6342 ft: 6194 corp: 683 exec/s: 7345 oom/timeout/crash: 0/0/0 time: 4984s job: 239 dft_time: 0
+#180756033: cov: 6342 ft: 6194 corp: 683 exec/s: 4442 oom/timeout/crash: 0/0/0 time: 5019s job: 240 dft_time: 0
+#181895685: cov: 6342 ft: 6194 corp: 683 exec/s: 4709 oom/timeout/crash: 0/0/0 time: 5054s job: 241 dft_time: 0
+#183282642: cov: 6342 ft: 6194 corp: 683 exec/s: 5707 oom/timeout/crash: 0/0/0 time: 5086s job: 242 dft_time: 0
+#184500333: cov: 6342 ft: 6194 corp: 683 exec/s: 4990 oom/timeout/crash: 0/0/0 time: 5121s job: 243 dft_time: 0
+#185786178: cov: 6342 ft: 6194 corp: 683 exec/s: 5248 oom/timeout/crash: 0/0/0 time: 5160s job: 244 dft_time: 0
+#187359479: cov: 6342 ft: 6194 corp: 683 exec/s: 6395 oom/timeout/crash: 0/0/0 time: 5231s job: 245 dft_time: 0
+#188560022: cov: 6342 ft: 6194 corp: 683 exec/s: 4860 oom/timeout/crash: 0/0/0 time: 5266s job: 246 dft_time: 0
+#190229309: cov: 6342 ft: 6194 corp: 683 exec/s: 6730 oom/timeout/crash: 0/0/0 time: 5303s job: 247 dft_time: 0
+#191146301: cov: 6342 ft: 6194 corp: 683 exec/s: 3682 oom/timeout/crash: 0/0/0 time: 5336s job: 248 dft_time: 0
+#192802000: cov: 6342 ft: 6194 corp: 683 exec/s: 6622 oom/timeout/crash: 0/0/0 time: 5372s job: 249 dft_time: 0
+#194411796: cov: 6342 ft: 6194 corp: 683 exec/s: 6413 oom/timeout/crash: 0/0/0 time: 5412s job: 250 dft_time: 0
+#196601673: cov: 6342 ft: 6194 corp: 683 exec/s: 8689 oom/timeout/crash: 0/0/0 time: 5484s job: 251 dft_time: 0
+#197515760: cov: 6342 ft: 6194 corp: 683 exec/s: 3612 oom/timeout/crash: 0/0/0 time: 5520s job: 252 dft_time: 0
+#198813974: cov: 6342 ft: 6194 corp: 683 exec/s: 5111 oom/timeout/crash: 0/0/0 time: 5558s job: 253 dft_time: 0
+#200387033: cov: 6342 ft: 6194 corp: 683 exec/s: 6168 oom/timeout/crash: 0/0/0 time: 5592s job: 254 dft_time: 0
+#201483465: cov: 6342 ft: 6194 corp: 683 exec/s: 4282 oom/timeout/crash: 0/0/0 time: 5629s job: 255 dft_time: 0
+#203058305: cov: 6342 ft: 6194 corp: 683 exec/s: 6127 oom/timeout/crash: 0/0/0 time: 5670s job: 256 dft_time: 0
+#204252764: cov: 6342 ft: 6194 corp: 683 exec/s: 4629 oom/timeout/crash: 0/0/0 time: 5743s job: 257 dft_time: 0
+#206164919: cov: 6342 ft: 6194 corp: 683 exec/s: 7382 oom/timeout/crash: 0/0/0 time: 5780s job: 258 dft_time: 0
+#207671331: cov: 6342 ft: 6194 corp: 683 exec/s: 5793 oom/timeout/crash: 0/0/0 time: 5818s job: 259 dft_time: 0
+#209228408: cov: 6342 ft: 6194 corp: 683 exec/s: 5965 oom/timeout/crash: 0/0/0 time: 5854s job: 260 dft_time: 0
+#210233694: cov: 6342 ft: 6194 corp: 683 exec/s: 3836 oom/timeout/crash: 0/0/0 time: 5892s job: 261 dft_time: 0
+#211943130: cov: 6342 ft: 6194 corp: 683 exec/s: 6499 oom/timeout/crash: 0/0/0 time: 5934s job: 262 dft_time: 0
+#214829104: cov: 6342 ft: 6194 corp: 683 exec/s: 10931 oom/timeout/crash: 0/0/0 time: 6007s job: 263 dft_time: 0
+#216167427: cov: 6342 ft: 6194 corp: 683 exec/s: 5050 oom/timeout/crash: 0/0/0 time: 6046s job: 264 dft_time: 0
+#217346103: cov: 6342 ft: 6194 corp: 683 exec/s: 4431 oom/timeout/crash: 0/0/0 time: 6085s job: 265 dft_time: 0
+#218563894: cov: 6342 ft: 6194 corp: 683 exec/s: 4561 oom/timeout/crash: 0/0/0 time: 6122s job: 266 dft_time: 0
+#219551836: cov: 6342 ft: 6194 corp: 683 exec/s: 3686 oom/timeout/crash: 0/0/0 time: 6161s job: 267 dft_time: 0
+#221258740: cov: 6342 ft: 6194 corp: 683 exec/s: 6345 oom/timeout/crash: 0/0/0 time: 6203s job: 268 dft_time: 0
+#222604371: cov: 6342 ft: 6194 corp: 683 exec/s: 4983 oom/timeout/crash: 0/0/0 time: 6278s job: 269 dft_time: 0
+#224200847: cov: 6342 ft: 6194 corp: 683 exec/s: 5891 oom/timeout/crash: 0/0/0 time: 6318s job: 270 dft_time: 0
+#225855628: cov: 6342 ft: 6194 corp: 683 exec/s: 6083 oom/timeout/crash: 0/0/0 time: 6358s job: 271 dft_time: 0
+#227367187: cov: 6342 ft: 6194 corp: 683 exec/s: 5536 oom/timeout/crash: 0/0/0 time: 6396s job: 272 dft_time: 0
+#228979396: cov: 6342 ft: 6194 corp: 683 exec/s: 5883 oom/timeout/crash: 0/0/0 time: 6435s job: 273 dft_time: 0
+#231292639: cov: 6342 ft: 6194 corp: 683 exec/s: 8411 oom/timeout/crash: 0/0/0 time: 6479s job: 274 dft_time: 0
+#232603009: cov: 6342 ft: 6194 corp: 683 exec/s: 4747 oom/timeout/crash: 0/0/0 time: 6555s job: 275 dft_time: 0
+#235080792: cov: 6342 ft: 6194 corp: 683 exec/s: 8945 oom/timeout/crash: 0/0/0 time: 6596s job: 276 dft_time: 0
+#236721050: cov: 6342 ft: 6194 corp: 683 exec/s: 5900 oom/timeout/crash: 0/0/0 time: 6637s job: 277 dft_time: 0
+#238335324: cov: 6342 ft: 6194 corp: 683 exec/s: 5785 oom/timeout/crash: 0/0/0 time: 6676s job: 278 dft_time: 0
+#239725811: cov: 6342 ft: 6195 corp: 684 exec/s: 4966 oom/timeout/crash: 0/0/0 time: 6716s job: 279 dft_time: 0
+#241152633: cov: 6342 ft: 6195 corp: 684 exec/s: 5077 oom/timeout/crash: 0/0/0 time: 6760s job: 280 dft_time: 0
+#242679869: cov: 6342 ft: 6195 corp: 684 exec/s: 5415 oom/timeout/crash: 0/0/0 time: 6838s job: 281 dft_time: 0
+#244067432: cov: 6342 ft: 6195 corp: 684 exec/s: 4903 oom/timeout/crash: 0/0/0 time: 6880s job: 282 dft_time: 0
+#245885313: cov: 6342 ft: 6195 corp: 684 exec/s: 6400 oom/timeout/crash: 0/0/0 time: 6921s job: 283 dft_time: 0
+#247939235: cov: 6342 ft: 6195 corp: 684 exec/s: 7206 oom/timeout/crash: 0/0/0 time: 6962s job: 284 dft_time: 0
+#249518766: cov: 6342 ft: 6195 corp: 684 exec/s: 5522 oom/timeout/crash: 0/0/0 time: 7003s job: 285 dft_time: 0
+#251446270: cov: 6342 ft: 6195 corp: 684 exec/s: 6716 oom/timeout/crash: 0/0/0 time: 7048s job: 286 dft_time: 0
+#253011917: cov: 6342 ft: 6195 corp: 684 exec/s: 5436 oom/timeout/crash: 0/0/0 time: 7127s job: 287 dft_time: 0
+#254036636: cov: 6342 ft: 6195 corp: 684 exec/s: 3545 oom/timeout/crash: 0/0/0 time: 7170s job: 288 dft_time: 0
+#255885702: cov: 6342 ft: 6195 corp: 684 exec/s: 6376 oom/timeout/crash: 0/0/0 time: 7212s job: 289 dft_time: 0
+#257522230: cov: 6342 ft: 6195 corp: 684 exec/s: 5623 oom/timeout/crash: 0/0/0 time: 7253s job: 290 dft_time: 0
+#260472483: cov: 6342 ft: 6195 corp: 684 exec/s: 10103 oom/timeout/crash: 0/0/0 time: 7296s job: 291 dft_time: 0
+#261803757: cov: 6342 ft: 6195 corp: 684 exec/s: 4543 oom/timeout/crash: 0/0/0 time: 7342s job: 292 dft_time: 0
+#263830430: cov: 6342 ft: 6195 corp: 684 exec/s: 6893 oom/timeout/crash: 0/0/0 time: 7421s job: 293 dft_time: 0
+#265061368: cov: 6342 ft: 6195 corp: 684 exec/s: 4172 oom/timeout/crash: 0/0/0 time: 7466s job: 294 dft_time: 0
+#267384115: cov: 6342 ft: 6195 corp: 684 exec/s: 7847 oom/timeout/crash: 0/0/0 time: 7509s job: 295 dft_time: 0
+#269686526: cov: 6342 ft: 6195 corp: 684 exec/s: 7752 oom/timeout/crash: 0/0/0 time: 7551s job: 296 dft_time: 0
+#271112748: cov: 6342 ft: 6195 corp: 684 exec/s: 4785 oom/timeout/crash: 0/0/0 time: 7595s job: 297 dft_time: 0
+#272243363: cov: 6342 ft: 6195 corp: 684 exec/s: 3781 oom/timeout/crash: 0/0/0 time: 7642s job: 298 dft_time: 0
+#273732343: cov: 6342 ft: 6195 corp: 684 exec/s: 4963 oom/timeout/crash: 0/0/0 time: 7722s job: 299 dft_time: 0
+#275585655: cov: 6342 ft: 6195 corp: 684 exec/s: 6157 oom/timeout/crash: 0/0/0 time: 7768s job: 300 dft_time: 0
+#277619180: cov: 6342 ft: 6195 corp: 684 exec/s: 6755 oom/timeout/crash: 0/0/0 time: 7811s job: 301 dft_time: 0
+#279662460: cov: 6342 ft: 6195 corp: 684 exec/s: 6788 oom/timeout/crash: 0/0/0 time: 7853s job: 302 dft_time: 0
+#280994870: cov: 6342 ft: 6195 corp: 684 exec/s: 4426 oom/timeout/crash: 0/0/0 time: 7897s job: 303 dft_time: 0
+#283042648: cov: 6342 ft: 6195 corp: 684 exec/s: 6803 oom/timeout/crash: 0/0/0 time: 7944s job: 304 dft_time: 0
+#284792030: cov: 6342 ft: 6195 corp: 684 exec/s: 5811 oom/timeout/crash: 0/0/0 time: 8024s job: 305 dft_time: 0
+==2173065== libFuzzer: run interrupted; exiting
+stat::number_of_executed_units: 0
+stat::average_exec_per_sec:     0
+stat::new_units_added:          0
+stat::slowest_unit_time_sec:    0
+stat::peak_rss_mb:              368
+#286065123: cov: 6342 ft: 6195 corp: 684 exec/s: 5583 oom/timeout/crash: 0/0/0 time: 8040s job: 307 dft_time: 0
+No such file or directory: /tmp/libFuzzerTemp.FuzzWithFork2173065.dir/C308; exiting
