@@ -24,6 +24,7 @@
  * [x] bApiCallGetId — NULL out_id → fails
  *
  * Regression (need ASan — `make run` builds with it):
+ * [x] Ping send fails on last pending call → no write through NULL session
  * [x] TO_DELETE followed by same fd/FID/SID call → both freed, no UAF
  */
 
@@ -410,6 +411,24 @@ TEST_GROUP(WsServerRegression) {
         free(conn);
     }
 };
+
+TEST(WsServerRegression, PingFailOnLastPendingCallDoesNotTouchNullSession) {
+    /* vServeApiCall: a failed ping calls vApiCallComplete(), which drops
+     * ulCallPending 1 -> 0 and clears call->session. The code used to fall
+     * through and store ulPingTs into NULL->ulPingTs (crash on target:
+     * StoreProhibited, EXCVADDR=0x0000000c). */
+    send_text(conn, "{\"FID\":24577,\"FLAGS\":2,\"SID\":1}");  /* 0x6001 */
+    ws_conn_stub_set_send_result(conn, -1);
+    ws_hal_stub_advance_tick(1000);   /* >= CONFIG_WEB_SOCKET_PING_DELAY */
+
+    ws_server_test_worker_step();
+
+    /* Only the failed ping was attempted; the broken call is not answered */
+    LONGS_EQUAL(1, ws_conn_stub_send_calls(conn));
+
+    ws_server_test_worker_step();     /* call is garbage-collected */
+    LONGS_EQUAL(1, ws_conn_stub_send_calls(conn));
+}
 
 TEST(WsServerRegression, ToDeleteFreesSameCallQueuedRightAfterIt) {
     /* The worker cached `next` before handling TO_DELETE, then freed every
