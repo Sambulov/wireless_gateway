@@ -132,6 +132,7 @@ TEST_GROUP(WsServerConnect) {
         conn = ws_conn_stub_make(42);
     }
     void teardown() {
+        ws_server_on_disconnect(conn);  /* no-op if not connected */
         ws_server_test_reset();
         free(conn);
     }

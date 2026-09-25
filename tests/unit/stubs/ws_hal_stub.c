@@ -5,6 +5,40 @@
 #include <string.h>
 #include <stdarg.h>
 
+/* ── Object registry ──────────────────────────────────────────────────── */
+
+/* The stub owns every mutex/queue it hands out. Production code creates them
+ * once at init and never deletes them (tasks live forever on target), so
+ * ws_hal_stub_reset() plays the role of a reboot and frees them all —
+ * otherwise each test's ws_server_init() would leak. */
+typedef struct stub_obj {
+    struct stub_obj *next;
+    void *obj;
+    void (*destroy)(void *obj);
+} stub_obj_t;
+
+static stub_obj_t *stub_objs;
+
+static void *stub_track(void *obj, void (*destroy)(void *obj)) {
+    if (!obj) return NULL;
+    stub_obj_t *n = malloc(sizeof(*n));
+    if (!n) { destroy(obj); return NULL; }
+    n->obj = obj;
+    n->destroy = destroy;
+    n->next = stub_objs;
+    stub_objs = n;
+    return obj;
+}
+
+static void stub_free_all(void) {
+    while (stub_objs) {
+        stub_obj_t *n = stub_objs;
+        stub_objs = n->next;
+        n->destroy(n->obj);
+        free(n);
+    }
+}
+
 /* ── Tick ─────────────────────────────────────────────────────────────── */
 
 static uint32_t stub_tick;
@@ -23,7 +57,7 @@ uint32_t ws_hal_ms_to_ticks(uint32_t ms) { return ms; }
 typedef struct { int depth; } stub_mutex_t;
 
 ws_mutex_t ws_hal_mutex_create(void) {
-    return calloc(1, sizeof(stub_mutex_t));
+    return stub_track(calloc(1, sizeof(stub_mutex_t)), free);
 }
 
 int ws_hal_mutex_take(ws_mutex_t m, uint32_t timeout_ms) {
@@ -46,6 +80,12 @@ typedef struct {
     uint32_t count; /* items in queue  */
 } stub_queue_t;
 
+static void stub_queue_destroy(void *handle) {
+    stub_queue_t *q = handle;
+    free(q->buf);
+    free(q);
+}
+
 ws_queue_t ws_hal_queue_create(uint32_t depth, uint32_t item_size) {
     stub_queue_t *q = calloc(1, sizeof(stub_queue_t));
     if (!q) return NULL;
@@ -53,7 +93,7 @@ ws_queue_t ws_hal_queue_create(uint32_t depth, uint32_t item_size) {
     if (!q->buf) { free(q); return NULL; }
     q->capacity  = depth;
     q->item_size = item_size;
-    return q;
+    return stub_track(q, stub_queue_destroy);
 }
 
 int ws_hal_queue_send(ws_queue_t handle, const void *item, uint32_t timeout_ms) {
@@ -116,6 +156,7 @@ uint32_t ws_hal_stub_log_w_count(void) { return stub_log_w_count; }
 /* ── Reset ────────────────────────────────────────────────────────────── */
 
 void ws_hal_stub_reset(void) {
+    stub_free_all();
     stub_tick               = 0;
     stub_task_created_count = 0;
     stub_log_i_count        = 0;
