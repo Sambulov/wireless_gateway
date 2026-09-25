@@ -23,7 +23,7 @@
  * [x] bApiCallGetId — NULL call → fails
  * [x] bApiCallGetId — NULL out_id → fails
  *
- * Regression (need ASan — `make run` builds with it):
+ * Regression (built with ASan/UBSan, see Makefile):
  * [x] Ping send fails on last pending call → no write through NULL session
  * [x] TO_DELETE followed by same fd/FID/SID call → both freed, no UAF
  */
@@ -416,17 +416,17 @@ TEST(WsServerRegression, PingFailOnLastPendingCallDoesNotTouchNullSession) {
     /* vServeApiCall: a failed ping calls vApiCallComplete(), which drops
      * ulCallPending 1 -> 0 and clears call->session. The code used to fall
      * through and store ulPingTs into NULL->ulPingTs (crash on target:
-     * StoreProhibited, EXCVADDR=0x0000000c). */
+     * StoreProhibited, EXCVADDR=0x0000000c; on the 64-bit host ASan reports
+     * the address as 0x10). */
     send_text(conn, "{\"FID\":24577,\"FLAGS\":2,\"SID\":1}");  /* 0x6001 */
     ws_conn_stub_set_send_result(conn, -1);
     ws_hal_stub_advance_tick(1000);   /* >= CONFIG_WEB_SOCKET_PING_DELAY */
 
     ws_server_test_worker_step();
 
-    /* Only the failed ping was attempted; the broken call is not answered */
-    LONGS_EQUAL(1, ws_conn_stub_send_calls(conn));
-
-    ws_server_test_worker_step();     /* call is garbage-collected */
+    /* Only the failed ping was attempted. The call is dropped later in the
+     * same step (FID has no queue -> INVALID), and that status is not sent
+     * because the session is already gone. */
     LONGS_EQUAL(1, ws_conn_stub_send_calls(conn));
 }
 
