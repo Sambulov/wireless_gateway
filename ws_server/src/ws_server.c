@@ -208,6 +208,7 @@ uint8_t bApiCallUnregister(uint32_t ulFid) {
         vBreakApiCallsByFid(WS_HAL_WAIT_NONE, ulFid);
         vLinkedListUnlink(LinkedListItem(registered));
         ws_hal_log_i(TAG, "Api handler unregistered %08lx", registered->ulFid);
+        free(registered);
         ws_hal_mutex_give(xWsApiMutex);
         return 1;
     }
