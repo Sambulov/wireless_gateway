@@ -208,6 +208,7 @@ uint8_t bApiCallUnregister(uint32_t ulFid) {
         vBreakApiCallsByFid(WS_HAL_WAIT_NONE, ulFid);
         vLinkedListUnlink(LinkedListItem(registered));
         ws_hal_log_i(TAG, "Api handler unregistered %08lx", registered->ulFid);
+        free(registered);
         ws_hal_mutex_give(xWsApiMutex);
         return 1;
     }
@@ -738,6 +739,10 @@ void ws_server_test_worker_step(void) {
 /* Reset all global state between unit tests. Never call in production. */
 void ws_server_test_reset(void) {
     LinkedListItem_t *item;
+    /* Peripheral responses nobody consumed: the worker would free .data */
+    webapi_msg_t periph_msg;
+    while (ws_hal_queue_receive(xWsWorkerQueue, &periph_msg, WS_HAL_WAIT_NONE))
+        free(periph_msg.data);
     while ((item = pxLinkedListFindFirst(pxWsApiCall, NULL, NULL)) != NULL) {
         ApiCall_t *c = LinkedListGetObject(ApiCall_t, item);
         vLinkedListUnlink(item);

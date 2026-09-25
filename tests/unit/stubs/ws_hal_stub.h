@@ -9,6 +9,8 @@ extern "C" {
 /*
  * Control interface for tests.
  * Call ws_hal_stub_reset() in TEST_GROUP setup() to start clean.
+ * It also frees every mutex/queue created through the stub since the last
+ * reset — anything still pointing at them must be re-created (re-init).
  */
 
 void     ws_hal_stub_reset(void);
