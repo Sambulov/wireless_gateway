@@ -149,7 +149,6 @@ static void format_and_send_mb_response(void *call, mb_cb_ctx_t *cb) {
 /* Запуск транзакции по первичному запросу клиента. Возвращает 1, если
  * транзакция пошла (ответ отправим из такта работы), 0 — если не удалось. */
 static uint8_t mb_call_start(mb_call_ctx_t *ctx, uint8_t *data, uint32_t len) {
-    modbus_worker_t *w = ctx->worker;
     if (!data || !len) {
         send_mb_error(ctx->call, 2);
         return 0;

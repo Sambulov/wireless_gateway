@@ -42,3 +42,7 @@ sdkconfig
 *.exe
 *.out
 *.app
+
+# Клон CppUTest для хостовых тестов и их сборка
+tests/cpputest/
+tests/unit/build/

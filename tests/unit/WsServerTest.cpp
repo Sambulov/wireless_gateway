@@ -16,7 +16,9 @@
  * [x] Frame CLOSE → replies with CLOSE (1 send call)
  * [x] Frame TEXT malformed JSON       → no send
  * [x] Frame TEXT missing FLAGS        → sends BAD_REQ (1 send call)
- * [x] Frame TEXT missing SID          → sends BAD_REQ (1 send call)
+ * [x] Frame TEXT without SID         → accepted (SID назначает клиент)
+ * [x] Work cycle — обработчик получает такт без данных
+ * [x] Work cycle — завершённый вызов снимается и больше тактов не получает
  * [x] Frame TEXT unregistered FID     → sends NO_HANDLER (1 send call)
  * [x] Frame TEXT registered handler   → call enqueued, no immediate send
  *
@@ -49,14 +51,25 @@ extern "C" {
     void ws_server_on_disconnect(ws_conn_t *conn);
     void ws_server_test_reset(void);
     void ws_server_test_worker_step(void);
+    void ws_server_test_work_step(void);
 }
 
 /* ── Helpers ──────────────────────────────────────────────────────────── */
 
-static uint8_t dummy_handler(void *call, void **ctx, uint32_t pending,
-                              uint8_t *data, uint32_t len) {
-    (void)call; (void)ctx; (void)pending; (void)data; (void)len;
+/* Контракт обработчика: (вызов, контекст, данные, длина).
+ * Зов без данных — такт работы; возврат 0 означает «вызов завершён». */
+static uint8_t dummy_handler(void *call, void **ctx, uint8_t *data, uint32_t len) {
+    (void)call; (void)ctx; (void)data; (void)len;
     return 0;
+}
+
+/* Обработчик, который считает такты работы и держит вызов живым, пока не
+ * получит запрос и ни одного такта после него. */
+static int long_handler_pulses;
+static uint8_t long_handler(void *call, void **ctx, uint8_t *data, uint32_t len) {
+    (void)call; (void)ctx; (void)data; (void)len;
+    if (!data) long_handler_pulses++;
+    return long_handler_pulses < 3;
 }
 
 /* ws_server_on_text takes ownership of data — always pass malloc'd copy */
@@ -192,10 +205,12 @@ TEST(WsServerFrame, TextMissingFlagsSendsBadReq) {
     LONGS_EQUAL(1, ws_conn_stub_send_calls(conn));
 }
 
-TEST(WsServerFrame, TextMissingSidSendsBadReq) {
-    /* No SID field — mandatory */
-    send_text(conn, "{\"FID\":1000,\"FLAGS\":0}");
-    LONGS_EQUAL(1, ws_conn_stub_send_calls(conn));
+TEST(WsServerFrame, TextWithoutSidIsAccepted) {
+    /* SID назначает клиент и он необязателен: сервер лишь повторяет его в
+     * ответе, если тот был. Кадр без SID — полноценный запрос. */
+    bApiCallRegister(dummy_handler, 0x2005, NULL);
+    send_text(conn, "{\"FID\":8197,\"FLAGS\":0}");  /* 0x2005 */
+    LONGS_EQUAL(0, ws_conn_stub_send_calls(conn));
 }
 
 TEST(WsServerFrame, TextUnregisteredFidSendsNoHandler) {
@@ -245,6 +260,61 @@ TEST(WsServerFrame, DisconnectedCallNoLongerReceivesBroadcast) {
     ws_server_on_disconnect(conn);
     uint8_t buf[] = "{}";
     LONGS_EQUAL(0, bApiCallSendJsonFidGroup(0x2004, buf, 2));
+}
+
+/* ── TEST_GROUP: WsServerWorkCycle ────────────────────────────────────── */
+
+TEST_GROUP(WsServerWorkCycle) {
+    ws_conn_t *conn;
+    void setup() {
+        ws_hal_stub_reset();
+        ws_server_init();
+        conn = ws_conn_stub_make(1);
+        ws_server_on_connect(conn);
+        long_handler_pulses = 0;
+    }
+    void teardown() {
+        ws_server_on_disconnect(conn);
+        ws_server_test_reset();
+        free(conn);
+    }
+};
+
+TEST(WsServerWorkCycle, HandlerGetsPulsesWithoutData) {
+    /* Имя вызова и такт работы различаются только данными: такт приходит с
+     * data == NULL и не несёт запроса клиента. */
+    bApiCallRegister(long_handler, 0x2006, NULL);
+    send_text(conn, "{\"FID\":8198,\"FLAGS\":0,\"SID\":1}");  /* 0x2006 */
+    ws_server_test_worker_step();          /* первичный вызов — уже с данными */
+    /* Шаг задачи сам состоит из такта работы, поэтому считаем прирост, а не
+     * абсолютное значение. */
+    const int base = long_handler_pulses;
+    CHECK(base <= 1);
+    for (int i = 0; i < 3; i++) {
+        ws_hal_stub_advance_tick(20);
+        ws_server_test_work_step();
+    }
+    LONGS_EQUAL(base + 3, long_handler_pulses);
+}
+
+TEST(WsServerWorkCycle, FinishedCallGetsNoMorePulses) {
+    /* Обработчик вернул 0 — вызов завершён и снят со списка: следующий такт
+     * работы до него уже не доходит (иначе вызов с контекстом копился бы в
+     * списке навсегда — замерено накопление 215 вызовов за минуту). */
+    bApiCallRegister(long_handler, 0x2007, NULL);
+    send_text(conn, "{\"FID\":8199,\"FLAGS\":0,\"SID\":1}");  /* 0x2007 */
+    ws_server_test_worker_step();
+    const int base = long_handler_pulses;
+    for (int i = 0; i < 3; i++) {
+        ws_hal_stub_advance_tick(20);
+        ws_server_test_work_step();
+    }
+    LONGS_EQUAL(base + 3, long_handler_pulses);
+    for (int i = 0; i < 5; i++) {
+        ws_hal_stub_advance_tick(20);
+        ws_server_test_work_step();
+    }
+    LONGS_EQUAL(base + 3, long_handler_pulses);
 }
 
 /* ── TEST_GROUP: WsServerFidQueue ─────────────────────────────────────── */

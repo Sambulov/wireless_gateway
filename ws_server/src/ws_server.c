@@ -651,8 +651,24 @@ static void vWsApiWorkCycle(void) {
     for(int i = 0; i < n; i++) {
         ApiCall_t *call = apxWorkBatch[i];
         /* data == NULL — такт работы, а не запрос клиента */
-        if(!call->fHandler(call, &call->pxHandlerContext, NULL, 0))
-            call->flags |= CALL_FLAG_TO_DELETE;
+        if(call->fHandler(call, &call->pxHandlerContext, NULL, 0)) continue;
+
+        /* Обработчик вернул FALSE — вызов завершён. Завершаем его здесь же.
+         * В очереди периферии это делал приход ответа; у обработчика ответ
+         * отправляет он сам, и без этого вызов с контекстом оставался в списке
+         * навсегда — замерено накопление 215 вызовов и контекстов за минуту. */
+        ws_hal_mutex_take(xWsApiMutex, WS_HAL_WAIT_FOREVER);
+        _vCallTeardown(call);
+        LinkedListItem_t *li = LinkedListItem(call);
+        if(bLinkedListContains(pxWsApiCall, li)) vLinkedListUnlink(li);
+        if(bLinkedListContains(pxWsApiWaitingForResponse, li)) vLinkedListUnlink(li);
+        if(bLinkedListContains(pxWsApiCall, li) || bLinkedListContains(pxWsApiWaitingForResponse, li)) {
+            ws_hal_mutex_give(xWsApiMutex);
+            continue;                      /* ещё где-то в списках — не трогаем */
+        }
+        free(call->pucReqData);
+        free(call);
+        ws_hal_mutex_give(xWsApiMutex);
     }
 }
 
@@ -676,6 +692,10 @@ static void vWsApiCallWorkerStep(void) {
 
             if(call->flags & CALL_FLAG_TO_DELETE) {
                 ws_hal_log_i(TAG, "received status DELETE");
+                /* Обработчик завершил вызов (вернул FALSE) — отдаём ему
+                 * завершение, чтобы он освободил свой контекст. Без этого
+                 * контексты копились: вызов уходил из списков, а память нет. */
+                _vCallTeardown(call);
                 bApiCallSendStatus(call, API_CALL_STATUS_DELIVERED);
                 if(call->session) {
                     void *key = cl_tuple_make((void *)(uintptr_t)call->session->fd,
@@ -851,6 +871,12 @@ void ws_server_init(void) {
 /* Run one worker iteration synchronously — the host has no worker task. */
 void ws_server_test_worker_step(void) {
     vWsApiCallWorkerStep();
+}
+
+/* Run one work cycle synchronously: обработчики получают свой такт. Гейт по
+ * времени обойдён значением тика, которое выставляет сам тест. */
+void ws_server_test_work_step(void) {
+    vWsApiWorkCycle();
 }
 
 /* Reset all global state between unit tests. Never call in production. */
