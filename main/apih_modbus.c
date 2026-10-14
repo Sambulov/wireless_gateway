@@ -209,26 +209,9 @@ static uint8_t mb_call_start(mb_call_ctx_t *ctx, uint8_t *data, uint32_t len) {
         return 0;
     }
 
-    /* Перед запросом сбрасываем состояние линии: в разборе могли остаться
-     * байты от прошлого обмена или помеха, и они испортят кадр. */
-    modbus_reset(&w->mb);
-
-    w->payload[0] = 0; /* clear */
-    modbus_config_t cfg_update = {
-        .pxIface             = &mb_iface,
-        .pxTxContext         = &w->app_uart->desc,
-        .pxTimerContext      = NULL,
-        .pxRequestContext    = NULL,
-        .pucPayLoadBuffer    = w->payload,
-        .ucPayLoadBufferSize = MB_PAYLOAD_SIZE,
-        .usTxTimeout         = (uint16_t)(awt_ms),
-        .usRxTimeout         = (uint16_t)(awt_ms),
-        .eMode               = MB_MODE_RTU,
-        .bIsServer           = 0,
-        .pfOnRequest         = NULL,
-    };
-    modbus_init(&w->mb, &cfg_update);
-
+    /* Линию здесь НЕ трогаем: сброс и настройка делаются в момент старта
+     * транзакции. Иначе разбор второго одновременного запроса сбрасывал бы
+     * линию под уже идущей транзакцией первого, и таймаут получали все. */
     ctx->req       = frame;                 /* pucData уже указывает на wr_buf */
     ctx->awt_ms    = (uint16_t)awt_ms;
     ctx->t_req     = xTaskGetTickCount();
@@ -245,6 +228,28 @@ static uint8_t mb_call_step(mb_call_ctx_t *ctx) {
     if (!ctx->started) {
         if (w->owner && w->owner != ctx) return 1;   /* линия занята — ждём */
         w->owner = ctx;
+        /* Линия наша: сбрасываем состояние (могли остаться байты прошлого
+         * обмена) и задаём таймауты этого запроса. */
+        modbus_reset(&w->mb);
+        w->payload[0] = 0;
+        modbus_config_t cfg_req = {
+            .pxIface             = &mb_iface,
+            .pxTxContext         = &w->app_uart->desc,
+            .pxTimerContext      = NULL,
+            .pxRequestContext    = NULL,
+            .pucPayLoadBuffer    = w->payload,
+            .ucPayLoadBufferSize = MB_PAYLOAD_SIZE,
+            .usTxTimeout         = ctx->awt_ms,
+            .usRxTimeout         = ctx->awt_ms,
+            .eMode               = MB_MODE_RTU,
+            .bIsServer           = 0,
+            .pfOnRequest         = NULL,
+        };
+        modbus_init(&w->mb, &cfg_req);
+        /* Отсчёт таймаута — от старта транзакции, а не от прихода запроса:
+         * пока вызов ждал линию, его время не должно сгорать. */
+        ctx->t_req    = xTaskGetTickCount();
+        ctx->deadline = ctx->t_req + pdMS_TO_TICKS(ctx->awt_ms + 500);
         uint16_t tid = modbus_request(&w->mb, &ctx->req, mb_on_complete, &ctx->cb,
                                       ctx->awt_ms);
         if (!tid) {
