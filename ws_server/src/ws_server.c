@@ -706,6 +706,23 @@ static void vWsApiCallWorkerStep(void) {
                     if(sent)
                         call->flags &= ~CALL_FLAG_NEW;
                 }
+            } else if(call->fHandler) {
+                /* Обработчик зарегистрирован напрямую (без очереди периферии):
+                 * отдаём ему запрос. Дальше вызов живёт по такту работы —
+                 * обработчик получает data == NULL и завершается, вернув FALSE. */
+                if(call->flags & CALL_FLAG_NEW) {
+                    bool sent = bApiCallSendStatus(call, API_CALL_STATUS_DELIVERED);
+                    if(sent)
+                        call->flags &= ~CALL_FLAG_NEW;
+                }
+                if(!call->fHandler(call, &call->pxHandlerContext,
+                                   call->pucReqData, call->ulReqDataLen)) {
+                    /* обработчик завершил вызов сразу */
+                    _vCallTeardown(call);
+                    vLinkedListUnlink(item);
+                    free(call->pucReqData);
+                    free(call);
+                }
             } else {
                 ws_hal_log_i(TAG, "no handler or queue for FID %lu, send status INVALID", call->ulFid);
                 bApiCallSendStatus(call, API_CALL_STATUS_INVALID);

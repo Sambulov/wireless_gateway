@@ -28,6 +28,7 @@ typedef struct {
     struct app_uart_t *app_uart;
     int               port_no;
     delegate_t        rx_delegate;   /* приём байт линии в библиотеку Modbus */
+    void             *owner;         /* вызов, занимающий линию */
 } modbus_worker_t;
 
 typedef struct {
@@ -36,14 +37,24 @@ typedef struct {
     volatile uint8_t  done;
 } mb_cb_ctx_t;
 
-static modbus_worker_t mb_workers[2];
-static queue_handle_t  mb_queues[2];
+/* Состояние одного вызова API: разобранный запрос, идущая транзакция и её
+ * результат. Живёт в контексте вызова, который принадлежит обработчику. */
+#define MB_CTX_MAGIC 0x4d424354u   /* 'MBCT' — признак своего контекста */
 
-queue_handle_t get_modbus_worker_queue(uint32_t fid) {
-    if (fid == ESP_WS_API_UART1_MODBUS_REQ) return mb_queues[0];
-    if (fid == ESP_WS_API_UART2_MODBUS_REQ) return mb_queues[1];
-    return NULL;
-}
+typedef struct {
+    uint32_t         magic;
+    void            *call;
+    modbus_worker_t *worker;
+    mb_cb_ctx_t      cb;
+    modbus_frame_t   req;                       /* разобранный запрос клиента */
+    uint8_t          wr_buf[MB_PAYLOAD_SIZE];
+    uint16_t         awt_ms;
+    TickType_t       t_req;
+    TickType_t       deadline;
+    uint8_t          started;                   /* транзакция запущена */
+} mb_call_ctx_t;
+
+static modbus_worker_t mb_workers[2];
 
 /* Колбэк нового CL: (кадр, дескриптор, контекст). Длину данных берём из
  * ucLengthCode — поля ucBufferSize у кадра больше нет. */
@@ -76,38 +87,19 @@ static void mb_rx_handler(void *trigger, void *sender, void *context) {
         modbus_receive_data(&w->mb, ev->buf, (uint16_t)ev->size, ev->b_end);
 }
 
-static void send_mb_msg(int id, int fid, const char *json_str, size_t len) {
-    /* Peripheral-originated answer: no client socket of its own */
-    webapi_msg_t msg = { .fd = -1 };
-    msg.id  = id;
-    msg.fid = fid;
-    if (json_str && len > 0) {
-        msg.data = malloc(len + 1);
-        if (msg.data) {
-            memcpy(msg.data, json_str, len);
-            msg.data[len] = '\0';
-            msg.len = len;
-        } else {
-            msg.data = NULL;
-            msg.len  = 0;
-        }
-    } else {
-        msg.data = NULL;
-        msg.len  = 0;
-    }
-    if (queue_send(get_ws_worker_queue(), &msg, pdMS_TO_TICKS(100)) != pdPASS) {
-        ESP_LOGW(TAG, "ws queue full, dropping mb response id:%d", id);
-        free(msg.data);
-    }
+/* Ответ клиенту отправляем через сам вызов — ядро само обрамит его в FID/SID. */
+static void send_mb_msg(void *call, const char *json_str, size_t len) {
+    if (json_str && len > 0)
+        bApiCallSendJson(call, (const uint8_t *)json_str, len);
 }
 
-static void send_mb_error(int id, int fid, int code) {
+static void send_mb_error(void *call, int code) {
     char tmp[24];
     int  len = snprintf(tmp, sizeof(tmp), "{\"ERR\":%d}", code);
-    send_mb_msg(id, fid, tmp, len);
+    send_mb_msg(call, tmp, len);
 }
 
-static void format_and_send_mb_response(int id, int fid, mb_cb_ctx_t *cb) {
+static void format_and_send_mb_response(void *call, mb_cb_ctx_t *cb) {
     modbus_frame_t *f = &cb->frame;
     uint8_t code = 0, amount = 0, size = 0;
     uint8_t *regs = pucModbusExtructFrameData(f, &code, &amount, &size);
@@ -116,7 +108,7 @@ static void format_and_send_mb_response(int id, int fid, mb_cb_ctx_t *cb) {
     size_t buf_sz = 96 + (amount > 0 ? (size_t)(amount) * 9 : 0);
     char  *buf    = malloc(buf_sz);
     if (!buf) {
-        send_mb_error(id, fid, 1);
+        send_mb_error(call, 1);
         return;
     }
 
@@ -150,20 +142,23 @@ static void format_and_send_mb_response(int id, int fid, mb_cb_ctx_t *cb) {
         buf[off]   = '\0';
     }
 
-    send_mb_msg(id, fid, buf, off);
+    send_mb_msg(call, buf, off);
     free(buf);
 }
 
-static void handle_modbus_msg(modbus_worker_t *w, webapi_msg_t *msg) {
-    if (!msg->data || !msg->len) {
-        send_mb_error(msg->id, msg->fid, 2);
-        return;
+/* Запуск транзакции по первичному запросу клиента. Возвращает 1, если
+ * транзакция пошла (ответ отправим из такта работы), 0 — если не удалось. */
+static uint8_t mb_call_start(mb_call_ctx_t *ctx, uint8_t *data, uint32_t len) {
+    modbus_worker_t *w = ctx->worker;
+    if (!data || !len) {
+        send_mb_error(ctx->call, 2);
+        return 0;
     }
 
-    cJSON *json = cJSON_ParseWithLengthOpts((char *)msg->data, msg->len, 0, 0);
+    cJSON *json = cJSON_ParseWithLengthOpts((char *)data, len, 0, 0);
     if (!json) {
-        send_mb_error(msg->id, msg->fid, 2);
-        return;
+        send_mb_error(ctx->call, 2);
+        return 0;
     }
 
     modbus_frame_t frame    = {0};
@@ -210,11 +205,9 @@ static void handle_modbus_msg(modbus_worker_t *w, webapi_msg_t *msg) {
     cJSON_Delete(json);
 
     if (!parse_ok) {
-        send_mb_error(msg->id, msg->fid, 2);
-        return;
+        send_mb_error(ctx->call, 2);
+        return 0;
     }
-
-    mb_cb_ctx_t cb = {0};
 
     /* Перед запросом сбрасываем состояние линии: в разборе могли остаться
      * байты от прошлого обмена или помеха, и они испортят кадр. */
@@ -236,59 +229,106 @@ static void handle_modbus_msg(modbus_worker_t *w, webapi_msg_t *msg) {
     };
     modbus_init(&w->mb, &cfg_update);
 
-    TickType_t t_req = xTaskGetTickCount();
-    /* Уровень debug: при непрерывном опросе это десятки строк в секунду, а
-     * вывод на консоль синхронный и сам становится тормозом. */
-    ESP_LOGD(TAG, "запрос fd=%d id=%lu: ADR=%u FN=%u RA=%u RVC=%u AWT=%lu",
-             msg->fd, msg->id, frame.ucAddr, frame.ucFunc,
-             frame.usRegAddr, frame.usRegValueCount, (unsigned long)awt_ms);
-    uint16_t tid = modbus_request(&w->mb, &frame, mb_on_complete, &cb, (uint16_t)awt_ms);
-    if (!tid) {
-        send_mb_error(msg->id, msg->fid, 3);
-        return;
-    }
-
-    /* Ждём ответ, но не крутимся вхолостую: при непрерывном опросе такой цикл
-     * занимал ядро почти целиком (замерено: интерфейс прибора начинал отвечать
-     * по 15 секунд). Пауза в один тик FreeRTOS даёт ядру другим задачам, а
-     * задержка обнаружения ответа — не больше этого тика. */
-    TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(awt_ms + 500);
-    while (!cb.done && (int32_t)(xTaskGetTickCount() - deadline) < 0) {
-        modbus_work(&w->mb);
-        if (!cb.done) vTaskDelay(1);
-    }
-
-    if (!cb.done) {
-        modbus_reset(&w->mb);
-        ESP_LOGW(TAG, "modbus %lu: таймаут транзакции %lu мс",
-                 msg->id, (unsigned long)((xTaskGetTickCount() - t_req) * portTICK_PERIOD_MS));
-        send_mb_error(msg->id, msg->fid, 4);
-        return;
-    }
-    ESP_LOGD(TAG, "modbus %lu порт %d: транзакция %lu мс",
-             msg->id, w->port_no,
-             (unsigned long)((xTaskGetTickCount() - t_req) * portTICK_PERIOD_MS));
-
-    format_and_send_mb_response(msg->id, msg->fid, &cb);
-}
-
-static uint8_t mb_api_handler(void *call, void **context, uint32_t pending,
-                               uint8_t *arg, uint32_t arg_len) {
-    (void)call; (void)context; (void)pending; (void)arg; (void)arg_len;
+    ctx->req       = frame;                 /* pucData уже указывает на wr_buf */
+    ctx->awt_ms    = (uint16_t)awt_ms;
+    ctx->t_req     = xTaskGetTickCount();
+    ctx->deadline  = ctx->t_req + pdMS_TO_TICKS(awt_ms + 500);
+    ctx->started   = 0;
     return 1;
 }
 
-static void ws_modbus_task(void *param) {
-    modbus_worker_t *w = (modbus_worker_t *)param;
-    webapi_msg_t    *msg;
-    for (;;) {
-        if (queue_receive(w->queue, &msg, portMAX_DELAY) == pdPASS) {
-            ESP_LOGD(TAG, "modbus %lu порт %d: взят из очереди", msg->id, w->port_no);
-            handle_modbus_msg(w, msg);
-            free(msg->data);
-            free(msg);
+/* Запуск транзакции на линии (когда порт свободен) и её продолжение по такту
+ * работы. Возвращает 1, пока вызов жив, и 0, когда ответ отправлен. */
+static uint8_t mb_call_step(mb_call_ctx_t *ctx) {
+    modbus_worker_t *w = ctx->worker;
+
+    if (!ctx->started) {
+        if (w->owner && w->owner != ctx) return 1;   /* линия занята — ждём */
+        w->owner = ctx;
+        uint16_t tid = modbus_request(&w->mb, &ctx->req, mb_on_complete, &ctx->cb,
+                                      ctx->awt_ms);
+        if (!tid) {
+            w->owner = NULL;
+            send_mb_error(ctx->call, 3);
+            return 0;
         }
+        ctx->started = 1;
+        return 1;
     }
+
+    modbus_work(&w->mb);
+
+    if (ctx->cb.done) {
+        ESP_LOGD(TAG, "modbus порт %d: транзакция %lu мс", w->port_no,
+                 (unsigned long)((xTaskGetTickCount() - ctx->t_req) * portTICK_PERIOD_MS));
+        w->owner = NULL;
+        format_and_send_mb_response(ctx->call, &ctx->cb);
+        return 0;
+    }
+
+    if ((int32_t)(xTaskGetTickCount() - ctx->deadline) >= 0) {
+        modbus_reset(&w->mb);
+        w->owner = NULL;
+        ESP_LOGW(TAG, "modbus: таймаут транзакции на порту %d", w->port_no);
+        send_mb_error(ctx->call, 4);
+        return 0;
+    }
+    return 1;
+}
+
+/* Обработчик запросов к прибору по контракту API:
+ *   data != NULL — первичный запрос клиента: разбираем ARG и готовим транзакцию;
+ *   data == NULL — такт работы: держим линию и, получив ответ, отправляем его;
+ *   call == NULL — принудительное завершение: освобождаем контекст вызова.
+ * Ожидания внутри нет: пока прибор не ответил, обработчик возвращает TRUE. */
+static uint8_t mb_api_handler(void *call, void **context, uint8_t *data, uint32_t data_len) {
+    if (!call) {
+        mb_call_ctx_t *ctx = (mb_call_ctx_t *)*context;
+        if (ctx) {
+            if (ctx->worker && ctx->worker->owner == ctx) {
+                ctx->worker->owner = NULL;
+                modbus_reset(&ctx->worker->mb);
+            }
+            free(ctx);
+        }
+        *context = NULL;
+        return 0;
+    }
+
+    mb_call_ctx_t *ctx = (mb_call_ctx_t *)*context;
+
+    if (data != NULL) {
+        if (ctx && ctx->magic == MB_CTX_MAGIC) {
+            /* Повторный запрос по тому же вызову (длинная подписка): начинаем
+             * заново, контекст не создаём заново, иначе он утечёт. */
+            if (ctx->worker && ctx->worker->owner == ctx) {
+                ctx->worker->owner = NULL;
+                modbus_reset(&ctx->worker->mb);
+            }
+            ctx->cb.done = 0;
+        } else {
+            /* Первичный вызов: контекст регистрации (порт) заменяем своим. */
+            ctx = calloc(1, sizeof(*ctx));
+            if (!ctx) {
+                send_mb_error(call, 1);
+                return 0;
+            }
+            ctx->magic  = MB_CTX_MAGIC;
+            ctx->call   = call;
+            ctx->worker = (modbus_worker_t *)*context;
+            *context    = ctx;
+        }
+        if (!mb_call_start(ctx, data, data_len)) {
+            /* не разобрали запрос — ответ уже отправлен, вызов завершён */
+            *context = ctx->worker;
+            free(ctx);
+            return 0;
+        }
+        return 1;
+    }
+
+    if (!ctx) return 0;
+    return mb_call_step(ctx);
 }
 
 esp_err_t ws_modbus_run(app_context_t *app) {
@@ -316,16 +356,6 @@ esp_err_t ws_modbus_run(app_context_t *app) {
             return ESP_FAIL;
         }
 
-        /* Очередь короткая намеренно. Транзакция занимает ~40 мс, но клиентов
-         * может быть несколько вкладок: при десяти запросах в секунду очередь
-         * любой разумной глубины стоит полной, и тогда КАЖДЫЙ запрос ждёт
-         * своей очереди — при глубине 8 это 400+ мс, при 32 завал копился на
-         * секунды, и страница выглядела мёртвой. Глубина 3 держит потолок
-         * ожидания около 150 мс; лишние запросы отсекаются на входе с ошибкой,
-         * а свежие данные придут следующим тактом. */
-        mb_queues[i] = queue_create(3, sizeof(void *));
-        w->queue = mb_queues[i];
-
         app->uart.port[i].proto_context = &w->mb;
 
         /* Байты линии приходят событиями UART — отдаём их библиотеке. */
@@ -334,13 +364,12 @@ esp_err_t ws_modbus_run(app_context_t *app) {
         gw_uart_on_receive_subscribe(&w->app_uart->desc, &w->rx_delegate);
     }
 
-    ws_server_register_fid_queue(ESP_WS_API_UART1_MODBUS_REQ, mb_queues[0]);
-    ws_server_register_fid_queue(ESP_WS_API_UART2_MODBUS_REQ, mb_queues[1]);
-
-    BaseType_t r0 = xTaskCreatePinnedToCore(ws_modbus_task, "ws_mb0", 4096,
-                                            &mb_workers[0], 5, NULL, tskNO_AFFINITY);
-    BaseType_t r1 = xTaskCreatePinnedToCore(ws_modbus_task, "ws_mb1", 4096,
-                                            &mb_workers[1], 5, NULL, tskNO_AFFINITY);
-
-    return (r0 == pdPASS && r1 == pdPASS) ? ESP_OK : ESP_FAIL;
+    /* Запросы к прибору идут через ядро API: оно само вызывает обработчик и в
+     * такте работы, поэтому своей задачи и очереди здесь больше нет. */
+    if (!bApiCallRegister(mb_api_handler, ESP_WS_API_UART1_MODBUS_REQ, &mb_workers[0]) ||
+        !bApiCallRegister(mb_api_handler, ESP_WS_API_UART2_MODBUS_REQ, &mb_workers[1])) {
+        ESP_LOGE(TAG, "не удалось зарегистрировать обработчики Modbus");
+        return ESP_FAIL;
+    }
+    return ESP_OK;
 }
