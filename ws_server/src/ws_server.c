@@ -43,6 +43,9 @@ typedef struct {
     uint8_t *pucReqData;
     uint32_t ulReqDataLen;
     uint32_t ulId;
+    /* SID назначает клиент: он необязателен, и сервер лишь возвращает его в
+     * ответе. Без него ответ уходит без поля SID (публичные подписки). */
+    uint8_t  bHasSid;
     void *pxHandlerContext;
     ApiHandler_t fHandler;
     uint32_t ulFid;
@@ -139,6 +142,9 @@ static void vBreakApiCallsByFid(uint32_t timeout_ms, uint32_t fid) {
     }
 }
 
+/* Объявлено заранее: завершение вызова зовётся из обслуживания, описано ниже. */
+static void _vCallTeardown(ApiCall_t *call);
+
 static void vServeApiCall(LinkedListItem_t *item, void *arg) {
     ApiCall_t *call = LinkedListGetObject(ApiCall_t, item);
     if(call->session) {
@@ -161,10 +167,26 @@ static void vServeApiCall(LinkedListItem_t *item, void *arg) {
         }
     } else {
         ws_hal_log_d(TAG, "Api call complete, id: %lu", call->ulId);
+        _vCallTeardown(call);
         vLinkedListUnlink(item);
         free(call->pucReqData);
         free(call);
     }
+}
+
+/* Принудительное завершение вызова: по контракту обработчик получает call == NULL
+ * и обязан освободить свой контекст, возвращая FALSE. Пошаговое завершение
+ * допускается, поэтому зовём до FALSE, но с ограничением — иначе обработчик,
+ * который не понял завершение, повесит задачу. */
+#define WS_API_TEARDOWN_STEPS 8
+
+static void _vCallTeardown(ApiCall_t *call) {
+    if(!call || !call->fHandler) return;
+    for (int i = 0; i < WS_API_TEARDOWN_STEPS; i++) {
+        if(call->fHandler(NULL, &call->pxHandlerContext, NULL, 0)) continue;
+        break;
+    }
+    call->pxHandlerContext = NULL;
 }
 
 static void vWsTransferComplete_cb(int err, int fd, void *arg) {
@@ -274,12 +296,18 @@ static uint8_t _bApiCallSendJson(void *pxApiCall, uint32_t ulFid, const uint8_t 
         return 0;
     }
 
+    /* SID в ответе — только если клиент его назначил. Публичные подписки
+     * (рассылка по FID без конкретного вызова) идут без SID всегда. */
+    uint8_t has_sid = (call != NULL) && call->bHasSid;
     char pucTemplate[] = "{\"FID\":\"0x%08lx\",\"SID\":\"0x%08lx\",\"ARG\":";
+    char pucTemplateNoSid[] = "{\"FID\":\"0x%08lx\",\"ARG\":";
     uint32_t len = ulLen + sizeof(pucTemplate) + 6;
 
     ApiData_t *resp = malloc(sizeof(ApiData_t) + len);
     if(resp != NULL) {
-        int offset = sprintf((char *)resp->payload, pucTemplate, fid_out, sid);
+        int offset = has_sid
+                   ? sprintf((char *)resp->payload, pucTemplate, fid_out, sid)
+                   : sprintf((char *)resp->payload, pucTemplateNoSid, fid_out);
         mem_cpy(&resp->payload[offset], ucJson, ulLen);
         offset += ulLen;
         resp->payload[offset] = '}';
@@ -288,7 +316,9 @@ static uint8_t _bApiCallSendJson(void *pxApiCall, uint32_t ulFid, const uint8_t 
         resp->frame.fragmented = false;
         resp->frame.type       = WS_FRAME_TEXT;
         resp->frame.payload    = resp->payload;
-        resp->frame.len        = len;
+        /* Длину берём по факту: шаблон без SID короче, и объявлять кадр по
+         * длинному шаблону нельзя — клиент получит мусор в хвосте. */
+        resp->frame.len        = (uint32_t)offset + 1;
 
         if(call != NULL) {
             _send_to_session(call, resp, &res);
@@ -475,11 +505,17 @@ static void ws_server_on_text(ws_conn_t *conn, uint8_t *data, size_t len) {
     wscd->ulCallPending = 1;
     wscd->session = sess;
 
+    /* SID назначает клиент, чтобы отличить ответ на свой запрос. Сервер его не
+     * требует и не придумывает: нет SID — ответ уйдёт без этого поля. */
     cJSON *sid_json = cJSON_GetObjectItem(json, "SID");
+    if(cJSON_IsNumber(sid_json)) {
+        wscd->bHasSid = 1;
+        wscd->ulId    = (uint32_t)sid_json->valueint;
+    }
 
-    /* Both FLAGS and SID are mandatory — drop calls that omit either */
-    if(!cJSON_IsNumber(flags_json) || !cJSON_IsNumber(sid_json)) {
-        ws_hal_log_w(TAG, "Missing FLAGS or SID, dropping call fid:%lu", wscd->ulFid);
+    /* FLAGS остаётся обязательным полем протокола */
+    if(!cJSON_IsNumber(flags_json)) {
+        ws_hal_log_w(TAG, "Missing FLAGS, dropping call fid:%lu", wscd->ulFid);
         bApiCallSendStatus(wscd, API_CALL_ERROR_STATUS_BAD_REQ);
         free(wscd->pucReqData);
         free(wscd);
@@ -488,7 +524,6 @@ static void ws_server_on_text(ws_conn_t *conn, uint8_t *data, size_t len) {
     }
 
     ws_hal_mutex_take(xWsApiMutex, WS_HAL_WAIT_FOREVER);
-    wscd->ulId = (uint32_t)sid_json->valueint & 0xffff;
 
     /* Bind handler if registered; queue-routed FIDs may have no handler */
     ApiHandlerItem_t *hlr = LinkedListGetObject(ApiHandlerItem_t,
@@ -572,7 +607,38 @@ static void vForwardCallToPeripheral(ApiCall_t *call, ws_queue_t queue) {
 /* One full pass of the worker: ping/GC, forward to peripherals, handle
  * peripheral responses. Split out of the task loop so host tests/fuzzers
  * can drive it synchronously (see ws_server_test_worker_step()). */
+/* Такт работы. Ядро само решает, когда дёрнуть обработчики, — обработчик не
+ * должен крутиться внутри себя в ожидании периферии. Такт ограничен по частоте,
+ * чтобы активные вызовы не занимали процессор целиком: за один проход не чаще
+ * WS_API_WORK_TICK_MS, а обработчик, которому нечего делать, возвращается сразу. */
+#define WS_API_WORK_TICK_MS 10
+static uint32_t ulLastWorkTick;
+
+static void vWsApiWorkCycle(void) {
+    uint32_t now = ws_hal_tick();
+    if((now - ulLastWorkTick) < ws_hal_ms_to_ticks(WS_API_WORK_TICK_MS)) return;
+    ulLastWorkTick = now;
+
+    ws_hal_mutex_take(xWsApiMutex, WS_HAL_WAIT_FOREVER);
+    LinkedListItem_t *item = pxLinkedListFindFirst(pxWsApiCall, NULL, NULL);
+    while(item != NULL) {
+        LinkedListItem_t *next = pxLinkedListFindNextNoOverlap(item, NULL, NULL);
+        ApiCall_t *call = LinkedListGetObject(ApiCall_t, item);
+        if(call->fHandler && !(call->flags & CALL_FLAG_TO_DELETE)) {
+            /* data == NULL — такт работы, а не запрос клиента */
+            if(!call->fHandler(call, &call->pxHandlerContext, NULL, 0))
+                call->flags |= CALL_FLAG_TO_DELETE;
+        }
+        item = next;
+    }
+    ws_hal_mutex_give(xWsApiMutex);
+}
+
 static void vWsApiCallWorkerStep(void) {
+        /* 0. Такт работы: обработчики получают возможность сделать своё
+         * периодическое дело, не блокируя ядро */
+        vWsApiWorkCycle();
+
         /* 1. Keep connections alive and garbage-collect completed/dead calls */
         ws_hal_mutex_take(xWsApiMutex, WS_HAL_WAIT_FOREVER);
         ulLinkedListDoForeach(pxWsApiCall, vServeApiCall, NULL);
@@ -663,7 +729,7 @@ static void vWsApiCallWorkerStep(void) {
                     LinkedListItem_t *next_it = pxLinkedListFindNextNoOverlap(it, bCallFidMatch, (void *)periph_msg.fid);
                     ApiCall_t *c = LinkedListGetObject(ApiCall_t, it);
                     if(c->fHandler)
-                        c->fHandler(c, &c->pxHandlerContext, c->ulCallPending, periph_msg.data, periph_msg.len);
+                        c->fHandler(c, &c->pxHandlerContext, periph_msg.data, periph_msg.len);
                     if(periph_msg.len) {
                         ws_hal_log_i(TAG, "broadcast fid:%lu len:%lu", periph_msg.fid, periph_msg.len);
                         _bApiCallSendJson(c, 0, periph_msg.data, periph_msg.len);
@@ -693,7 +759,7 @@ static void vWsApiCallWorkerStep(void) {
             }
 
             if(call2->fHandler)
-                call2->fHandler(call2, &call2->pxHandlerContext, call2->ulCallPending, periph_msg.data, periph_msg.len);
+                call2->fHandler(call2, &call2->pxHandlerContext, periph_msg.data, periph_msg.len);
             if(periph_msg.len) {
                 ws_hal_log_d(TAG, "sent: %s : %lu", periph_msg.data, periph_msg.len);
                 _bApiCallSendJson(call2, 0, periph_msg.data, periph_msg.len);

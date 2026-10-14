@@ -36,15 +36,32 @@ typedef struct webapi_msg {
 #define API_CALL_ERROR_STATUS_INTERNAL              0x8000000F
 
 /*!
-	@brief Web socket API handler proto
-	@param[in] pxApiCall API call descriptor
-	@param[in/out] ppxContext handler context for current API call, user can link any data to use in future repeated calls 
-	@param[in] ulPending pending api calls with in ApiCall session
-	@return 0 if prolonged call, else - complete
-*/
-typedef uint8_t (*ApiHandler_t)(void *pxApiCall, void **ppxContext, uint32_t ulPending, uint8_t *pucData, uint32_t ulDataLen);
+	@brief Обработчик вызова API.
 
-uint8_t bApiCallRegister(ApiHandler_t fHandler, uint32_t ulFid, void *pxContext);
+	Ядро вызывает его не только на запрос клиента, но и в каждом такте работы,
+	поэтому обработчик обязан быть неблокирующим: если нужно ждать периферию,
+	он возвращает TRUE и завершает вызов позже, а не крутится внутри.
+
+	@param[in] call      дескриптор вызова. NULL — принудительное завершение:
+	                     обработчик обязан освободить свой контекст (*context)
+	                     и вернуть FALSE; допускается за несколько вызовов.
+	@param[in,out] context контекст вызова, принадлежащий обработчику. При первом
+	                     вызове нового запроса содержит контекст, переданный при
+	                     регистрации. Пустой *context означает первичный вызов
+	                     (например, подписка), заполненный — повторный.
+	@param[in] data      для запроса клиента ВСЕГДА не NULL (может указывать на
+	                     пустой payload, если ARG не было). data == NULL при живом
+	                     вызове — такт работы: обработчик может сделать свою
+	                     периодическую работу (например, выдать кадр подписки).
+	@param[in] data_len  длина data (0, если ARG не было).
+	@return TRUE  — вызов остаётся активным;
+	        FALSE — вызов завершён (вызова завершения после этого не будет).
+*/
+typedef uint8_t (*api_handler_t)(void *call, void **context, uint8_t *data, uint32_t data_len);
+
+typedef api_handler_t ApiHandler_t;
+
+uint8_t bApiCallRegister(api_handler_t fHandler, uint32_t ulFid, void *pxContext);
 uint8_t ws_server_register_fid_queue(uint32_t ulFid, void *xQueue);
 uint8_t bApiCallUnregister(uint32_t ulFid);
 
@@ -58,8 +75,6 @@ uint8_t bApiCallSendJsonFidGroup(uint32_t ulFid, const uint8_t *ucData, uint32_t
 /*
 	Snake notation
 */
-
-typedef ApiHandler_t api_handler_t;
 
 uint8_t api_call_register(api_handler_t handler, uint32_t fid, void *context);
 uint8_t api_call_unregister(uint32_t fid);
