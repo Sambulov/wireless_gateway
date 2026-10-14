@@ -83,8 +83,9 @@ static void mb_rx_handler(void *trigger, void *sender, void *context) {
     (void)sender;
     modbus_worker_t *w = (modbus_worker_t *)context;
     gw_uart_event_data_t *ev = (gw_uart_event_data_t *)trigger;
-    if (w && ev && ev->buf && ev->size)
+    if (w && ev && ev->buf && ev->size) {
         modbus_receive_data(&w->mb, ev->buf, (uint16_t)ev->size, ev->b_end);
+    }
 }
 
 /* Ответ клиенту отправляем через сам вызов — ядро само обрамит его в FID/SID. */
@@ -257,14 +258,15 @@ static uint8_t mb_call_step(mb_call_ctx_t *ctx) {
             return 0;
         }
         ctx->started = 1;
+        /* Кадр уходит в линию сразу, не дожидаясь следующего такта: иначе
+         * отправка стоит ещё один такт работы. */
+        modbus_work(&w->mb);
         return 1;
     }
 
     modbus_work(&w->mb);
 
     if (ctx->cb.done) {
-        ESP_LOGD(TAG, "modbus порт %d: транзакция %lu мс", w->port_no,
-                 (unsigned long)((xTaskGetTickCount() - ctx->t_req) * portTICK_PERIOD_MS));
         w->owner = NULL;
         format_and_send_mb_response(ctx->call, &ctx->cb);
         return 0;
