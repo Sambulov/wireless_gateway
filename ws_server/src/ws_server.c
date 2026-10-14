@@ -50,6 +50,9 @@ typedef struct {
     ApiHandler_t fHandler;
     uint32_t ulFid;
     uint32_t ulCallPending;
+    /* Обработчику уже отдали первичный запрос: только после этого его можно
+     * дёргать тактом работы, иначе он получит data == NULL раньше запроса. */
+    uint8_t  bHandlerStarted;
     call_flags_t flags;
     /* CALL_FLAG_LONG_TERM throttling: client-supplied ARG.RDL (re-poll delay,
      * ms) converted to ticks at parse time. ulNextPollTick is armed each time
@@ -614,24 +617,43 @@ static void vForwardCallToPeripheral(ApiCall_t *call, ws_queue_t queue) {
 #define WS_API_WORK_TICK_MS 10
 static uint32_t ulLastWorkTick;
 
+/* Обработчики нельзя звать под xWsApiMutex: обработчик отправляет ответ через
+ * bApiCallSendJson, а тот берёт тот же (нерекурсивный) мьютекс — выходит
+ * самоблокировка и задача API встаёт намертво. Поэтому под мьютексом только
+ * собираем список вызовов, а дёргаем их после освобождения. Освобождать вызовы
+ * может лишь эта же задача, так что собранные указатели остаются валидными. */
+#define WS_API_WORK_BATCH 16
+static ApiCall_t *apxWorkBatch[WS_API_WORK_BATCH];
+
+static int vWsApiCollectHandled(LinkedList_t list, int from) {
+    int n = from;
+    LinkedListItem_t *item = pxLinkedListFindFirst(list, NULL, NULL);
+    while(item != NULL && n < WS_API_WORK_BATCH) {
+        LinkedListItem_t *next = pxLinkedListFindNextNoOverlap(item, NULL, NULL);
+        ApiCall_t *call = LinkedListGetObject(ApiCall_t, item);
+        if(call->fHandler && call->bHandlerStarted && !(call->flags & CALL_FLAG_TO_DELETE))
+            apxWorkBatch[n++] = call;
+        item = next;
+    }
+    return n;
+}
+
 static void vWsApiWorkCycle(void) {
     uint32_t now = ws_hal_tick();
     if((now - ulLastWorkTick) < ws_hal_ms_to_ticks(WS_API_WORK_TICK_MS)) return;
     ulLastWorkTick = now;
 
     ws_hal_mutex_take(xWsApiMutex, WS_HAL_WAIT_FOREVER);
-    LinkedListItem_t *item = pxLinkedListFindFirst(pxWsApiCall, NULL, NULL);
-    while(item != NULL) {
-        LinkedListItem_t *next = pxLinkedListFindNextNoOverlap(item, NULL, NULL);
-        ApiCall_t *call = LinkedListGetObject(ApiCall_t, item);
-        if(call->fHandler && !(call->flags & CALL_FLAG_TO_DELETE)) {
-            /* data == NULL — такт работы, а не запрос клиента */
-            if(!call->fHandler(call, &call->pxHandlerContext, NULL, 0))
-                call->flags |= CALL_FLAG_TO_DELETE;
-        }
-        item = next;
-    }
+    int n = vWsApiCollectHandled(pxWsApiCall, 0);
+    n = vWsApiCollectHandled(pxWsApiWaitingForResponse, n);
     ws_hal_mutex_give(xWsApiMutex);
+
+    for(int i = 0; i < n; i++) {
+        ApiCall_t *call = apxWorkBatch[i];
+        /* data == NULL — такт работы, а не запрос клиента */
+        if(!call->fHandler(call, &call->pxHandlerContext, NULL, 0))
+            call->flags |= CALL_FLAG_TO_DELETE;
+    }
 }
 
 static void vWsApiCallWorkerStep(void) {
@@ -715,9 +737,18 @@ static void vWsApiCallWorkerStep(void) {
                     if(sent)
                         call->flags &= ~CALL_FLAG_NEW;
                 }
-                if(!call->fHandler(call, &call->pxHandlerContext,
-                                   call->pucReqData, call->ulReqDataLen)) {
-                    /* обработчик завершил вызов сразу */
+                call->bHandlerStarted = 1;
+                /* Переносим в список «в работе»: иначе следующий проход снова
+                 * отдаст обработчику тот же запрос. */
+                vLinkedListInsertLast(&pxWsApiWaitingForResponse, item);
+                /* Зовём обработчик без мьютекса: он отправляет ответ через API.
+                 * Мьютекс отпускаем и берём заново — такт работы и удаление
+                 * вызовов всё равно в этой же задаче. */
+                ws_hal_mutex_give(xWsApiMutex);
+                uint8_t alive = call->fHandler(call, &call->pxHandlerContext,
+                                               call->pucReqData, call->ulReqDataLen);
+                ws_hal_mutex_take(xWsApiMutex, WS_HAL_WAIT_FOREVER);
+                if(!alive) {
                     _vCallTeardown(call);
                     vLinkedListUnlink(item);
                     free(call->pucReqData);
