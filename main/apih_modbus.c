@@ -3,6 +3,7 @@
 #include "uart.h"
 #include "cJSON_helpers.h"
 #include "web_api.h"
+#include "ModBusHelpers.h"
 
 #define MB_PAYLOAD_SIZE    255
 #define MB_DEFAULT_AWT_MS  500
@@ -106,38 +107,10 @@ static void send_mb_error(int id, int fid, int code) {
     send_mb_msg(id, fid, tmp, len);
 }
 
-/* Разбор ответа прибора. В прежней версии CL это делала modbus_frame_data, в
- * новой её нет, поэтому читаем кадр сами. Полезная нагрузка лежит в pucData в
- * том виде, как пришла по линии: старшим байтом вперёд (big-endian). */
-static uint8_t *mb_response_data(modbus_frame_t *f, uint8_t *code,
-                                 uint8_t *amount, uint8_t *size)
-{
-    *code = 0; *amount = 0; *size = 2;
-    if (!f) return NULL;
-    if (f->ucFunc & MODBUS_ERROR_FLAG) {          /* кадр-исключение */
-        *code = f->ucLengthCode;
-        return NULL;
-    }
-    switch (f->ucFunc) {
-        case MB_FUNC_READ_OUTPUTS:
-        case MB_FUNC_READ_INPUTS:
-            *size   = 1;
-            *amount = f->ucLengthCode;
-            return f->pucData;
-        case MB_FUNC_READ_HOLDINGS:
-        case MB_FUNC_READ_INPUT_REGISTERS:
-            *size   = 2;
-            *amount = f->ucLengthCode / 2;
-            return f->pucData;
-        default:                                   /* ответ на запись — без данных */
-            return NULL;
-    }
-}
-
 static void format_and_send_mb_response(int id, int fid, mb_cb_ctx_t *cb) {
     modbus_frame_t *f = &cb->frame;
     uint8_t code = 0, amount = 0, size = 0;
-    uint8_t *regs = mb_response_data(f, &code, &amount, &size);
+    uint8_t *regs = pucModbusExtructFrameData(f, &code, &amount, &size);
 
     /* Estimate buffer: header ~80 bytes + per-register up to 7 bytes each */
     size_t buf_sz = 96 + (amount > 0 ? (size_t)(amount) * 9 : 0);
