@@ -33,8 +33,15 @@ typedef struct {
     struct app_uart_t *app_uart;
     int               port_no;
     delegate_t        rx_delegate;   /* приём байт линии в библиотеку Modbus */
-    void             *owner;         /* вызов, занимающий линию */
 } modbus_worker_t;
+
+/* Коды ошибок в ответе клиенту. Отличать их от кода исключения Modbus важно:
+ * ERR из кадра прибора — это код исключения прибора, а здесь — отказ каркаса. */
+#define MB_ERR_BUSY    5    /* линия занята чужой транзакцией дольше, чем ждал вызов */
+#define MB_ERR_TIMEOUT 4    /* прибор не ответил */
+#define MB_ERR_START   3    /* транзакция не запустилась */
+#define MB_ERR_ARG     2    /* ARG не разобран */
+#define MB_ERR_MEM     1    /* не хватило памяти */
 
 typedef struct {
     modbus_frame_t    frame;
@@ -60,6 +67,7 @@ typedef struct {
 } mb_call_ctx_t;
 
 static modbus_worker_t mb_workers[2];
+
 
 /* Колбэк нового CL: (кадр, дескриптор, контекст). Длину данных берём из
  * ucLengthCode — поля ucBufferSize у кадра больше нет. */
@@ -114,7 +122,7 @@ static void format_and_send_mb_response(void *call, mb_cb_ctx_t *cb) {
     size_t buf_sz = 96 + (amount > 0 ? (size_t)(amount) * 9 : 0);
     char  *buf    = malloc(buf_sz);
     if (!buf) {
-        send_mb_error(call, 1);
+        send_mb_error(call, MB_ERR_MEM);
         return;
     }
 
@@ -156,7 +164,7 @@ static void format_and_send_mb_response(void *call, mb_cb_ctx_t *cb) {
  * транзакция пошла (ответ отправим из такта работы), 0 — если не удалось. */
 static uint8_t mb_call_start(mb_call_ctx_t *ctx, uint8_t *data, uint32_t len) {
     if (!data || !len) {
-        send_mb_error(ctx->call, 2);
+        send_mb_error(ctx->call, MB_ERR_ARG);
         return 0;
     }
 
@@ -166,7 +174,7 @@ static uint8_t mb_call_start(mb_call_ctx_t *ctx, uint8_t *data, uint32_t len) {
     GW_JSON_TOKENS(toks, MB_ARG_MAX_TOKENS);
     gw_json_t json;
     if (!gw_json_parse(&json, (const char *)data, len, toks, MB_ARG_MAX_TOKENS)) {
-        send_mb_error(ctx->call, 2);
+        send_mb_error(ctx->call, MB_ERR_ARG);
         return 0;
     }
 
@@ -210,7 +218,7 @@ static uint8_t mb_call_start(mb_call_ctx_t *ctx, uint8_t *data, uint32_t len) {
     } while (0);
 
     if (!parse_ok) {
-        send_mb_error(ctx->call, 2);
+        send_mb_error(ctx->call, MB_ERR_ARG);
         return 0;
     }
 
@@ -231,57 +239,53 @@ static uint8_t mb_call_step(mb_call_ctx_t *ctx) {
     modbus_worker_t *w = ctx->worker;
 
     if (!ctx->started) {
-        if (w->owner && w->owner != ctx) return 1;   /* линия занята — ждём */
-        w->owner = ctx;
-        /* Линия наша: сбрасываем состояние (могли остаться байты прошлого
-         * обмена) и задаём таймауты этого запроса. */
+        /* Пытаемся занять драйвер. Он один на порт, и занятость видна по его
+         * состоянию: пока идёт чужая транзакция, modbus_request вернёт 0.
+         * Ждать здесь нельзя — вызов держал бы обработчик, — поэтому просто
+         * возвращаемся: следующий такт попробует снова. Кто пришёл первым,
+         * тот и занимает линию: обработчики вызываются по очереди. */
+        if (modbus_busy(&w->mb)) {
+            if ((int32_t)(xTaskGetTickCount() - ctx->deadline) >= 0) {
+                ESP_LOGW(TAG, "modbus порт %d: линия занята, вызов не дождался", w->port_no);
+                send_mb_error(ctx->call, MB_ERR_BUSY);
+                return 0;
+            }
+            return 1;                        /* ждём такта, вызов жив */
+        }
+
         modbus_reset(&w->mb);
-        w->payload[0] = 0;
-        modbus_config_t cfg_req = {
-            .pxIface             = &mb_iface,
-            .pxTxContext         = &w->app_uart->desc,
-            .pxTimerContext      = NULL,
-            .pxRequestContext    = NULL,
-            .pucPayLoadBuffer    = w->payload,
-            .ucPayLoadBufferSize = MB_PAYLOAD_SIZE,
-            .usTxTimeout         = ctx->awt_ms,
-            .usRxTimeout         = ctx->awt_ms,
-            .eMode               = MB_MODE_RTU,
-            .bIsServer           = 0,
-            .pfOnRequest         = NULL,
-        };
-        modbus_init(&w->mb, &cfg_req);
+        uint16_t tid = modbus_request(&w->mb, &ctx->req, mb_on_complete, &ctx->cb,
+                                      ctx->awt_ms);
+        if (!tid) {
+            send_mb_error(ctx->call, MB_ERR_START);
+            return 0;
+        }
+        ctx->started = 1;
         /* Отсчёт таймаута — от старта транзакции, а не от прихода запроса:
          * пока вызов ждал линию, его время не должно сгорать. */
         ctx->t_req    = xTaskGetTickCount();
         ctx->deadline = ctx->t_req + pdMS_TO_TICKS(ctx->awt_ms + 500);
-        uint16_t tid = modbus_request(&w->mb, &ctx->req, mb_on_complete, &ctx->cb,
-                                      ctx->awt_ms);
-        if (!tid) {
-            w->owner = NULL;
-            send_mb_error(ctx->call, 3);
-            return 0;
-        }
-        ctx->started = 1;
         /* Кадр уходит в линию сразу, не дожидаясь следующего такта: иначе
          * отправка стоит ещё один такт работы. */
         modbus_work(&w->mb);
         return 1;
     }
 
+    /* Транзакцию двигает только тот вызов, который её начал: у остальных
+     * started == 0, и к драйверу они не прикасаются. */
     modbus_work(&w->mb);
 
     if (ctx->cb.done) {
-        w->owner = NULL;
+        ctx->started = 0;
         format_and_send_mb_response(ctx->call, &ctx->cb);
         return 0;
     }
 
     if ((int32_t)(xTaskGetTickCount() - ctx->deadline) >= 0) {
         modbus_reset(&w->mb);
-        w->owner = NULL;
+        ctx->started = 0;
         ESP_LOGW(TAG, "modbus: таймаут транзакции на порту %d", w->port_no);
-        send_mb_error(ctx->call, 4);
+        send_mb_error(ctx->call, MB_ERR_TIMEOUT);
         return 0;
     }
     return 1;
@@ -296,9 +300,11 @@ static uint8_t mb_api_handler(void *call, void **context, uint8_t *data, uint32_
     if (!call) {
         mb_call_ctx_t *ctx = (mb_call_ctx_t *)*context;
         if (ctx) {
-            if (ctx->worker && ctx->worker->owner == ctx) {
-                ctx->worker->owner = NULL;
+            /* Вызов снимают (обрыв связи, конец подписки). Если транзакция была
+             * нашей, гасим её, чтобы линия не осталась занятой навсегда. */
+            if (ctx->started && ctx->worker) {
                 modbus_reset(&ctx->worker->mb);
+                ctx->started = 0;
             }
             free(ctx);
         }
@@ -311,17 +317,16 @@ static uint8_t mb_api_handler(void *call, void **context, uint8_t *data, uint32_
     if (data != NULL) {
         if (ctx && ctx->magic == MB_CTX_MAGIC) {
             /* Повторный запрос по тому же вызову (длинная подписка): начинаем
-             * заново, контекст не создаём заново, иначе он утечёт. */
-            if (ctx->worker && ctx->worker->owner == ctx) {
-                ctx->worker->owner = NULL;
-                modbus_reset(&ctx->worker->mb);
-            }
+             * заново, контекст не создаём заново, иначе он утечёт. Транзакция
+             * при этом уже завершена или идёт — состояние знает драйвер, мы
+             * лишь разрешаем новую попытку. */
+            ctx->started = 0;
             ctx->cb.done = 0;
         } else {
             /* Первичный вызов: контекст регистрации (порт) заменяем своим. */
             ctx = calloc(1, sizeof(*ctx));
             if (!ctx) {
-                send_mb_error(call, 1);
+                send_mb_error(call, MB_ERR_MEM);
                 return 0;
             }
             ctx->magic  = MB_CTX_MAGIC;
@@ -329,6 +334,7 @@ static uint8_t mb_api_handler(void *call, void **context, uint8_t *data, uint32_
             ctx->worker = (modbus_worker_t *)*context;
             *context    = ctx;
         }
+        ctx->deadline = xTaskGetTickCount() + pdMS_TO_TICKS(MB_DEFAULT_AWT_MS + 500);
         if (!mb_call_start(ctx, data, data_len)) {
             /* не разобрали запрос — ответ уже отправлен, вызов завершён */
             *context = ctx->worker;
