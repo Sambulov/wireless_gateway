@@ -12,8 +12,10 @@ static uint32_t mb_timer_fn(const void *ctx) {
     return xTaskGetTickCount() * portTICK_PERIOD_MS;
 }
 
+/* В новом CL приём устроен наоборот: библиотека больше не читает сама, а
+ * получает байты через modbus_receive_data (см. mb_rx_handler). В интерфейсе
+ * остались только передача и таймер. */
 static const modbus_iface_t mb_iface = {
-    .pfRead  = gw_uart_read,
     .pfWrite = gw_uart_write,
     .pfTimer = mb_timer_fn,
 };
@@ -24,6 +26,7 @@ typedef struct {
     queue_handle_t    queue;
     struct app_uart_t *app_uart;
     int               port_no;
+    delegate_t        rx_delegate;   /* приём байт линии в библиотеку Modbus */
 } modbus_worker_t;
 
 typedef struct {
@@ -41,22 +44,35 @@ queue_handle_t get_modbus_worker_queue(uint32_t fid) {
     return NULL;
 }
 
-static void mb_on_complete(modbus_t *mb, void *ctx, modbus_frame_t *frame) {
+/* Колбэк нового CL: (кадр, дескриптор, контекст). Длину данных берём из
+ * ucLengthCode — поля ucBufferSize у кадра больше нет. */
+static void mb_on_complete(modbus_frame_t *frame, modbus_t *mb, void *ctx) {
     (void)mb;
     mb_cb_ctx_t *cb = (mb_cb_ctx_t *)ctx;
     if (frame) {
         cb->frame = *frame;
-        if (frame->pucData && frame->ucBufferSize > 0) {
-            uint8_t sz = frame->ucBufferSize < MB_PAYLOAD_SIZE ? frame->ucBufferSize : MB_PAYLOAD_SIZE;
+        uint8_t sz = frame->ucLengthCode;
+        if (frame->pucData && sz > 0) {
             memcpy(cb->data, frame->pucData, sz);
             cb->frame.pucData = cb->data;
+            cb->frame.ucLengthCode = sz;
         } else {
             cb->frame.pucData = NULL;
+            cb->frame.ucLengthCode = 0;
         }
     } else {
         memset(&cb->frame, 0, sizeof(modbus_frame_t));
     }
     cb->done = 1;
+}
+
+/* Байты из UART отдаём библиотеке сами. */
+static void mb_rx_handler(void *trigger, void *sender, void *context) {
+    (void)sender;
+    modbus_worker_t *w = (modbus_worker_t *)context;
+    gw_uart_event_data_t *ev = (gw_uart_event_data_t *)trigger;
+    if (w && ev && ev->buf && ev->size)
+        modbus_receive_data(&w->mb, ev->buf, (uint16_t)ev->size, ev->b_end);
 }
 
 static void send_mb_msg(int id, int fid, const char *json_str, size_t len) {
@@ -90,10 +106,38 @@ static void send_mb_error(int id, int fid, int code) {
     send_mb_msg(id, fid, tmp, len);
 }
 
+/* Разбор ответа прибора. В прежней версии CL это делала modbus_frame_data, в
+ * новой её нет, поэтому читаем кадр сами. Полезная нагрузка лежит в pucData в
+ * том виде, как пришла по линии: старшим байтом вперёд (big-endian). */
+static uint8_t *mb_response_data(modbus_frame_t *f, uint8_t *code,
+                                 uint8_t *amount, uint8_t *size)
+{
+    *code = 0; *amount = 0; *size = 2;
+    if (!f) return NULL;
+    if (f->ucFunc & MODBUS_ERROR_FLAG) {          /* кадр-исключение */
+        *code = f->ucLengthCode;
+        return NULL;
+    }
+    switch (f->ucFunc) {
+        case MB_FUNC_READ_OUTPUTS:
+        case MB_FUNC_READ_INPUTS:
+            *size   = 1;
+            *amount = f->ucLengthCode;
+            return f->pucData;
+        case MB_FUNC_READ_HOLDINGS:
+        case MB_FUNC_READ_INPUT_REGISTERS:
+            *size   = 2;
+            *amount = f->ucLengthCode / 2;
+            return f->pucData;
+        default:                                   /* ответ на запись — без данных */
+            return NULL;
+    }
+}
+
 static void format_and_send_mb_response(int id, int fid, mb_cb_ctx_t *cb) {
     modbus_frame_t *f = &cb->frame;
     uint8_t code = 0, amount = 0, size = 0;
-    uint8_t *regs = modbus_frame_data(f, &code, &amount, &size);
+    uint8_t *regs = mb_response_data(f, &code, &amount, &size);
 
     /* Estimate buffer: header ~80 bytes + per-register up to 7 bytes each */
     size_t buf_sz = 96 + (amount > 0 ? (size_t)(amount) * 9 : 0);
@@ -118,9 +162,8 @@ static void format_and_send_mb_response(int id, int fid, mb_cb_ctx_t *cb) {
             if (i > 0 && off < (int)buf_sz - 1)
                 buf[off++] = ',';
             if (size == 2) {
-                /* modbus_frame_data() already byte-swapped each word to host
-                 * (little-endian) order — read as LE, not BE */
-                uint16_t v = (uint16_t)regs[i * 2] | ((uint16_t)regs[i * 2 + 1] << 8);
+                /* Регистры идут старшим байтом вперёд — как в линии. */
+                uint16_t v = ((uint16_t)regs[i * 2] << 8) | (uint16_t)regs[i * 2 + 1];
                 off += snprintf(buf + off, buf_sz - off, "%u", v);
             } else {
                 off += snprintf(buf + off, buf_sz - off, "%u", (unsigned)regs[i]);
@@ -173,8 +216,7 @@ static void handle_modbus_msg(modbus_worker_t *w, webapi_msg_t *msg) {
             if (n > 0) {
                 int stride = (frame.ucFunc == MB_FUNC_WRITE_COILS) ? 1 : 2;
                 if (n * stride > MB_PAYLOAD_SIZE) break;
-                frame.ucBufferSize  = (uint8_t)(n * stride);
-                frame.ucLengthCode  = frame.ucBufferSize;
+                frame.ucLengthCode  = (uint8_t)(n * stride);
                 frame.pucData = wr_buf;
                 cJSON *elem = rd->child;
                 for (int i = 0; i < n && elem; i++, elem = elem->next) {
@@ -201,21 +243,23 @@ static void handle_modbus_msg(modbus_worker_t *w, webapi_msg_t *msg) {
 
     mb_cb_ctx_t cb = {0};
 
-    gw_uart_lock_rx(&w->app_uart->desc);
+    /* Перед запросом сбрасываем состояние линии: в разборе могли остаться
+     * байты от прошлого обмена или помеха, и они испортят кадр. */
+    modbus_reset(&w->mb);
 
-    /* Point the library's receive buffer at w->payload; cb copies it out in the callback */
     w->payload[0] = 0; /* clear */
     modbus_config_t cfg_update = {
-        .pxIface            = &mb_iface,
-        .pxRxContext        = &w->app_uart->desc,
-        .pxTxContext        = &w->app_uart->desc,
-        .pxTimerContext     = NULL,
-        .pucPayLoadBuffer   = w->payload,
+        .pxIface             = &mb_iface,
+        .pxTxContext         = &w->app_uart->desc,
+        .pxTimerContext      = NULL,
+        .pxRequestContext    = NULL,
+        .pucPayLoadBuffer    = w->payload,
         .ucPayLoadBufferSize = MB_PAYLOAD_SIZE,
-        .rx_timeout         = (uint16_t)(awt_ms),
-        .tx_timeout         = (uint16_t)(awt_ms),
-        .bAsciiMode         = 0,
-        .bPduMode           = 0,
+        .usTxTimeout         = (uint16_t)(awt_ms),
+        .usRxTimeout         = (uint16_t)(awt_ms),
+        .eMode               = MB_MODE_RTU,
+        .bIsServer           = 0,
+        .pfOnRequest         = NULL,
     };
     modbus_init(&w->mb, &cfg_update);
 
@@ -225,9 +269,8 @@ static void handle_modbus_msg(modbus_worker_t *w, webapi_msg_t *msg) {
     ESP_LOGD(TAG, "запрос fd=%d id=%lu: ADR=%u FN=%u RA=%u RVC=%u AWT=%lu",
              msg->fd, msg->id, frame.ucAddr, frame.ucFunc,
              frame.usRegAddr, frame.usRegValueCount, (unsigned long)awt_ms);
-    uint32_t tid = modbus_request(&w->mb, &frame, mb_on_complete, &cb);
+    uint16_t tid = modbus_request(&w->mb, &frame, mb_on_complete, &cb, (uint16_t)awt_ms);
     if (!tid) {
-        gw_uart_unlock_rx(&w->app_uart->desc);
         send_mb_error(msg->id, msg->fid, 3);
         return;
     }
@@ -243,8 +286,7 @@ static void handle_modbus_msg(modbus_worker_t *w, webapi_msg_t *msg) {
     }
 
     if (!cb.done) {
-        modbus_cancel_request(&w->mb, tid);
-        gw_uart_unlock_rx(&w->app_uart->desc);
+        modbus_reset(&w->mb);
         ESP_LOGW(TAG, "modbus %lu: таймаут транзакции %lu мс",
                  msg->id, (unsigned long)((xTaskGetTickCount() - t_req) * portTICK_PERIOD_MS));
         send_mb_error(msg->id, msg->fid, 4);
@@ -254,7 +296,6 @@ static void handle_modbus_msg(modbus_worker_t *w, webapi_msg_t *msg) {
              msg->id, w->port_no,
              (unsigned long)((xTaskGetTickCount() - t_req) * portTICK_PERIOD_MS));
 
-    gw_uart_unlock_rx(&w->app_uart->desc);
     format_and_send_mb_response(msg->id, msg->fid, &cb);
 }
 
@@ -284,17 +325,17 @@ esp_err_t ws_modbus_run(app_context_t *app) {
         w->port_no  = i;
 
         modbus_config_t cfg = {
-		//todo: ask if it is possible to simplify next 3 lines into pure r/w interface
-            .pxIface            = &mb_iface,
-            .pxRxContext        = &w->app_uart->desc,
-            .pxTxContext        = &w->app_uart->desc,
-            .pxTimerContext     = NULL,
-            .pucPayLoadBuffer   = w->payload,
+            .pxIface             = &mb_iface,
+            .pxTxContext         = &w->app_uart->desc,
+            .pxTimerContext      = NULL,
+            .pxRequestContext    = NULL,
+            .pucPayLoadBuffer    = w->payload,
             .ucPayLoadBufferSize = MB_PAYLOAD_SIZE,
-            .rx_timeout         = MB_DEFAULT_AWT_MS,
-            .tx_timeout         = MB_DEFAULT_AWT_MS,
-            .bAsciiMode         = 0,
-            .bPduMode           = 0,
+            .usTxTimeout         = MB_DEFAULT_AWT_MS,
+            .usRxTimeout         = MB_DEFAULT_AWT_MS,
+            .eMode               = MB_MODE_RTU,
+            .bIsServer           = 0,
+            .pfOnRequest         = NULL,
         };
 
         if (!modbus_init(&w->mb, &cfg)) {
@@ -313,6 +354,11 @@ esp_err_t ws_modbus_run(app_context_t *app) {
         w->queue = mb_queues[i];
 
         app->uart.port[i].proto_context = &w->mb;
+
+        /* Байты линии приходят событиями UART — отдаём их библиотеке. */
+        w->rx_delegate.handler = mb_rx_handler;
+        w->rx_delegate.context = w;
+        gw_uart_on_receive_subscribe(&w->app_uart->desc, &w->rx_delegate);
     }
 
     ws_server_register_fid_queue(ESP_WS_API_UART1_MODBUS_REQ, mb_queues[0]);

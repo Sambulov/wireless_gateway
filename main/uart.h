@@ -47,6 +47,10 @@ extern const gw_uart_config_t gw_uart_config_default;
 typedef struct {
   uint8_t *buf;
   uint32_t size;
+  /* Признак конца кадра: драйвер выставляет его, когда после принятых байт
+   * наступила пауза (таймаут приёма). Библиотеке Modbus это нужно, чтобы
+   * понять, что кадр принят целиком. */
+  uint8_t b_end;
 } gw_uart_event_data_t;
 
 uint8_t gw_uart_init(void *desc, gw_uart_port_t port, uint32_t buffer_size);

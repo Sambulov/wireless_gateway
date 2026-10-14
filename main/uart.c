@@ -35,6 +35,7 @@ static void uart_event_task(void *pvParameters) {
             if (uart->rx_locked) break;
             gw_uart_event_data_t ev_trig;
             ev_trig.buf = buf;
+            ev_trig.b_end = event.timeout_flag ? 1 : 0;
             size_t size = event.size;
             while (size) {
                 ev_trig.size = CL_MIN(size, 128);
