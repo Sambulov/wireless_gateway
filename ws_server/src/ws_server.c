@@ -4,6 +4,7 @@
 #include <stdbool.h>
 
 #include "cJSON.h"
+#include "GwJson.h"
 #include "CodeLib.h"
 #include "ws_hal.h"
 #include "web_api.h"
@@ -27,7 +28,14 @@ typedef struct {
     int fd;
     uint32_t ulAliveTs;
     uint32_t ulPingTs;
+    /* Сборка фрагментированного сообщения: WebSocket разрешает резать одно
+     * сообщение на несколько кадров (первый с FIN=0, дальше продолжения). */
+    uint8_t *pucFrag;
+    uint32_t ulFragLen;
 } ApiSession_t;
+
+/* Предел длины собранного сообщения — тот же, что у одного кадра. */
+#define WS_FRAG_MAX_LEN 4096
 
 typedef enum
 {
@@ -406,8 +414,79 @@ static void ws_server_on_text(ws_conn_t *conn, uint8_t *data, size_t len);
 
 /* --- Transport callbacks (called from ws_transport_httpd.c) -------------- */
 
-void ws_server_on_frame(ws_conn_t *conn, ws_frame_type_t type, uint8_t *data, size_t len) {
+/* Добавить кусок фрагментированного сообщения. Возвращает 0, если сообщение
+ * длиннее предела (тогда сессию закрываем: принимать его целиком негде). */
+static uint8_t _bFragAppend(ApiSession_t *sess, const uint8_t *data, size_t len)
+{
+    if (!sess->pucFrag) {
+        sess->pucFrag = malloc(WS_FRAG_MAX_LEN + 1);
+        if (!sess->pucFrag)
+            return 0;
+        sess->ulFragLen = 0;
+    }
+    if (sess->ulFragLen + len > WS_FRAG_MAX_LEN)
+        return 0;
+
+    mem_cpy(sess->pucFrag + sess->ulFragLen, data, len);
+    sess->ulFragLen += (uint32_t)len;
+    return 1;
+}
+
+void ws_server_on_frame(ws_conn_t *conn, ws_frame_type_t type, uint8_t *data, size_t len,
+                        uint8_t bFinal) {
     ApiSession_t *sess = ws_conn_get_user_data(conn);
+
+    /* Фрагментированное сообщение: копим части, а разбираем собранное целиком.
+     * Раньше продолжения не обрабатывались вовсе — сообщение молча терялось
+     * вместе с ответом, и клиент ждал его до таймаута. */
+    if (sess && (type == WS_FRAME_TEXT || type == WS_FRAME_CONT) && !bFinal) {
+        if (!_bFragAppend(sess, data, len)) {
+            ws_hal_log_w(TAG, "Фрагментированное сообщение больше %d байт, закрываю fd=%d",
+                         WS_FRAG_MAX_LEN, sess->fd);
+            free(sess->pucFrag);
+            sess->pucFrag = NULL;
+            sess->ulFragLen = 0;
+            free(data);
+            ws_frame_t close_f = {.type = WS_FRAME_CLOSE, .final = true};
+            ws_conn_send_async(conn, &close_f, NULL, NULL);
+            return;
+        }
+        sess->ulAliveTs = ws_hal_tick();
+        free(data);
+        return;
+    }
+
+    if (sess && type == WS_FRAME_CONT) {
+        /* Последний фрагмент: собираем и отдаём как обычное сообщение. Буфер
+         * переходит во владение ws_server_on_text, поэтому не копируем. */
+        if (sess->pucFrag && _bFragAppend(sess, data, len)) {
+            uint8_t *msg = sess->pucFrag;
+            size_t   n   = sess->ulFragLen;
+            sess->pucFrag = NULL;
+            sess->ulFragLen = 0;
+            free(data);
+            msg[n] = '\0';
+            sess->ulAliveTs = ws_hal_tick();
+            ws_server_on_text(conn, msg, n);
+            return;
+        }
+        ws_hal_log_w(TAG, "Продолжение без начала сообщения, отброшено fd=%d",
+                     sess ? sess->fd : -1);
+        free(sess->pucFrag);
+        if (sess) { sess->pucFrag = NULL; sess->ulFragLen = 0; }
+        free(data);
+        return;
+    }
+
+    if (sess && type == WS_FRAME_TEXT && sess->pucFrag) {
+        /* Новое сообщение началось, не дождавшись конца предыдущего: старое
+         * незавершённое выбрасываем, оно уже не станет целым. */
+        ws_hal_log_w(TAG, "Незавершённое сообщение отброшено, fd=%d", sess->fd);
+        free(sess->pucFrag);
+        sess->pucFrag = NULL;
+        sess->ulFragLen = 0;
+    }
+
     if (sess)
         sess->ulAliveTs = ws_hal_tick();
 
@@ -443,16 +522,31 @@ void ws_server_on_connect(ws_conn_t *conn) {
     sess->conn      = conn;
     sess->fd        = ws_conn_get_fd(conn);
     sess->ulAliveTs = sess->ulPingTs = ws_hal_tick();
+    sess->pucFrag   = NULL;
+    sess->ulFragLen = 0;
     ws_conn_set_user_data(conn, sess);
     ws_hal_log_i(TAG, "New connection fd=%d sess=%p", sess->fd, (void *)sess);
 }
 
+/* Сколько токенов отдаём разбору входящего кадра и разбору ARG. Токен — это
+ * ключ, значение или скобка структуры; конверт протокола укладывается в
+ * единицы, ARG запроса регистров — в десятки. Выход за предел означает отказ
+ * разбора, а не рост памяти: токены лежат на стеке задачи, jsmn не рекурсивен. */
+#define WS_FRAME_MAX_TOKENS 48
+#define WS_ARG_MAX_TOKENS   48
+
 static void ws_server_on_text(ws_conn_t *conn, uint8_t *data, size_t len) {
     ApiSession_t *sess = ws_conn_get_user_data(conn);
-    if(!sess) return;
+    if(!sess) {
+        /* Кадр уже наш (транспорт передал владение): без сессии его некуда
+         * адресовать, но и терять память нельзя. */
+        free(data);
+        return;
+    }
 
     if(!data || !len) {
         ws_hal_log_i(TAG, "Got packet with empty message");
+        free(data);
         return;
     }
     ws_hal_log_d(TAG, "Got packet with message: %s", data);
@@ -466,65 +560,83 @@ static void ws_server_on_text(ws_conn_t *conn, uint8_t *data, size_t len) {
     memset(wscd, 0, sizeof(ApiCall_t));
     wscd->flags |= CALL_FLAG_NEW;
 
-    cJSON *json = cJSON_ParseWithLengthOpts((char *)data, len, 0, 0);
-    free(data);
-    if(!json) {
-        ws_hal_log_w(TAG, "Invalid JSON");
+    /* Разбор конверта: jsmn, без выделения памяти на каждый объект. Токены —
+     * на стеке задачи, поэтому вложенный или огромный пакет не может ни съесть
+     * кучу, ни переполнить стек разбором (jsmn не рекурсивен). */
+    GW_JSON_TOKENS(toks, WS_FRAME_MAX_TOKENS);
+    gw_json_t json;
+    if (!gw_json_parse(&json, (const char *)data, len, toks, WS_FRAME_MAX_TOKENS)) {
+        ws_hal_log_w(TAG, "Кадр не разобран как JSON или слишком сложен (%u токенов)",
+                     (unsigned)WS_FRAME_MAX_TOKENS);
+        free(data);
         free(wscd);
         return;
     }
 
-    /* FID can be a decimal integer or a hex string (e.g. "0x1012") */
-    cJSON *fid_json = cJSON_GetObjectItem(json, "FID");
-    if(cJSON_IsNumber(fid_json))
-        wscd->ulFid = fid_json->valueint;
-    else if(cJSON_IsString(fid_json))
-        wscd->ulFid = (uint32_t)strtol(fid_json->valuestring, NULL, 16);
-
-    if(wscd->ulFid == API_HANDLER_ID_GENEGAL) {
+    /* FID: число или hex-строка (например, "0x1012") */
+    uint32_t fid = 0;
+    if (!gw_json_id(&json, "FID", &fid) || fid == API_HANDLER_ID_GENEGAL) {
         ws_hal_log_w(TAG, "Api call bad FID property");
+        free(data);
         free(wscd);
-        cJSON_Delete(json);
         return;
     }
+    wscd->ulFid = fid;
 
-    /* Serialize ARG back to a compact string — handlers receive it as raw bytes */
-    cJSON *arg_json = cJSON_GetObjectItem(json, "ARG");
-    if(arg_json) {
-        wscd->pucReqData   = (uint8_t *)cJSON_PrintUnformatted(arg_json);
-        wscd->ulReqDataLen = lStrLen((char *)wscd->pucReqData);
-        ws_hal_log_d(TAG, "Api arg %s", wscd->pucReqData);
+    /* ARG отдаём обработчику как есть — срезом исходного кадра, без дерева и
+     * без печати в строку (у cJSON это была вторая аллокация на запрос). */
+    const char *arg_s = NULL;
+    size_t      arg_n = 0;
+    if (gw_json_raw(&json, "ARG", &arg_s, &arg_n)) {
+        wscd->pucReqData = (uint8_t *)malloc(arg_n + 1);
+        if (!wscd->pucReqData) {
+            free(data);
+            free(wscd);
+            return;
+        }
+        mem_cpy(wscd->pucReqData, arg_s, arg_n);
+        wscd->pucReqData[arg_n] = '\0';
+        wscd->ulReqDataLen = (uint32_t)arg_n;
 
-        /* ARG.RDL (re-poll delay, ms) throttles CALL_FLAG_LONG_TERM re-arming;
-         * generic framework field, meaningful to any FID that uses FLAGS:4. */
-        cJSON *rdl_json = cJSON_GetObjectItem(arg_json, "RDL");
-        if(cJSON_IsNumber(rdl_json) && rdl_json->valueint > 0)
-            wscd->ulPollIntervalTicks = ws_hal_ms_to_ticks((uint32_t)rdl_json->valueint);
+        /* ARG.RDL (задержка повторного опроса, мс) — общее поле каркаса для
+         * вызовов с FLAGS:4; смотрим тем же разбором, что и обработчики. */
+        GW_JSON_TOKENS(arg_toks, WS_ARG_MAX_TOKENS);
+        gw_json_t arg;
+        if (gw_json_parse(&arg, (const char *)wscd->pucReqData, arg_n,
+                          arg_toks, WS_ARG_MAX_TOKENS)) {
+            int32_t rdl;
+            if (gw_json_int(&arg, "RDL", &rdl) && rdl > 0)
+                wscd->ulPollIntervalTicks = ws_hal_ms_to_ticks((uint32_t)rdl);
+        }
     }
 
-    cJSON *flags_json = cJSON_GetObjectItem(json, "FLAGS");
-    if(cJSON_IsNumber(flags_json))
-        wscd->flags |= (uint32_t)flags_json->valueint;
-    wscd->ulCallPending = 1;
+    /* Сессия нужна до первой проверки: ответ об ошибке уходит через неё. */
     wscd->session = sess;
 
-    /* SID назначает клиент, чтобы отличить ответ на свой запрос. Сервер его не
-     * требует и не придумывает: нет SID — ответ уйдёт без этого поля. */
-    cJSON *sid_json = cJSON_GetObjectItem(json, "SID");
-    if(cJSON_IsNumber(sid_json)) {
-        wscd->bHasSid = 1;
-        wscd->ulId    = (uint32_t)sid_json->valueint;
-    }
-
     /* FLAGS остаётся обязательным полем протокола */
-    if(!cJSON_IsNumber(flags_json)) {
+    int32_t flags;
+    if (!gw_json_int(&json, "FLAGS", &flags)) {
         ws_hal_log_w(TAG, "Missing FLAGS, dropping call fid:%lu", wscd->ulFid);
         bApiCallSendStatus(wscd, API_CALL_ERROR_STATUS_BAD_REQ);
         free(wscd->pucReqData);
         free(wscd);
-        cJSON_Delete(json);
+        free(data);
         return;
     }
+    wscd->flags |= (uint32_t)flags;
+    wscd->ulCallPending = 1;
+
+    /* SID назначает клиент, чтобы отличить ответ на свой запрос. Сервер его не
+     * требует и не придумывает: нет SID — ответ уйдёт без этого поля. */
+    int32_t sid;
+    if (gw_json_int(&json, "SID", &sid)) {
+        wscd->bHasSid = 1;
+        wscd->ulId    = (uint32_t)sid;
+    }
+
+    /* Токены указывают внутрь кадра, поэтому буфер живёт до последнего чтения
+     * из них (в cJSON дерево владело своими копиями строк и это было неважно). */
+    free(data);
 
     ws_hal_mutex_take(xWsApiMutex, WS_HAL_WAIT_FOREVER);
 
@@ -549,7 +661,6 @@ static void ws_server_on_text(ws_conn_t *conn, uint8_t *data, size_t len) {
     }
 
     ws_hal_mutex_give(xWsApiMutex);
-    cJSON_Delete(json);
 }
 
 void ws_server_on_disconnect(ws_conn_t *conn) {
@@ -558,6 +669,7 @@ void ws_server_on_disconnect(ws_conn_t *conn) {
     ws_conn_set_user_data(conn, NULL);
     ws_hal_log_i(TAG, "Disconnect fd=%d sess=%p", sess->fd, (void *)sess);
     vBreakApiCallsByFd(WS_HAL_WAIT_FOREVER, sess->fd);
+    free(sess->pucFrag);
     free(sess);
 }
 
@@ -629,6 +741,13 @@ static uint32_t ulLastWorkTick;
  * собираем список вызовов, а дёргаем их после освобождения. Освобождать вызовы
  * может лишь эта же задача, так что собранные указатели остаются валидными. */
 #define WS_API_WORK_BATCH 16
+
+/* Сколько токенов отдаём разбору входящего кадра и разбору ARG. Токен — это
+ * ключ, значение или скобка структуры; конверт протокола укладывается в
+ * единицы, ARG запроса регистров — в десятки. Выход за предел означает отказ
+ * разбора (BAD_JSON), а не рост памяти: токены лежат на стеке задачи. */
+#define WS_FRAME_MAX_TOKENS 48
+#define WS_ARG_MAX_TOKENS   48
 static ApiCall_t *apxWorkBatch[WS_API_WORK_BATCH];
 
 static int vWsApiCollectHandled(LinkedList_t list, int from) {

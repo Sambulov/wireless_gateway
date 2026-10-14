@@ -8,6 +8,7 @@ INCLUDES := \
     -I$(ROOT)/ws_server/include \
     -I$(ROOT)/CodeLibrary/CL \
     -I$(ROOT)/json/cJSON \
+    -I$(ROOT)/json/jsmn \
     -I$(ROOT)/json \
     -I$(ROOT)/main \
     -I$(CPPUTEST)/include
@@ -28,27 +29,28 @@ VPATH := \
     $(ROOT)/main \
     $(ROOT)/json/cJSON \
     $(ROOT)/json \
+    $(ROOT)/json/jsmn \
     $(ROOT)/CodeLibrary/CL/DataStructures/Src \
     $(ROOT)/CodeLibrary/CL/Converters/Src \
     stubs
 
 C_SRCS := \
     ws_server.c \
-    ws_frame_parser.c \
     apih_uart.c \
     cJSON.c \
+    GwJson.c \
+    jsmn.c \
     LinkedList.c \
     Mem.c \
     Str.c \
     Base64Encoding.c \
-    cJSON_helpers.c \
     ws_hal_stub.c \
     ws_conn_stub.c \
     gw_uart_stub.c
 
 CPP_SRCS := \
     AllTests.cpp \
-    WsFrameParserTest.cpp \
+    GwJsonTest.cpp \
     WsServerTest.cpp \
     ApihUartTest.cpp
 

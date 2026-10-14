@@ -4,7 +4,11 @@
 #  include "app.h"
 #endif
 #include "uart.h"
-#include "cJSON_helpers.h"
+#include "GwJson.h"
+#include "cJSON.h"
+
+/* Токенов на разбор ARG UART: WL/BR/PAR/SB (или E) — с большим запасом. */
+#define UART_ARG_MAX_TOKENS 16
 #include "web_api.h"
 #include "ws_hal.h"
 
@@ -124,12 +128,14 @@ static void send_uart_response(int id, int fid, cJSON *json)
 static uint8_t parse_uart_params(const uint8_t *data, size_t len,
 				 api_cmd_uart_t *cmd)
 {
-	cJSON *json = json_parse_with_length_opts((char *)data, len, 0, 0);
-	uint32_t val;
+	/* Разбор ARG через jsmn: токены на стеке, память на поля не выделяется. */
+	GW_JSON_TOKENS(toks, UART_ARG_MAX_TOKENS);
+	gw_json_t json;
+	int32_t val;
 
-	if (!json)
+	if (!gw_json_parse(&json, (const char *)data, len, toks, UART_ARG_MAX_TOKENS))
 		return 0;
-	cmd->wl_set = json_parse_int(json, "WL", &val);
+	cmd->wl_set = gw_json_int(&json, "WL", &val);
 	if (cmd->wl_set) {
 		/* Принимаем и число бит (7/8), и значение перечисления (0/1):
 		 * в структуре поле всего двухбитное, поэтому 8 превращалось в 0
@@ -141,16 +147,15 @@ static uint8_t parse_uart_params(const uint8_t *data, size_t len,
 		else
 			cmd->wl_set = 0;
 	}
-	cmd->boud_set = json_parse_int(json, "BR", &val);
+	cmd->boud_set = gw_json_int(&json, "BR", &val);
 	if (cmd->boud_set)
 		cmd->boud = val;
-	cmd->par_set = json_parse_int(json, "PAR", &val);
+	cmd->par_set = gw_json_int(&json, "PAR", &val);
 	if (cmd->par_set)
 		cmd->par = val;
-	cmd->sb_set = json_parse_int(json, "SB", &val);
+	cmd->sb_set = gw_json_int(&json, "SB", &val);
 	if (cmd->sb_set)
 		cmd->sb = val;
-	json_delete(json);
 	return 1;
 }
 
@@ -178,7 +183,7 @@ static void handle_msg(app_context_t *app, webapi_msg_t *in_msg)
 			cJSON *resp_json = format_uart_resp(&new_cfg);
 			if (resp_json) {
 				send_uart_response(in_msg->id, in_msg->fid, resp_json);
-				json_delete(resp_json);
+				cJSON_Delete(resp_json);
 			}
 		}
 		break;
@@ -208,7 +213,7 @@ static void handle_msg(app_context_t *app, webapi_msg_t *in_msg)
 				if (json) {
 					/* id=0: broadcast to all subscribers of this FID */
 					send_uart_response(0, in_msg->fid, json);
-					json_delete(json);
+					cJSON_Delete(json);
 				}
 			}
 		} else {
@@ -240,7 +245,7 @@ static void handle_msg(app_context_t *app, webapi_msg_t *in_msg)
 					if (resp_json) {
 						cJSON_AddNumberToObject(resp_json, "written", written);
 						send_uart_response(in_msg->id, in_msg->fid, resp_json);
-						json_delete(resp_json);
+						cJSON_Delete(resp_json);
 					}
 				}
 			}
@@ -254,20 +259,20 @@ static void handle_msg(app_context_t *app, webapi_msg_t *in_msg)
 			app_uart = &app->uart.port[1];
 
 		if (in_msg->data && in_msg->len) {
-			cJSON *json = json_parse_with_length_opts((char *)in_msg->data, in_msg->len, 0, 0);
-			if (json) {
-				uint32_t val;
-				if (json_parse_int(json, "E", &val))
-					gw_uart_set_echo(&app_uart->desc, val ? 1 : 0);
-				json_delete(json);
-			}
+			GW_JSON_TOKENS(toks, UART_ARG_MAX_TOKENS);
+			gw_json_t json;
+			int32_t val;
+			if (gw_json_parse(&json, (const char *)in_msg->data, in_msg->len,
+					  toks, UART_ARG_MAX_TOKENS)
+			    && gw_json_int(&json, "E", &val))
+				gw_uart_set_echo(&app_uart->desc, val ? 1 : 0);
 		}
 		{
 			cJSON *resp = cJSON_CreateObject();
 			if (resp) {
 				cJSON_AddNumberToObject(resp, "E", gw_uart_get_echo(&app_uart->desc));
 				send_uart_response(in_msg->id, in_msg->fid, resp);
-				json_delete(resp);
+				cJSON_Delete(resp);
 			}
 		}
 		break;

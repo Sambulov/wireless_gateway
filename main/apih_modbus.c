@@ -1,12 +1,17 @@
 
 #include "app.h"
 #include "uart.h"
-#include "cJSON_helpers.h"
+#include "GwJson.h"
 #include "web_api.h"
 #include "ModBusHelpers.h"
 
 #define MB_PAYLOAD_SIZE    255
 #define MB_DEFAULT_AWT_MS  500
+
+/* Токенов на разбор ARG: ключи ADR/FN/RA/RVC/AWT — по два токена, плюс "RD" и
+ * его элементы. Список значений на запись длиннее этого отвергается разбором
+ * (клиент шлёт регистры маленькими пачками). */
+#define MB_ARG_MAX_TOKENS  48
 
 static uint32_t mb_timer_fn(const void *ctx) {
     (void)ctx;
@@ -155,8 +160,12 @@ static uint8_t mb_call_start(mb_call_ctx_t *ctx, uint8_t *data, uint32_t len) {
         return 0;
     }
 
-    cJSON *json = cJSON_ParseWithLengthOpts((char *)data, len, 0, 0);
-    if (!json) {
+    /* Разбор ARG: jsmn, без дерева и без выделения памяти на элемент. Массив
+     * RD ограничен числом токенов, а не кучей: слишком длинный список значений
+     * отвергается разбором. */
+    GW_JSON_TOKENS(toks, MB_ARG_MAX_TOKENS);
+    gw_json_t json;
+    if (!gw_json_parse(&json, (const char *)data, len, toks, MB_ARG_MAX_TOKENS)) {
         send_mb_error(ctx->call, 2);
         return 0;
     }
@@ -167,42 +176,38 @@ static uint8_t mb_call_start(mb_call_ctx_t *ctx, uint8_t *data, uint32_t len) {
     uint8_t        parse_ok = 0;
 
     do {
-        uint32_t val;
-        if (!json_parse_int(json, "ADR", &val) || val > 255) break;
+        int32_t val;
+        if (!gw_json_int(&json, "ADR", &val) || val < 0 || val > 255) break;
         frame.ucAddr = (uint8_t)val;
 
-        if (!json_parse_int(json, "FN", &val) || val > 127) break;
+        if (!gw_json_int(&json, "FN", &val) || val < 0 || val > 127) break;
         frame.ucFunc = (uint8_t)val;
 
-        if (json_parse_int(json, "RA",  &val)) frame.usRegAddr       = (uint16_t)val;
-        if (json_parse_int(json, "RVC", &val)) frame.usRegValueCount = (uint16_t)val;
-        if (json_parse_int(json, "AWT", &val) && val > 0) awt_ms     = val;
+        if (gw_json_int(&json, "RA",  &val) && val >= 0) frame.usRegAddr       = (uint16_t)val;
+        if (gw_json_int(&json, "RVC", &val) && val >= 0) frame.usRegValueCount = (uint16_t)val;
+        if (gw_json_int(&json, "AWT", &val) && val > 0)  awt_ms                = (uint32_t)val;
 
-        cJSON *rd = cJSON_GetObjectItem(json, "RD");
-        if (rd && cJSON_IsArray(rd)) {
-            int n = cJSON_GetArraySize(rd);
-            if (n > 0) {
-                int stride = (frame.ucFunc == MB_FUNC_WRITE_COILS) ? 1 : 2;
-                if (n * stride > MB_PAYLOAD_SIZE) break;
-                frame.ucLengthCode  = (uint8_t)(n * stride);
-                frame.pucData = wr_buf;
-                cJSON *elem = rd->child;
-                for (int i = 0; i < n && elem; i++, elem = elem->next) {
-                    uint32_t v = (uint32_t)(int)elem->valueint;
-                    if (stride == 2) {
-                        wr_buf[i * 2]     = (v >> 8) & 0xff;
-                        wr_buf[i * 2 + 1] = v & 0xff;
-                    } else {
-                        wr_buf[i] = v & 0xff;
-                    }
+        int n;
+        if (gw_json_arr_len(&json, "RD", &n) && n > 0) {
+            int stride = (frame.ucFunc == MB_FUNC_WRITE_COILS) ? 1 : 2;
+            if (n * stride > MB_PAYLOAD_SIZE) break;
+            frame.ucLengthCode = (uint8_t)(n * stride);
+            frame.pucData      = wr_buf;
+            for (int i = 0; i < n; i++) {
+                int32_t v;
+                if (!gw_json_arr_int(&json, "RD", i, &v)) break;
+                uint32_t u = (uint32_t)v;
+                if (stride == 2) {
+                    wr_buf[i * 2]     = (u >> 8) & 0xff;
+                    wr_buf[i * 2 + 1] = u & 0xff;
+                } else {
+                    wr_buf[i] = u & 0xff;
                 }
             }
         }
 
         parse_ok = 1;
     } while (0);
-
-    cJSON_Delete(json);
 
     if (!parse_ok) {
         send_mb_error(ctx->call, 2);

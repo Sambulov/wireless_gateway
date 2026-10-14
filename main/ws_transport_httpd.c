@@ -30,8 +30,19 @@ static const char *TAG = "ws_transport";
 
 /* ws_server callbacks — defined in ws_server.c */
 void ws_server_on_connect(ws_conn_t *conn);
-void ws_server_on_frame(ws_conn_t *conn, ws_frame_type_t type, uint8_t *data, size_t len);
+void ws_server_on_frame(ws_conn_t *conn, ws_frame_type_t type, uint8_t *data, size_t len, uint8_t bFinal);
 void ws_server_on_disconnect(ws_conn_t *conn);
+
+/* Предел размера входящего кадра. Раньше его не было вовсе: длина бралась из
+ * заголовка кадра и под неё сразу выделялась память, а дальше кадр уходил в
+ * разбор. Проверено на устройстве: кадр с вложенным JSON ронял его — разбор
+ * рекурсивный, и стек задачи httpd (4 КБ) кончался на глубине ~400, что давало
+ * «stack overflow … Rebooting», а вложенные объекты — панику LoadProhibited.
+ *
+ * 4 КБ с запасом покрывают штатные запросы: запрос регистров ~80 байт, строка
+ * терминала — это base64 введённого текста (паста 3 КБ текста = 4 КБ base64),
+ * список файлов карт — сотни байт. Всё, что больше, отбрасывается до разбора. */
+#define WS_MAX_FRAME_LEN 4096
 
 struct ws_conn {
     httpd_handle_t hd;
@@ -157,6 +168,17 @@ static esp_err_t ws_httpd_handler(httpd_req_t *req) {
         return ret;
     }
 
+    /* Кадр больше предела: не читаем и не разбираем. Клиент получает закрытие
+     * (RFC 6455 §7.4.1, код 1009 — сообщение слишком велико) вместо ответа API,
+     * потому что FID и SID этого кадра мы намеренно не разбираем. */
+    if (f.len > WS_MAX_FRAME_LEN) {
+        ESP_LOGW(TAG, "Кадр %u байт больше предела %d — закрываю сессию fd=%d",
+                 (unsigned)f.len, WS_MAX_FRAME_LEN, fd);
+        ws_server_on_frame(conn, WS_FRAME_CLOSE, NULL, 0, 1);
+        httpd_sess_trigger_close(req->handle, fd);
+        return ESP_OK;
+    }
+
     uint8_t *payload = NULL;
     if (f.len) {
         payload = malloc(f.len + 1);
@@ -173,7 +195,9 @@ static esp_err_t ws_httpd_handler(httpd_req_t *req) {
 
     /* All frame types delivered to ws_server — protocol responses (PONG, CLOSE)
      * are its responsibility. Ownership of payload transfers to ws_server_on_frame. */
-    ws_server_on_frame(conn, (ws_frame_type_t)f.type, payload, f.len);
+    /* bFinal — признак последнего фрагмента (бит FIN): сообщение может прийти
+     * по частям, и склеивает их каркас (см. ws_server_on_frame). */
+    ws_server_on_frame(conn, (ws_frame_type_t)f.type, payload, f.len, f.final ? 1 : 0);
     return ESP_OK;
 }
 

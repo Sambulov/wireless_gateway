@@ -6,7 +6,7 @@
 #include "app.h"
 #include "uart.h"
 #include "cJSON.h"
-#include "cJSON_helpers.h"
+#include "GwJson.h"
 #include "web_api.h"
 #include "ws_hal.h"
 
@@ -35,6 +35,12 @@
 #define REBOOT_DELAY_MS 1000
 
 #define SSID_MAX 31
+
+/* Токенов на разбор ARG запросов конфигурации: несколько строковых полей. */
+#define SYS_ARG_MAX_TOKENS 24
+
+/* Адрес в виде строки: "255.255.255.255" плюс запас. */
+#define NW_ADDR_MAX 24
 #define PASS_MIN 8
 #define PASS_MAX 63
 
@@ -147,14 +153,18 @@ static cJSON *handle_sta(app_context_t *app, const uint8_t *data, uint32_t len, 
      * credentials, which is what the configuration page fills its form with.
      * The password itself is only disclosed under the same conditions that
      * allow changing it. */
-    cJSON *req = (data && len) ? json_parse_with_length_opts((char *)data, len, 0, 0) : NULL;
-    char *ssid = NULL, *pass = NULL;
-    uint8_t write = (req != NULL)
-                    && json_string_value(req, "SSID", &ssid)
-                    && json_string_value(req, "PASS", &pass);
+    /* Поля читаются jsmn'ом сразу в свой буфер: дерева и его узлов нет. */
+    GW_JSON_TOKENS(toks, SYS_ARG_MAX_TOKENS);
+    gw_json_t json;
+    char ssid[SSID_MAX + 1] = {0};
+    char pass[PASS_MAX + 1] = {0};
+    uint8_t parsed = (data && len)
+                     && gw_json_parse(&json, (const char *)data, len, toks, SYS_ARG_MAX_TOKENS);
+    uint8_t write = parsed
+                    && gw_json_str(&json, "SSID", ssid, sizeof(ssid))
+                    && gw_json_str(&json, "PASS", pass, sizeof(pass));
 
     if (!write) {
-        if (req) cJSON_Delete(req);
         cJSON *resp = make_answer(SYS_OK);
         if (!resp) return NULL;
         cJSON_AddStringToObject(resp, "SSID", (char *)app->sta_cnf.sta.ssid);
@@ -166,24 +176,20 @@ static cJSON *handle_sta(app_context_t *app, const uint8_t *data, uint32_t len, 
     }
 
     if (!allowed) {
-        cJSON_Delete(req);
-        ESP_LOGW(TAG, "STA credentials refused (from_ap=%u clients=%u)",
+            ESP_LOGW(TAG, "STA credentials refused (from_ap=%u clients=%u)",
                  request_from_softap(fd), clients);
         return access_denied(fd, clients);
     }
 
     if (ssid[0] == '\0' || strlen(ssid) > SSID_MAX) {
-        cJSON_Delete(req);
-        return make_error(SYS_BAD_ARG, "SSID", "SSID must be 1..31 characters");
+            return make_error(SYS_BAD_ARG, "SSID", "SSID must be 1..31 characters");
     }
     if (!wifi_password_valid(pass)) {
-        cJSON_Delete(req);
-        return make_error(SYS_BAD_ARG, "PASS", "Password must be 8..63 characters or empty");
+            return make_error(SYS_BAD_ARG, "PASS", "Password must be 8..63 characters or empty");
     }
 
     strlcpy((char *)app->sta_cnf.sta.ssid, ssid, sizeof(app->sta_cnf.sta.ssid));
     strlcpy((char *)app->sta_cnf.sta.password, pass, sizeof(app->sta_cnf.sta.password));
-    cJSON_Delete(req);
 
     save_wifi_sta_config((char *)app->sta_cnf.sta.ssid, (char *)app->sta_cnf.sta.password);
 
@@ -209,14 +215,17 @@ static cJSON *handle_ap(app_context_t *app, const uint8_t *data, uint32_t len, i
     uint8_t clients = wifi_ap_clients_count();
     uint8_t allowed = config_allowed(fd, clients);
 
-    cJSON *req = (data && len) ? json_parse_with_length_opts((char *)data, len, 0, 0) : NULL;
-    char *ssid = NULL, *pass = NULL;
-    uint8_t write = (req != NULL)
-                    && json_string_value(req, "SSID", &ssid)
-                    && json_string_value(req, "PASS", &pass);
+    GW_JSON_TOKENS(toks, SYS_ARG_MAX_TOKENS);
+    gw_json_t json;
+    char ssid[SSID_MAX + 1] = {0};
+    char pass[PASS_MAX + 1] = {0};
+    uint8_t parsed = (data && len)
+                     && gw_json_parse(&json, (const char *)data, len, toks, SYS_ARG_MAX_TOKENS);
+    uint8_t write = parsed
+                    && gw_json_str(&json, "SSID", ssid, sizeof(ssid))
+                    && gw_json_str(&json, "PASS", pass, sizeof(pass));
 
     if (!write) {
-        if (req) cJSON_Delete(req);
         cJSON *resp = make_answer(SYS_OK);
         if (!resp) return NULL;
         cJSON_AddStringToObject(resp, "SSID", (char *)app->ap_cnf.ap.ssid);
@@ -228,26 +237,22 @@ static cJSON *handle_ap(app_context_t *app, const uint8_t *data, uint32_t len, i
     }
 
     if (!allowed) {
-        cJSON_Delete(req);
-        ESP_LOGW(TAG, "AP credentials refused (from_ap=%u clients=%u)",
+            ESP_LOGW(TAG, "AP credentials refused (from_ap=%u clients=%u)",
                  request_from_softap(fd), clients);
         return access_denied(fd, clients);
     }
 
     if (ssid[0] == '\0' || strlen(ssid) > SSID_MAX) {
-        cJSON_Delete(req);
-        return make_error(SYS_BAD_ARG, "SSID", "SSID must be 1..31 characters");
+            return make_error(SYS_BAD_ARG, "SSID", "SSID must be 1..31 characters");
     }
     if (!wifi_password_valid(pass)) {
-        cJSON_Delete(req);
-        return make_error(SYS_BAD_ARG, "PASS", "Password must be 8..63 characters or empty");
+            return make_error(SYS_BAD_ARG, "PASS", "Password must be 8..63 characters or empty");
     }
 
     strlcpy((char *)app->ap_cnf.ap.ssid, ssid, sizeof(app->ap_cnf.ap.ssid));
     app->ap_cnf.ap.ssid_len = strlen(ssid);
     strlcpy((char *)app->ap_cnf.ap.password, pass, sizeof(app->ap_cnf.ap.password));
     app->ap_cnf.ap.authmode = (pass[0] != '\0') ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN;
-    cJSON_Delete(req);
 
     esp_err_t err = esp_wifi_set_config(WIFI_IF_AP, &app->ap_cnf);
     if (err != ESP_OK) {
@@ -372,13 +377,10 @@ static const char *fs_path_sanitize(const char *in, char *out, size_t out_size) 
 /* Разбирает ARG: {"PATH": "/regmaps"} — каталог для листинга (по умолчанию корень) */
 static void fs_arg_path(const uint8_t *data, uint32_t len, char *out, size_t out_size) {
     out[0] = '\0';
-    cJSON *req = (data && len) ? json_parse_with_length_opts((char *)data, len, 0, 0) : NULL;
-    if (req) {
-        char *path = NULL;
-        if (json_string_value(req, "PATH", &path) && path)
-            strlcpy(out, path, out_size);
-        cJSON_Delete(req);
-    }
+    GW_JSON_TOKENS(toks, SYS_ARG_MAX_TOKENS);
+    gw_json_t json;
+    if ((data && len) && gw_json_parse(&json, (const char *)data, len, toks, SYS_ARG_MAX_TOKENS))
+        gw_json_str(&json, "PATH", out, out_size);
     if (out[0] == '\0')
         strlcpy(out, "/", out_size);
 }
@@ -498,12 +500,14 @@ static cJSON *handle_net(app_context_t *app, const uint8_t *data, uint32_t len, 
     uint8_t clients = wifi_ap_clients_count();
     uint8_t allowed = config_allowed(fd, clients);
 
-    cJSON *req = (data && len) ? json_parse_with_length_opts((char *)data, len, 0, 0) : NULL;
-    char *iface = NULL;
-    uint8_t write = (req != NULL) && json_string_value(req, "IF", &iface);
+    GW_JSON_TOKENS(toks, SYS_ARG_MAX_TOKENS);
+    gw_json_t json;
+    char iface[8] = {0};
+    uint8_t parsed = (data && len)
+                     && gw_json_parse(&json, (const char *)data, len, toks, SYS_ARG_MAX_TOKENS);
+    uint8_t write = parsed && gw_json_str(&json, "IF", iface, sizeof(iface));
 
     if (!write) {
-        if (req) cJSON_Delete(req);
         char ip_sta[16], ip_ap[16];
         netif_ip_str("WIFI_STA_DEF", ip_sta, sizeof(ip_sta));
         netif_ip_str("WIFI_AP_DEF", ip_ap, sizeof(ip_ap));
@@ -533,8 +537,7 @@ static cJSON *handle_net(app_context_t *app, const uint8_t *data, uint32_t len, 
     }
 
     if (!allowed) {
-        cJSON_Delete(req);
-        ESP_LOGW(TAG, "Network settings refused (from_ap=%u clients=%u)",
+            ESP_LOGW(TAG, "Network settings refused (from_ap=%u clients=%u)",
                  request_from_softap(fd), clients);
         return access_denied(fd, clients);
     }
@@ -542,21 +545,21 @@ static cJSON *handle_net(app_context_t *app, const uint8_t *data, uint32_t len, 
     uint8_t is_sta = (strcasecmp(iface, "STA") == 0);
     uint8_t is_ap  = (strcasecmp(iface, "AP") == 0);
     if (!is_sta && !is_ap) {
-        cJSON_Delete(req);
-        return make_error(SYS_BAD_ARG, "IF", "IF must be STA or AP");
+            return make_error(SYS_BAD_ARG, "IF", "IF must be STA or AP");
     }
 
-    char *mode = NULL, *s_ip = NULL, *s_mask = NULL, *s_gw = NULL, *s_dns1 = NULL, *s_dns2 = NULL;
-    json_string_value(req, "MODE", &mode);
-    json_string_value(req, "IP", &s_ip);
-    json_string_value(req, "MASK", &s_mask);
-    json_string_value(req, "GW", &s_gw);
-    json_string_value(req, "DNS1", &s_dns1);
-    json_string_value(req, "DNS2", &s_dns2);
+    char mode[16] = {0}, s_ip[NW_ADDR_MAX] = {0}, s_mask[NW_ADDR_MAX] = {0};
+    char s_gw[NW_ADDR_MAX] = {0}, s_dns1[NW_ADDR_MAX] = {0}, s_dns2[NW_ADDR_MAX] = {0};
+    gw_json_str(&json, "MODE", mode, sizeof(mode));
+    gw_json_str(&json, "IP", s_ip, sizeof(s_ip));
+    gw_json_str(&json, "MASK", s_mask, sizeof(s_mask));
+    gw_json_str(&json, "GW", s_gw, sizeof(s_gw));
+    gw_json_str(&json, "DNS1", s_dns1, sizeof(s_dns1));
+    gw_json_str(&json, "DNS2", s_dns2, sizeof(s_dns2));
 
     /* The access point always has a fixed address of its own; only the station
      * can be told to use DHCP. */
-    uint8_t want_static = is_ap || (mode && strcasecmp(mode, "static") == 0);
+    uint8_t want_static = is_ap || (mode[0] != '\0' && strcasecmp(mode, "static") == 0);
 
     net_iface_cnf_t cfg = is_sta ? app->net_sta : app->net_ap;
     cJSON *err = NULL;
@@ -567,15 +570,15 @@ static cJSON *handle_net(app_context_t *app, const uint8_t *data, uint32_t len, 
     } else {
         uint32_t ip = 0, mask = 0, gw = 0, dns1 = 0, dns2 = 0;
 
-        if (!s_ip || net_parse_ip4(s_ip, &ip) || ip == 0)
+        if (s_ip[0] == '\0' || net_parse_ip4(s_ip, &ip) || ip == 0)
             err = make_error(SYS_BAD_ARG, "IP", "A valid IPv4 address is required");
-        else if (!s_mask || net_parse_ip4(s_mask, &mask) || !net_mask_valid(mask))
+        else if (s_mask[0] == '\0' || net_parse_ip4(s_mask, &mask) || !net_mask_valid(mask))
             err = make_error(SYS_BAD_ARG, "MASK", "A contiguous netmask is required, e.g. 255.255.255.0");
-        else if (s_gw && s_gw[0] && (net_parse_ip4(s_gw, &gw) || (gw & mask) != (ip & mask)))
+        else if (s_gw[0] && (net_parse_ip4(s_gw, &gw) || (gw & mask) != (ip & mask)))
             err = make_error(SYS_BAD_ARG, "GW", "The gateway must be inside the IP/mask subnet");
-        else if (s_dns1 && s_dns1[0] && net_parse_ip4(s_dns1, &dns1))
+        else if (s_dns1[0] && net_parse_ip4(s_dns1, &dns1))
             err = make_error(SYS_BAD_ARG, "DNS1", "Invalid DNS address");
-        else if (s_dns2 && s_dns2[0] && net_parse_ip4(s_dns2, &dns2))
+        else if (s_dns2[0] && net_parse_ip4(s_dns2, &dns2))
             err = make_error(SYS_BAD_ARG, "DNS2", "Invalid DNS address");
 
         if (!err) {
@@ -589,7 +592,6 @@ static cJSON *handle_net(app_context_t *app, const uint8_t *data, uint32_t len, 
         }
     }
 
-    cJSON_Delete(req);
     if (err) return err;
 
     if (is_sta) app->net_sta = cfg;

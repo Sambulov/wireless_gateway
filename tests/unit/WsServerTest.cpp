@@ -17,6 +17,10 @@
  * [x] Frame TEXT malformed JSON       → no send
  * [x] Frame TEXT missing FLAGS        → sends BAD_REQ (1 send call)
  * [x] Frame TEXT without SID         → accepted (SID назначает клиент)
+ * [x] Frame — вложенный JSON отбрасывается без падения и без утечки
+ * [x] Frame — фрагментированное сообщение собирается из частей
+ * [x] Frame — продолжение без начала отбрасывается
+ * [x] Frame — незавершённый сбор бросается при начале нового сообщения
  * [x] Work cycle — обработчик получает такт без данных
  * [x] Work cycle — завершённый вызов снимается и больше тактов не получает
  * [x] Frame TEXT unregistered FID     → sends NO_HANDLER (1 send call)
@@ -47,7 +51,7 @@ extern "C" {
     void ws_server_init(void);
     void ws_server_on_connect(ws_conn_t *conn);
     void ws_server_on_frame(ws_conn_t *conn, ws_frame_type_t type,
-                            uint8_t *data, size_t len);
+                            uint8_t *data, size_t len, uint8_t bFinal);
     void ws_server_on_disconnect(ws_conn_t *conn);
     void ws_server_test_reset(void);
     void ws_server_test_worker_step(void);
@@ -82,7 +86,7 @@ static uint8_t *heap_str(const char *s) {
 
 static void send_text(ws_conn_t *conn, const char *json) {
     size_t n = strlen(json);
-    ws_server_on_frame(conn, WS_FRAME_TEXT, heap_str(json), n);
+    ws_server_on_frame(conn, WS_FRAME_TEXT, heap_str(json), n, 1);
 }
 
 /* ── TEST_GROUP: Init ─────────────────────────────────────────────────── */
@@ -185,12 +189,12 @@ TEST_GROUP(WsServerFrame) {
 
 TEST(WsServerFrame, PingRepliesWithPong) {
     uint8_t *data = heap_str("ping");
-    ws_server_on_frame(conn, WS_FRAME_PING, data, 4);
+    ws_server_on_frame(conn, WS_FRAME_PING, data, 4, 1);
     LONGS_EQUAL(1, ws_conn_stub_send_calls(conn));
 }
 
 TEST(WsServerFrame, CloseRepliesWithClose) {
-    ws_server_on_frame(conn, WS_FRAME_CLOSE, NULL, 0);
+    ws_server_on_frame(conn, WS_FRAME_CLOSE, NULL, 0, 1);
     LONGS_EQUAL(1, ws_conn_stub_send_calls(conn));
 }
 
@@ -228,7 +232,7 @@ TEST(WsServerFrame, TextRegisteredHandlerEnqueuesCallNoImmediateSend) {
 
 TEST(WsServerFrame, PongFrameNoReply) {
     /* PONG is handled silently — only alive-ts updated, no send */
-    ws_server_on_frame(conn, WS_FRAME_PONG, NULL, 0);
+    ws_server_on_frame(conn, WS_FRAME_PONG, NULL, 0, 1);
     LONGS_EQUAL(0, ws_conn_stub_send_calls(conn));
 }
 
@@ -260,6 +264,70 @@ TEST(WsServerFrame, DisconnectedCallNoLongerReceivesBroadcast) {
     ws_server_on_disconnect(conn);
     uint8_t buf[] = "{}";
     LONGS_EQUAL(0, bApiCallSendJsonFidGroup(0x2004, buf, 2));
+}
+
+TEST(WsServerFrame, DeeplyNestedJsonIsDroppedSafely) {
+    /* Ровно то, что роняло устройство: cJSON разбирал это рекурсивно и на
+     * глубине ~400 заканчивал стек задачи httpd. Разбор на jsmn итеративный,
+     * токенов на такую вложенность не хватает — кадр отбрасывается, память под
+     * него освобождается (проверяет LeakSanitizer). */
+    std::string deep = "{\"FID\":1,\"FLAGS\":0,\"SID\":1,\"ARG\":";
+    deep.append(500, '[');
+    deep.append(500, ']');
+    deep += "}";
+    send_text(conn, deep.c_str());
+    LONGS_EQUAL(0, ws_conn_stub_send_calls(conn));
+}
+
+/* ── TEST_GROUP: WsServerFragments ────────────────────────────────────── */
+
+TEST_GROUP(WsServerFragments) {
+    ws_conn_t *conn;
+    void setup() {
+        ws_hal_stub_reset();
+        ws_server_init();
+        conn = ws_conn_stub_make(1);
+        ws_server_on_connect(conn);
+        bApiCallRegister(dummy_handler, 0x2008, NULL);
+    }
+    void teardown() {
+        ws_server_on_disconnect(conn);
+        ws_server_test_reset();
+        free(conn);
+    }
+};
+
+TEST(WsServerFragments, MessageIsAssembledFromParts) {
+    /* Сообщение, разрезанное на три кадра, должно дойти до обработчика целиком:
+     * первый фрагмент идёт с FIN=0, дальше — продолжения (WS_FRAME_CONT). */
+    const char *p1 = "{\"FID\":8200,\"FLAGS\":0,";
+    const char *p2 = "\"SID\":1,";
+    const char *p3 = "\"ARG\":{}}";
+    ws_server_on_frame(conn, WS_FRAME_TEXT, heap_str(p1), strlen(p1), 0);
+    ws_server_on_frame(conn, WS_FRAME_CONT, heap_str(p2), strlen(p2), 0);
+    ws_server_on_frame(conn, WS_FRAME_CONT, heap_str(p3), strlen(p3), 1);
+    /* Вызов ушёл в очередь — немедленного ответа нет (как и у целого кадра) */
+    LONGS_EQUAL(0, ws_conn_stub_send_calls(conn));
+}
+
+TEST(WsServerFragments, ContinuationWithoutStartIsDropped) {
+    ws_server_on_frame(conn, WS_FRAME_CONT, heap_str("{}"), 2, 1);
+    LONGS_EQUAL(0, ws_conn_stub_send_calls(conn));
+}
+
+TEST(WsServerFragments, UnfinishedAssemblyIsDroppedOnNewMessage) {
+    /* Начали собирать, но пришло новое сообщение: недособранное выбрасываем
+     * (иначе оно склеилось бы с чужими данными), а новое обрабатываем. */
+    ws_server_on_frame(conn, WS_FRAME_TEXT, heap_str("{\"FID\":8200,"), 12, 0);
+    send_text(conn, "{\"FID\":9999,\"FLAGS\":0,\"SID\":1}");
+    LONGS_EQUAL(1, ws_conn_stub_send_calls(conn));   /* ответ NO_HANDLER */
+}
+
+TEST(WsServerFragments, DisconnectReleasesPartialAssembly) {
+    /* Незавершённый сбор не должен утечь при обрыве соединения (LeakSanitizer). */
+    ws_server_on_frame(conn, WS_FRAME_TEXT, heap_str("{\"FID\":8200,"), 12, 0);
+    ws_server_on_disconnect(conn);
+    ws_conn_set_user_data(conn, NULL);
 }
 
 /* ── TEST_GROUP: WsServerWorkCycle ────────────────────────────────────── */
@@ -383,7 +451,7 @@ TEST(WsServerMultiClient, ErrorReplyGoesOnlyToSender) {
 }
 
 TEST(WsServerMultiClient, PingReplyGoesOnlyToSender) {
-    ws_server_on_frame(conn1, WS_FRAME_PING, heap_str("p"), 1);
+    ws_server_on_frame(conn1, WS_FRAME_PING, heap_str("p"), 1, 1);
     LONGS_EQUAL(1, ws_conn_stub_send_calls(conn1));
     LONGS_EQUAL(0, ws_conn_stub_send_calls(conn2));
 }
@@ -391,7 +459,7 @@ TEST(WsServerMultiClient, PingReplyGoesOnlyToSender) {
 TEST(WsServerMultiClient, DisconnectOneClientDoesNotBreakOther) {
     ws_server_on_disconnect(conn1);
     /* conn2 can still receive frames normally */
-    ws_server_on_frame(conn2, WS_FRAME_PING, heap_str("p"), 1);
+    ws_server_on_frame(conn2, WS_FRAME_PING, heap_str("p"), 1, 1);
     LONGS_EQUAL(1, ws_conn_stub_send_calls(conn2));
 }
 
