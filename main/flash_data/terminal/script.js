@@ -173,7 +173,7 @@ class ESP32Terminal {
     unsubscribe() {
         if (this.socket && this.isRegistered && this.subscriptionSid !== null) {
             this.socket.send(JSON.stringify({
-                FID: "0x00001021",
+                FID: "uart2.rx",
                 SID: this.subscriptionSid,
                 FLAGS: 8  // CALL_FLAG_TO_DELETE
             }));
@@ -203,7 +203,7 @@ class ESP32Terminal {
         this.subscriptionSid = Math.floor(Math.random() * 0xffff) + 1;
         this.txSid = Math.floor(Math.random() * 0xffff) + 1;
         const registerCommand = {
-            FID: "0x00001021",
+            FID: "uart2.rx",
             SID: this.subscriptionSid,
             FLAGS: 4  // CALL_FLAG_LONG_TERM
         };
@@ -226,7 +226,7 @@ class ESP32Terminal {
             document.getElementById('packet-count').textContent = this.packetCount;
             document.getElementById('last-activity').textContent = new Date().toLocaleTimeString();
             
-            if (packet.FID === "0x00001021" && packet.ARG) {
+            if (packet.FID === "uart2.rx" && packet.ARG) {
                 if (packet.ARG.STA === "0x00000005") {
                     this.isRegistered = true;
                     clearTimeout(this.resubscribeTimer);
@@ -258,7 +258,7 @@ class ESP32Terminal {
             // Echo back to UART if enabled
             if (this.echoEnabled && this.isConnected && this.socket) {
                 const command = {
-                    FID: "0x00001022",
+                    FID: "uart2.tx",
                     SID: this.txSid,
                     FLAGS: 0,
                     ARG: base64Data
@@ -284,7 +284,7 @@ class ESP32Terminal {
         
         // Формирование команды для отправки
         const command = {
-            FID: "0x00001022",
+            FID: "uart2.tx",
             SID: this.txSid,
             FLAGS: 0,
             ARG: base64String
@@ -302,7 +302,7 @@ class ESP32Terminal {
         // Отправка сигнала Break (Ctrl+C)
         if (this.isConnected && this.socket) {
             const breakCommand = {
-                FID: "0x00001022",
+                FID: "uart2.tx",
                 SID: this.txSid,
                 FLAGS: 0,
                 ARG: btoa('\x03') // Ctrl+C

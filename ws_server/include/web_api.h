@@ -4,8 +4,17 @@
 #include <stdint.h>
 #include <stddef.h>
 
+/* FID — текстовое имя вида "<подсистема>.<действие>": "wifi.sta", "uart2.modbus".
+ * Клиент присылает его строкой, сервер возвращает то же имя в ответе. Самое
+ * длинное имя сейчас — "uart2.config" (12 символов), 24 хватает с запасом.
+ * Отсутствие имени — это пустая строка или NULL, отдельного «нулевого кода»
+ * больше нет. */
+#define API_FID_NAME_MAX 24
+
 typedef struct webapi_msg {
-    int      fid;
+    /* Имя FID запроса. Копируется в сообщение, а не хранится указателем: имя
+     * приходит из кадра, который к моменту разбора очереди уже освобождён. */
+    char     fid[API_FID_NAME_MAX];
     int      id;
     uint8_t *data;
     size_t   len;
@@ -15,7 +24,19 @@ typedef struct webapi_msg {
     int      fd;
 } webapi_msg_t;
 
-#define API_HANDLER_ID_GENEGAL                      0x00000000
+/* Скопировать имя FID в буфер сообщения. 0 — имя пустое или длиннее предела:
+ * такое имя обработчику отдавать нельзя, иначе оно молча обрежется и вызов
+ * уйдёт «не тому», кто его ждал. */
+static inline uint8_t bApiFidSet(char *dst, const char *name)
+{
+    if (!dst || !name || !name[0]) return 0;
+    size_t n = 0;
+    while (name[n] && n < API_FID_NAME_MAX - 1) n++;
+    if (name[n] != '\0') return 0;
+    for (size_t i = 0; i < n; i++) dst[i] = name[i];
+    dst[n] = '\0';
+    return 1;
+}
 
 #define API_CALL_STATUS_COMPLETE                    0x00000000
 #define API_CALL_STATUS_EXECUTING                   0x00000001
@@ -61,29 +82,29 @@ typedef uint8_t (*api_handler_t)(void *call, void **context, uint8_t *data, uint
 
 typedef api_handler_t ApiHandler_t;
 
-uint8_t bApiCallRegister(api_handler_t fHandler, uint32_t ulFid, void *pxContext);
-uint8_t ws_server_register_fid_queue(uint32_t ulFid, void *xQueue);
-uint8_t bApiCallUnregister(uint32_t ulFid);
+uint8_t bApiCallRegister(api_handler_t fHandler, const char *name, void *pxContext);
+uint8_t ws_server_register_fid_queue(const char *name, void *xQueue);
+uint8_t bApiCallUnregister(const char *name);
 
 uint8_t bApiCallGetId(void *pxApiCall, uint32_t *ulOutId);
 void vApiCallComplete(void *pxApiCall);
 
 uint8_t bApiCallSendStatus(void *pxApiCall, uint32_t ulSta);
 uint8_t bApiCallSendJson(void *pxApiCall, const uint8_t *ucJson, uint32_t ulLen);
-uint8_t bApiCallSendJsonFidGroup(uint32_t ulFid, const uint8_t *ucData, uint32_t ulLen);
+uint8_t bApiCallSendJsonFidGroup(const char *name, const uint8_t *ucData, uint32_t ulLen);
 
 /*
 	Snake notation
 */
 
-uint8_t api_call_register(api_handler_t handler, uint32_t fid, void *context);
-uint8_t api_call_unregister(uint32_t fid);
+uint8_t api_call_register(api_handler_t handler, const char *name, void *context);
+uint8_t api_call_unregister(const char *name);
 
 uint8_t api_call_get_id(void *call, uint32_t *out_id);
 void api_call_complete(void *call);
 
 uint8_t api_call_send_status(void *call, uint32_t staus);
 uint8_t api_call_send_json(void *call, const uint8_t *json, uint32_t len);
-uint8_t api_call_send_json_fid_group(uint32_t fid, const uint8_t *json, uint32_t len);
+uint8_t api_call_send_json_fid_group(const char *name, const uint8_t *json, uint32_t len);
 
 #endif /* NWWEB_H_INCLUDED */ 

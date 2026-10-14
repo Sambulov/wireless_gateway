@@ -257,7 +257,9 @@
 
 <script>
 const WS_PORT = 81;                         // CONFIG_WEB_SOCKET_SERVER_PORT
-const FID = { STA:0x0010, AP:0x0011, INFO:0x0012, REBOOT:0x0013, FILES:0x0014, NET:0x0015 };
+/* Имена FID вместо кодов: подсистема.действие. */
+const FID = { STA:'wifi.sta', AP:'wifi.ap', INFO:'sys.info', REBOOT:'sys.reboot',
+              FILES:'sys.files', NET:'sys.net' };
 const MAX_UPLOAD = 500 * 1024;
 
 const STATUS_TEXT = {
@@ -303,7 +305,7 @@ function connect() {
     ws.onmessage = e => {
         let obj;
         try { obj = JSON.parse(e.data); } catch (_) { return; }
-        const fid = parseInt(obj.FID, 16);
+        const fid = obj.FID;
         const arg = (obj.ARG && typeof obj.ARG === 'object') ? obj.ARG : {};
         const sta = (typeof arg.STA === 'string') ? parseInt(arg.STA, 16) : null;
 

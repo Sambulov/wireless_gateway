@@ -19,15 +19,15 @@ typedef int esp_err_t;
 #define TAG_SX(x) TAG_S(x)
 #define TAG  TAG_SX(__FILE__) " " TAG_SX(__LINE__)
 
-/* FID constants (kept in sync with the real app.h) */
-#define ESP_WS_API_UART1_CNF         0x1010
-#define ESP_WS_API_UART1_RAW_RX      0x1011
-#define ESP_WS_API_UART1_RAW_TX      0x1012
-#define ESP_WS_API_UART1_ECHO        0x1013
-#define ESP_WS_API_UART2_CNF         0x1020
-#define ESP_WS_API_UART2_RAW_RX      0x1021
-#define ESP_WS_API_UART2_RAW_TX      0x1022
-#define ESP_WS_API_UART2_ECHO        0x1023
+/* FID names (kept in sync with the real app.h) */
+#define ESP_WS_API_UART1_CNF         "uart1.config"
+#define ESP_WS_API_UART1_RAW_RX      "uart1.rx"
+#define ESP_WS_API_UART1_RAW_TX      "uart1.tx"
+#define ESP_WS_API_UART1_ECHO        "uart1.echo"
+#define ESP_WS_API_UART2_CNF         "uart2.config"
+#define ESP_WS_API_UART2_RAW_RX      "uart2.rx"
+#define ESP_WS_API_UART2_RAW_TX      "uart2.tx"
+#define ESP_WS_API_UART2_ECHO        "uart2.echo"
 
 typedef struct {
     struct {

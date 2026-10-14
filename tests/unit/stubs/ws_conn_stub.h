@@ -9,6 +9,8 @@ extern "C" {
 ws_conn_t *ws_conn_stub_make(int fd);
 void       ws_conn_stub_set_send_result(ws_conn_t *conn, int err);
 int        ws_conn_stub_send_calls(ws_conn_t *conn);
+/* Последний отправленный кадр как C-строка (для проверки конверта ответа). */
+const char *ws_conn_stub_last_payload(ws_conn_t *conn);
 int        ws_conn_stub_close_calls(ws_conn_t *conn);
 
 /* Deferred completion: when on, send callbacks are queued instead of being

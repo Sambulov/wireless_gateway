@@ -141,49 +141,40 @@ void net_format_ip4(uint32_t ip, char *out, size_t out_size);
 
 /*==========================*/
 
-#define ESP_WS_API_ECHO_ID           0x0001
-//#define ESP_WS_API_CONT_ID           0x0002
-//#define ESP_WS_API_ASYNC_ID          0x0003
-#define ESP_WS_API_SYS_WIFI_STA      0x0010
-/* Device configuration API (see apih_sys.c and flash_data/config.html):
- *   0x0011 GET/SET AP credentials — a write is accepted only while exactly one
- *          station is associated with the softAP (see below)
- *   0x0012 GET device status: MACs, IPs, AP client count, heap, filesystem
- *   0x0013 reboot the gateway after the response has been delivered
- *   0x0014 GET LittleFS file listing */
-#define ESP_WS_API_SYS_WIFI_AP       0x0011
-#define ESP_WS_API_SYS_INFO          0x0012
-#define ESP_WS_API_SYS_REBOOT        0x0013
-#define ESP_WS_API_SYS_FILES         0x0014
-/*   0x0015 GET/SET IPv4 settings of the station and access point interfaces
- *          (DHCP or static address, mask, gateway, DNS) */
-#define ESP_WS_API_SYS_NET           0x0015
+/* FID — текстовое имя "<подсистема>.<действие>", а не код: имя видно в кадре
+ * клиента и в ответе, и по нему же вызов маршрутизируется. Один и тот же вызов
+ * используется и как одноразовый запрос, и как подписка (FLAGS:4). */
+#define ESP_WS_API_ECHO_ID           "echo"
+/* Device configuration API (see apih_sys.c and config_page.html):
+ *   wifi.ap    GET/SET AP credentials — a write is accepted only while exactly
+ *              one station is associated with the softAP (see below)
+ *   sys.info   GET device status: MACs, IPs, AP client count, heap, filesystem
+ *   sys.reboot reboot the gateway after the response has been delivered
+ *   sys.files  GET LittleFS file listing
+ *   sys.net    GET/SET IPv4 settings of the station and access point interfaces
+ *              (DHCP or static address, mask, gateway, DNS) */
+#define ESP_WS_API_SYS_WIFI_STA      "wifi.sta"
+#define ESP_WS_API_SYS_WIFI_AP       "wifi.ap"
+#define ESP_WS_API_SYS_INFO          "sys.info"
+#define ESP_WS_API_SYS_REBOOT        "sys.reboot"
+#define ESP_WS_API_SYS_FILES         "sys.files"
+#define ESP_WS_API_SYS_NET           "sys.net"
 /* Registers the system FID queue and starts the task serving it */
 esp_err_t api_sys_run(app_context_t *app);
 
-#define ESP_WS_API_UART1_CNF         0x1010
-#define ESP_WS_API_UART1_RAW_RX      0x1011
-#define ESP_WS_API_UART1_RAW_TX      0x1012
-#define ESP_WS_API_UART1_ECHO        0x1013
-#define ESP_WS_API_UART2_CNF         0x1020
-#define ESP_WS_API_UART2_RAW_RX      0x1021
-#define ESP_WS_API_UART2_RAW_TX      0x1022
-#define ESP_WS_API_UART2_ECHO        0x1023
+#define ESP_WS_API_UART1_CNF         "uart1.config"
+#define ESP_WS_API_UART1_RAW_RX      "uart1.rx"
+#define ESP_WS_API_UART1_RAW_TX      "uart1.tx"
+#define ESP_WS_API_UART1_ECHO        "uart1.echo"
+#define ESP_WS_API_UART2_CNF         "uart2.config"
+#define ESP_WS_API_UART2_RAW_RX      "uart2.rx"
+#define ESP_WS_API_UART2_RAW_TX      "uart2.tx"
+#define ESP_WS_API_UART2_ECHO        "uart2.echo"
 //TODO: move to apih_uart.h
 esp_err_t ws_uart_run(app_context_t *app);
 
-#define ESP_WS_API_UART1_MODBUS_CNF  0x1110
-#define ESP_WS_API_UART1_MODBUS_SERV 0x1111
-#define ESP_WS_API_UART1_MODBUS_RESP 0x1112
-#define ESP_WS_API_UART1_MODBUS_REQ  0x1113
-//#define ESP_WS_API_UART1_MODBUS_TCP  0x1114
-//#define ESP_WS_API_UART1_MODBUS_UDP  0x1116
-#define ESP_WS_API_UART2_MODBUS_CNF  0x1120
-#define ESP_WS_API_UART2_MODBUS_SERV 0x1121
-#define ESP_WS_API_UART2_MODBUS_RESP 0x1122
-#define ESP_WS_API_UART2_MODBUS_REQ  0x1123
-//#define ESP_WS_API_UART2_MODBUS_TCP  0x1124
-//#define ESP_WS_API_UART2_MODBUS_UDP  0x1126
+#define ESP_WS_API_UART1_MODBUS_REQ  "uart1.modbus"
+#define ESP_WS_API_UART2_MODBUS_REQ  "uart2.modbus"
 esp_err_t ws_modbus_run(app_context_t *app);
 
 void *get_ws_worker_queue(void);

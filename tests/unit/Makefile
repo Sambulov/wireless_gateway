@@ -7,7 +7,6 @@ INCLUDES := \
     -Istubs \
     -I$(ROOT)/ws_server/include \
     -I$(ROOT)/CodeLibrary/CL \
-    -I$(ROOT)/json/cJSON \
     -I$(ROOT)/json/jsmn \
     -I$(ROOT)/json \
     -I$(ROOT)/main \
@@ -27,7 +26,6 @@ LDFLAGS  := -L$(CPPUTEST)/lib -lCppUTest -lCppUTestExt $(SANITIZE)
 VPATH := \
     $(ROOT)/ws_server/src \
     $(ROOT)/main \
-    $(ROOT)/json/cJSON \
     $(ROOT)/json \
     $(ROOT)/json/jsmn \
     $(ROOT)/CodeLibrary/CL/DataStructures/Src \
@@ -37,7 +35,6 @@ VPATH := \
 C_SRCS := \
     ws_server.c \
     apih_uart.c \
-    cJSON.c \
     GwJson.c \
     jsmn.c \
     LinkedList.c \

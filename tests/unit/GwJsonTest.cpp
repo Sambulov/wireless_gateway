@@ -1,7 +1,7 @@
-/* Разбор входящего JSON: jsmn вместо cJSON.
+/* Разбор входящего JSON: jsmn вместо дерева узлов.
  *
- * cJSON выделял память на каждый объект, массив и ключ, а разбор был
- * рекурсивным — на устройстве это давало падение от одного пакета
+ * Прежний разбор выделял память на каждый объект, массив и ключ, а сам разбор
+ * был рекурсивным — на устройстве это давало падение от одного пакета
  * (переполнение стека задачи httpd на глубине ~400 и паника на вложенных
  * объектах). Здесь разбор итеративный и без выделения памяти: токены лежат в
  * массиве, который задаёт вызывающий, и их нехватка — это отказ разбора.
@@ -22,24 +22,24 @@ TEST_GROUP(GwJsonParse) {
 };
 
 TEST(GwJsonParse, SimpleFrameFields) {
-    const char *s = "{\"FID\":4115,\"FLAGS\":0,\"SID\":7,\"ARG\":{\"ADR\":1}}";
+    const char *s = "{\"FID\":\"uart2.modbus\",\"FLAGS\":0,\"SID\":7,\"ARG\":{\"ADR\":1}}";
     CHECK(parse(s));
-    uint32_t fid = 0;
+    char fid[24];
     int32_t flags = -1, sid = -1;
-    CHECK(gw_json_id(&j, "FID", &fid));
-    LONGS_EQUAL(4115, fid);
+    CHECK(gw_json_str(&j, "FID", fid, sizeof(fid)));
+    STRCMP_EQUAL("uart2.modbus", fid);
     CHECK(gw_json_int(&j, "FLAGS", &flags));
     LONGS_EQUAL(0, flags);
     CHECK(gw_json_int(&j, "SID", &sid));
     LONGS_EQUAL(7, sid);
 }
 
-TEST(GwJsonParse, FidAsHexString) {
-    const char *s = "{\"FID\":\"0x1012\",\"FLAGS\":4}";
-    CHECK(parse(s));
-    uint32_t fid = 0;
-    CHECK(gw_json_id(&j, "FID", &fid));
-    LONGS_EQUAL(0x1012, fid);
+TEST(GwJsonParse, NumericFidIsNotAString) {
+    /* Числовой код больше не имя: gw_json_str на числе не срабатывает, и
+     * каркас такой кадр отклоняет. */
+    CHECK(parse("{\"FID\":4115,\"FLAGS\":0}"));
+    char fid[24];
+    CHECK_FALSE(gw_json_str(&j, "FID", fid, sizeof(fid)));
 }
 
 TEST(GwJsonParse, MissingKeyIsNotFound) {
@@ -125,4 +125,227 @@ TEST(GwJsonParse, EmptyArgObjectIsParsed) {
     size_t len = 0;
     CHECK(gw_json_raw(&j, "ARG", &start, &len));
     LONGS_EQUAL(2, len);
+}
+
+/* ── Запись JSON ─────────────────────────────────────────────────────────── */
+
+TEST_GROUP(GwJsonWrite) {
+    char buf[256];
+    gw_jsonw_t w;
+
+    void setup() { gw_jsonw_init(&w, buf, sizeof(buf)); }
+    const char *out() { return buf; }
+};
+
+TEST(GwJsonWrite, FlatObjectMatchesPreviousOutput) {
+    /* Ровно то, что раньше печаталось из дерева:
+     * {"STA":"0x00000000","SSID":"HomeNet","CLIENTS":1,"FROM_AP":true} */
+    gw_jsonw_obj(&w, NULL);
+    gw_jsonw_str(&w, "STA", "0x00000000");
+    gw_jsonw_str(&w, "SSID", "HomeNet");
+    gw_jsonw_int(&w, "CLIENTS", 1);
+    gw_jsonw_bool(&w, "FROM_AP", 1);
+    gw_jsonw_finish(&w);
+    STRCMP_EQUAL("{\"STA\":\"0x00000000\",\"SSID\":\"HomeNet\",\"CLIENTS\":1,\"FROM_AP\":true}",
+                 out());
+}
+
+TEST(GwJsonWrite, NestedObjects) {
+    gw_jsonw_obj(&w, NULL);
+    gw_jsonw_str(&w, "STA", "0x00000000");
+    gw_jsonw_obj(&w, "STA_CFG");
+    gw_jsonw_str(&w, "MODE", "dhcp");
+    gw_jsonw_str(&w, "IP", "0.0.0.0");
+    gw_jsonw_end(&w);
+    gw_jsonw_obj(&w, "AP_CFG");
+    gw_jsonw_str(&w, "MODE", "static");
+    gw_jsonw_end(&w);
+    gw_jsonw_finish(&w);
+    STRCMP_EQUAL("{\"STA\":\"0x00000000\",\"STA_CFG\":{\"MODE\":\"dhcp\",\"IP\":\"0.0.0.0\"},"
+                 "\"AP_CFG\":{\"MODE\":\"static\"}}", out());
+}
+
+TEST(GwJsonWrite, ArrayOfObjects) {
+    gw_jsonw_obj(&w, NULL);
+    gw_jsonw_arr(&w, "FILES");
+    gw_jsonw_obj(&w, NULL);
+    gw_jsonw_str(&w, "NAME", "a.jsonc");
+    gw_jsonw_int(&w, "SIZE", 1234);
+    gw_jsonw_bool(&w, "DIR", 0);
+    gw_jsonw_end(&w);
+    gw_jsonw_obj(&w, NULL);
+    gw_jsonw_str(&w, "NAME", "regmaps");
+    gw_jsonw_int(&w, "SIZE", 0);
+    gw_jsonw_bool(&w, "DIR", 1);
+    gw_jsonw_end(&w);
+    gw_jsonw_end(&w);
+    gw_jsonw_finish(&w);
+    STRCMP_EQUAL("{\"FILES\":[{\"NAME\":\"a.jsonc\",\"SIZE\":1234,\"DIR\":false},"
+                 "{\"NAME\":\"regmaps\",\"SIZE\":0,\"DIR\":true}]}", out());
+}
+
+TEST(GwJsonWrite, EmptyContainers) {
+    gw_jsonw_obj(&w, NULL);
+    gw_jsonw_obj(&w, "O");
+    gw_jsonw_end(&w);
+    gw_jsonw_arr(&w, "A");
+    gw_jsonw_end(&w);
+    gw_jsonw_null(&w, "N");
+    gw_jsonw_finish(&w);
+    STRCMP_EQUAL("{\"O\":{},\"A\":[],\"N\":null}", out());
+}
+
+TEST(GwJsonWrite, EscapesQuotesBackslashAndControlChars) {
+    /* Управляющие символы — короткими последовательностями, остальные
+     * \u00xx в нижнем регистре. */
+    gw_jsonw_obj(&w, NULL);
+    /* "\x01" отдельной строкой: \x01f компилятор прочитал бы как \x1f */
+    gw_jsonw_str(&w, "S", "a\"b\\c\nd\te" "\x01" "f");
+    gw_jsonw_finish(&w);
+    STRCMP_EQUAL("{\"S\":\"a\\\"b\\\\c\\nd\\te\\u0001f\"}", out());
+}
+
+TEST(GwJsonWrite, NonAsciiIsWrittenAsUtf8Bytes) {
+    /* Кириллица пишется байтами как есть — как делал прежний сборщик JSON: ответ
+     * не раздувается, а клиент после JSON.parse получает ровно ту же строку. */
+    gw_jsonw_obj(&w, NULL);
+    gw_jsonw_str(&w, "N", "тест");
+    gw_jsonw_finish(&w);
+    STRCMP_EQUAL("{\"N\":\"тест\"}", out());
+}
+
+TEST(GwJsonWrite, NonBmpIsWrittenAsUtf8Bytes) {
+    /* Символ вне BMP (U+1F600) — четыре байта как есть, суррогатной пары нет */
+    gw_jsonw_obj(&w, NULL);
+    gw_jsonw_str(&w, "E", "\xf0\x9f\x98\x80");
+    gw_jsonw_finish(&w);
+    STRCMP_EQUAL("{\"E\":\"\xf0\x9f\x98\x80\"}", out());
+}
+
+TEST(GwJsonWrite, InvalidUtf8ByteIsEscaped) {
+    /* Байт, не образующий UTF-8 (одиночный старший байт: имя файла в чужой
+     * кодировке), экранируется — иначе в ответе была бы невалидная UTF-8. */
+    gw_jsonw_obj(&w, NULL);
+    gw_jsonw_str(&w, "N", "\xe9x");
+    gw_jsonw_finish(&w);
+    STRCMP_EQUAL("{\"N\":\"\\u00e9x\"}", out());
+}
+
+TEST(GwJsonWrite, TruncatedSequenceIsEscaped) {
+    /* Обрезанная на конце последовательность (только первый байт «т») */
+    gw_jsonw_obj(&w, NULL);
+    gw_jsonw_str(&w, "N", "\xd1");
+    gw_jsonw_finish(&w);
+    STRCMP_EQUAL("{\"N\":\"\\u00d1\"}", out());
+}
+
+TEST(GwJsonWrite, OverlongAndSurrogateSequencesAreEscaped) {
+    /* Переросшая (C0 AF) и суррогат в UTF-8 (ED A0 80) корректными не считаются:
+     * каждый байт экранируется, в ответе остаётся валидная UTF-8. */
+    gw_jsonw_obj(&w, NULL);
+    gw_jsonw_str(&w, "A", "\xc0\xaf");
+    gw_jsonw_str(&w, "B", "\xed\xa0\x80");
+    gw_jsonw_finish(&w);
+    STRCMP_EQUAL("{\"A\":\"\\u00c0\\u00af\",\"B\":\"\\u00ed\\u00a0\\u0080\"}",
+                 out());
+}
+
+TEST(GwJsonWrite, NonAsciiRoundTripsThroughReader) {
+    /* Что записали, то и прочитали: и байтами, и обратно. */
+    gw_jsonw_obj(&w, NULL);
+    gw_jsonw_str(&w, "N", "Кириллица и 😀");
+    size_t len = gw_jsonw_finish(&w);
+
+    GW_JSON_TOKENS(toks, 16);
+    gw_json_t j;
+    CHECK(gw_json_parse(&j, buf, len, toks, 16));
+    char back[64];
+    CHECK(gw_json_str(&j, "N", back, sizeof(back)));
+    STRCMP_EQUAL("Кириллица и 😀", back);
+}
+
+TEST(GwJsonWrite, NumbersSignedAndLarge) {
+    gw_jsonw_obj(&w, NULL);
+    gw_jsonw_int(&w, "A", -1);
+    gw_jsonw_int(&w, "B", 0);
+    gw_jsonw_uint(&w, "C", 4294967295u);
+    gw_jsonw_int(&w, "D", 1500000);
+    gw_jsonw_finish(&w);
+    STRCMP_EQUAL("{\"A\":-1,\"B\":0,\"C\":4294967295,\"D\":1500000}", out());
+}
+
+TEST(GwJsonWrite, BareStringAtRoot) {
+    /* Ответ UART RAW_RX — это голая строка JSON, не объект */
+    gw_jsonw_str(&w, NULL, "QUJD");
+    LONGS_EQUAL(6, gw_jsonw_finish(&w));
+    STRCMP_EQUAL("\"QUJD\"", out());
+}
+
+TEST(GwJsonWrite, OverflowSetsFlagAndStopsWriting) {
+    char small[16];
+    gw_jsonw_t s;
+    gw_jsonw_init(&s, small, sizeof(small));
+    gw_jsonw_obj(&s, NULL);
+    CHECK_FALSE(gw_jsonw_str(&s, "KEY", "0123456789"));   /* не влезло — сразу отказ */
+    CHECK_FALSE(gw_jsonw_ok(&s));
+    LONGS_EQUAL(0, gw_jsonw_finish(&s));
+    LONGS_EQUAL(15, (long)strlen(small));    /* буфер не переполнен */
+}
+
+TEST(GwJsonWrite, KeyRequiredInsideObject) {
+    gw_jsonw_obj(&w, NULL);
+    CHECK_FALSE(gw_jsonw_str(&w, NULL, "x"));   /* значение без ключа в объекте */
+    CHECK_FALSE(gw_jsonw_ok(&w));
+}
+
+TEST(GwJsonWrite, KeyRejectedInsideArray) {
+    gw_jsonw_arr(&w, NULL);
+    CHECK_FALSE(gw_jsonw_str(&w, "K", "x"));    /* ключ в массиве */
+    CHECK_FALSE(gw_jsonw_ok(&w));
+}
+
+TEST(GwJsonWrite, SecondRootValueRejected) {
+    gw_jsonw_obj(&w, NULL);
+    gw_jsonw_end(&w);
+    CHECK_FALSE(gw_jsonw_str(&w, NULL, "x"));
+    CHECK_FALSE(gw_jsonw_ok(&w));
+}
+
+TEST(GwJsonWrite, TooDeepNestingIsRefused) {
+    for (int i = 0; i < GW_JSONW_MAX_DEPTH + 2; i++)
+        gw_jsonw_obj(&w, i ? "o" : NULL);
+    CHECK_FALSE(gw_jsonw_ok(&w));
+}
+
+TEST(GwJsonWrite, FinishClosesOpenContainers) {
+    gw_jsonw_obj(&w, NULL);
+    gw_jsonw_arr(&w, "A");
+    gw_jsonw_int(&w, NULL, 1);
+    gw_jsonw_finish(&w);                     /* ничего не закрывали руками */
+    STRCMP_EQUAL("{\"A\":[1]}", out());
+}
+
+TEST(GwJsonWrite, ResetReusesBuffer) {
+    gw_jsonw_obj(&w, NULL);
+    gw_jsonw_str(&w, "A", "1");
+    gw_jsonw_finish(&w);
+    gw_jsonw_reset(&w);
+    gw_jsonw_obj(&w, NULL);
+    gw_jsonw_str(&w, "B", "2");
+    gw_jsonw_finish(&w);
+    STRCMP_EQUAL("{\"B\":\"2\"}", out());
+}
+
+TEST(GwJsonWrite, DuplicateKeyIsAppendedNotReplaced) {
+    /* Так вёл себя прежний сборщик: повторный ключ добавлялся вторым, а не
+     * заменял прежний. Листинг файлов на ошибке пути отдаёт STA дважды, и
+     * клиент (JSON.parse) видит последнее значение — оставляем как было. */
+    gw_jsonw_obj(&w, NULL);
+    gw_jsonw_str(&w, "STA", "0x00000000");
+    gw_jsonw_uint(&w, "TOTAL", 1048576);
+    gw_jsonw_str(&w, "ERR", "PATH");
+    gw_jsonw_str(&w, "STA", "0x80000003");
+    gw_jsonw_finish(&w);
+    STRCMP_EQUAL("{\"STA\":\"0x00000000\",\"TOTAL\":1048576,\"ERR\":\"PATH\","
+                 "\"STA\":\"0x80000003\"}", out());
 }

@@ -23,6 +23,9 @@ struct ws_conn {
     pending_cb_t *pending;
     int           pending_count;
     int           pending_cap;
+    /* Последний отправленный кадр: тесты проверяют сам конверт ответа
+     * (в частности, что FID в нём — то же имя, что прислал клиент). */
+    char   last_payload[256];
 };
 
 ws_conn_t *ws_conn_stub_make(int fd) {
@@ -74,6 +77,14 @@ int ws_conn_send_async(ws_conn_t *conn, const ws_frame_t *frame,
     if (!conn) return -1;
     int err = conn->send_async_last_err;
     conn->send_async_calls++;
+    if (frame && frame->payload && frame->len) {
+        size_t n = frame->len < sizeof(conn->last_payload) - 1
+                 ? frame->len : sizeof(conn->last_payload) - 1;
+        for (size_t i = 0; i < n; i++) conn->last_payload[i] = (char)frame->payload[i];
+        conn->last_payload[n] = '\0';
+    } else {
+        conn->last_payload[0] = '\0';
+    }
     /* Same contract as httpd_ws_send_data_async(): if queuing fails the
      * error is returned and the callback is never called. */
     if (err) return err;
@@ -91,6 +102,10 @@ int ws_conn_send_async(ws_conn_t *conn, const ws_frame_t *frame,
         cb(0, conn->fd, cb_arg);
     }
     return 0;
+}
+
+const char *ws_conn_stub_last_payload(ws_conn_t *c) {
+    return c ? c->last_payload : "";
 }
 
 void ws_conn_close(ws_conn_t *conn) {

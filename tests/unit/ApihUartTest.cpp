@@ -22,9 +22,10 @@ extern "C" {
 
 /* ── Helpers ──────────────────────────────────────────────────────────── */
 
-static webapi_msg_t *make_msg(uint32_t fid, const char *json_data) {
+static webapi_msg_t *make_msg(const char *fid, const char *json_data) {
     webapi_msg_t *m = (webapi_msg_t *)malloc(sizeof(webapi_msg_t));
-    m->fid = fid;
+    memset(m, 0, sizeof(webapi_msg_t));
+    bApiFidSet(m->fid, fid);
     m->id  = 1;
     if (json_data) {
         m->len  = strlen(json_data);
@@ -249,7 +250,7 @@ TEST(ApihUartEcho, QuerySendsResponse) {
 
 TEST(ApihUartEcho, UnknownFidNoResponse) {
     void *q = get_ws_worker_queue();
-    webapi_msg_t *m = make_msg(0xDEAD, NULL);
+    webapi_msg_t *m = make_msg("uart3.rx", NULL);
     apih_uart_test_handle_msg(&app, m);
     LONGS_EQUAL(0, ws_hal_stub_queue_count(q));
     free_msg(m);

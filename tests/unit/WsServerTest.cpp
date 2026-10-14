@@ -3,7 +3,7 @@
  *
  * [x] Register — bApiCallRegister succeeds for valid handler + FID
  * [x] Register — NULL handler → fails
- * [x] Register — FID 0 → fails
+ * [x] Register — пустое/слишком длинное имя → fails
  * [x] Register — duplicate FID → fails
  * [x] Unregister — registered FID → succeeds
  * [x] Unregister — unknown FID → fails
@@ -17,7 +17,10 @@
  * [x] Frame TEXT malformed JSON       → no send
  * [x] Frame TEXT missing FLAGS        → sends BAD_REQ (1 send call)
  * [x] Frame TEXT without SID         → accepted (SID назначает клиент)
+ * [x] Frame TEXT числовой FID        → отклонён (протокол только на именах)
+ * [x] Frame TEXT имя ищется точно    → регистр и лишние символы не совпадают
  * [x] Frame — вложенный JSON отбрасывается без падения и без утечки
+ * [x] Frame — в ответе то же имя FID, что прислал клиент
  * [x] Frame — фрагментированное сообщение собирается из частей
  * [x] Frame — продолжение без начала отбрасывается
  * [x] Frame — незавершённый сбор бросается при начале нового сообщения
@@ -114,29 +117,40 @@ TEST_GROUP(WsServerRegister) {
 };
 
 TEST(WsServerRegister, ValidHandlerSucceeds) {
-    LONGS_EQUAL(1, bApiCallRegister(dummy_handler, 0x1001, NULL));
+    LONGS_EQUAL(1, bApiCallRegister(dummy_handler, "reg.one", NULL));
 }
 
 TEST(WsServerRegister, NullHandlerFails) {
-    LONGS_EQUAL(0, bApiCallRegister(NULL, 0x1001, NULL));
+    LONGS_EQUAL(0, bApiCallRegister(NULL, "reg.one", NULL));
 }
 
-TEST(WsServerRegister, FidZeroFails) {
-    LONGS_EQUAL(0, bApiCallRegister(dummy_handler, 0, NULL));
+TEST(WsServerRegister, EmptyNameFails) {
+    /* Пустое имя — это «FID не задан»: раньше таким признаком был нулевой код */
+    LONGS_EQUAL(0, bApiCallRegister(dummy_handler, "", NULL));
+    LONGS_EQUAL(0, bApiCallRegister(dummy_handler, NULL, NULL));
 }
 
-TEST(WsServerRegister, DuplicateFidFails) {
-    bApiCallRegister(dummy_handler, 0x1002, NULL);
-    LONGS_EQUAL(0, bApiCallRegister(dummy_handler, 0x1002, NULL));
+TEST(WsServerRegister, TooLongNameFails) {
+    /* Имя длиннее буфера отвергается целиком, а не обрезается: обрезанное имя
+     * увело бы вызов не тому обработчику. */
+    char long_name[API_FID_NAME_MAX + 8];
+    memset(long_name, 'a', sizeof(long_name) - 1);
+    long_name[sizeof(long_name) - 1] = '\0';
+    LONGS_EQUAL(0, bApiCallRegister(dummy_handler, long_name, NULL));
 }
 
-TEST(WsServerRegister, UnregisterKnownFidSucceeds) {
-    bApiCallRegister(dummy_handler, 0x1003, NULL);
-    LONGS_EQUAL(1, bApiCallUnregister(0x1003));
+TEST(WsServerRegister, DuplicateNameFails) {
+    bApiCallRegister(dummy_handler, "reg.two", NULL);
+    LONGS_EQUAL(0, bApiCallRegister(dummy_handler, "reg.two", NULL));
 }
 
-TEST(WsServerRegister, UnregisterUnknownFidFails) {
-    LONGS_EQUAL(0, bApiCallUnregister(0x9999));
+TEST(WsServerRegister, UnregisterKnownNameSucceeds) {
+    bApiCallRegister(dummy_handler, "reg.three", NULL);
+    LONGS_EQUAL(1, bApiCallUnregister("reg.three"));
+}
+
+TEST(WsServerRegister, UnregisterUnknownNameFails) {
+    LONGS_EQUAL(0, bApiCallUnregister("reg.unknown"));
 }
 
 /* ── TEST_GROUP: Connect ──────────────────────────────────────────────── */
@@ -205,28 +219,28 @@ TEST(WsServerFrame, TextMalformedJsonNoReply) {
 
 TEST(WsServerFrame, TextMissingFlagsSendsBadReq) {
     /* No FLAGS field — mandatory */
-    send_text(conn, "{\"FID\":1000,\"SID\":1}");
+    send_text(conn, "{\"FID\":\"frm.flags\",\"SID\":1}");
     LONGS_EQUAL(1, ws_conn_stub_send_calls(conn));
 }
 
 TEST(WsServerFrame, TextWithoutSidIsAccepted) {
     /* SID назначает клиент и он необязателен: сервер лишь повторяет его в
      * ответе, если тот был. Кадр без SID — полноценный запрос. */
-    bApiCallRegister(dummy_handler, 0x2005, NULL);
-    send_text(conn, "{\"FID\":8197,\"FLAGS\":0}");  /* 0x2005 */
+    bApiCallRegister(dummy_handler, "frm.sid", NULL);
+    send_text(conn, "{\"FID\":\"frm.sid\",\"FLAGS\":0}");
     LONGS_EQUAL(0, ws_conn_stub_send_calls(conn));
 }
 
 TEST(WsServerFrame, TextUnregisteredFidSendsNoHandler) {
-    send_text(conn, "{\"FID\":9999,\"FLAGS\":0,\"SID\":1}");
+    send_text(conn, "{\"FID\":\"frm.unknown\",\"FLAGS\":0,\"SID\":1}");
     LONGS_EQUAL(1, ws_conn_stub_send_calls(conn));
 }
 
 TEST(WsServerFrame, TextRegisteredHandlerEnqueuesCallNoImmediateSend) {
     /* Handler is registered: call goes into the work queue.
      * The worker task is stubbed out — no DELIVERED status yet. */
-    bApiCallRegister(dummy_handler, 0x2001, NULL);
-    send_text(conn, "{\"FID\":8193,\"FLAGS\":0,\"SID\":5}");  /* 0x2001 */
+    bApiCallRegister(dummy_handler, "frm.one", NULL);
+    send_text(conn, "{\"FID\":\"frm.one\",\"FLAGS\":0,\"SID\":5}");
     LONGS_EQUAL(0, ws_conn_stub_send_calls(conn));
 }
 
@@ -236,42 +250,82 @@ TEST(WsServerFrame, PongFrameNoReply) {
     LONGS_EQUAL(0, ws_conn_stub_send_calls(conn));
 }
 
-TEST(WsServerFrame, TextFidZeroDroppedSilently) {
-    /* FID=0 is API_HANDLER_ID_GENERAL — dropped without any reply */
+TEST(WsServerFrame, NumericFidIsRejected) {
+    /* Протокол работает только с именами: число в FID — не имя, кадр
+     * отклоняется молча, как и любой другой кадр без корректного FID. */
+    bApiCallRegister(dummy_handler, "frm.numeric", NULL);
     send_text(conn, "{\"FID\":0,\"FLAGS\":0,\"SID\":1}");
+    LONGS_EQUAL(0, ws_conn_stub_send_calls(conn));
+    send_text(conn, "{\"FID\":8194,\"FLAGS\":0,\"SID\":1}");
+    LONGS_EQUAL(0, ws_conn_stub_send_calls(conn));
+    /* Строка "0x2002" — уже имя, просто незарегистрированное: клиент получает
+     * внятный NO_HANDLER, а не тишину. */
+    send_text(conn, "{\"FID\":\"0x2002\",\"FLAGS\":0,\"SID\":1}");
+    LONGS_EQUAL(1, ws_conn_stub_send_calls(conn));
+}
+
+/* Обработчик, который сразу отвечает и завершает вызов. */
+static uint8_t answer_handler(void *call, void **ctx, uint8_t *data, uint32_t len) {
+    (void)ctx; (void)data; (void)len;
+    const uint8_t body[] = "{\"OK\":1}";
+    bApiCallSendJson(call, body, sizeof(body) - 1);
+    return 0;
+}
+
+TEST(WsServerFrame, ReplyCarriesSameFidName) {
+    /* Клиент присылает имя — сервер возвращает ровно его же, а не код. */
+    bApiCallRegister(answer_handler, "uart2.modbus", NULL);
+    send_text(conn, "{\"FID\":\"uart2.modbus\",\"FLAGS\":0,\"SID\":9}");
+    ws_server_test_worker_step();
+    STRCMP_CONTAINS("\"FID\":\"uart2.modbus\"", ws_conn_stub_last_payload(conn));
+    STRCMP_CONTAINS("\"SID\":\"0x00000009\"", ws_conn_stub_last_payload(conn));
+}
+
+TEST(WsServerFrame, TooLongFidNameInFrameIsRejected) {
+    /* Имя длиннее буфера отклоняется целиком, а не обрезается: иначе вызов мог
+     * бы уйти обработчику с похожим именем. */
+    std::string long_name(API_FID_NAME_MAX + 5, 'x');
+    send_text(conn, ("{\"FID\":\"" + long_name + "\",\"FLAGS\":0,\"SID\":1}").c_str());
     LONGS_EQUAL(0, ws_conn_stub_send_calls(conn));
 }
 
-TEST(WsServerFrame, TextFidAsHexStringRecognized) {
-    /* "FID":"0x2002" — hex string path, same as decimal for routing */
-    bApiCallRegister(dummy_handler, 0x2002, NULL);
-    send_text(conn, "{\"FID\":\"0x2002\",\"FLAGS\":0,\"SID\":1}");
-    LONGS_EQUAL(0, ws_conn_stub_send_calls(conn));
+TEST(WsServerFrame, NameMatchesExactly) {
+    /* Имя ищется целиком: другой регистр или лишний символ — это другой вызов,
+     * и сервер обязан ответить NO_HANDLER, а не отдать его этому обработчику. */
+    bApiCallRegister(dummy_handler, "uart2.modbus", NULL);
+    send_text(conn, "{\"FID\":\"UART2.MODBUS\",\"FLAGS\":0,\"SID\":1}");
+    LONGS_EQUAL(1, ws_conn_stub_send_calls(conn));       /* NO_HANDLER */
+    send_text(conn, "{\"FID\":\"uart2.modbus2\",\"FLAGS\":0,\"SID\":1}");
+    LONGS_EQUAL(2, ws_conn_stub_send_calls(conn));       /* NO_HANDLER */
+    send_text(conn, "{\"FID\":\"uart2.modbu\",\"FLAGS\":0,\"SID\":1}");
+    LONGS_EQUAL(3, ws_conn_stub_send_calls(conn));       /* NO_HANDLER */
+    send_text(conn, "{\"FID\":\"uart2.modbus\",\"FLAGS\":0,\"SID\":1}");
+    LONGS_EQUAL(3, ws_conn_stub_send_calls(conn));       /* обработан, ответа нет */
 }
 
 TEST(WsServerFrame, TextNoArgFieldStillEnqueues) {
     /* ARG is optional — missing ARG should not block enqueueing */
-    bApiCallRegister(dummy_handler, 0x2003, NULL);
-    send_text(conn, "{\"FID\":8195,\"FLAGS\":0,\"SID\":1}");  /* 0x2003 */
+    bApiCallRegister(dummy_handler, "frm.noarg", NULL);
+    send_text(conn, "{\"FID\":\"frm.noarg\",\"FLAGS\":0,\"SID\":1}");
     LONGS_EQUAL(0, ws_conn_stub_send_calls(conn));
 }
 
 TEST(WsServerFrame, DisconnectedCallNoLongerReceivesBroadcast) {
     /* After disconnect, ws_server_test_reset clears enqueued call.
      * Verify bCallFidMatch skips nulled sessions: targets == 0. */
-    bApiCallRegister(dummy_handler, 0x2004, NULL);
-    send_text(conn, "{\"FID\":8196,\"FLAGS\":0,\"SID\":1}");  /* 0x2004 */
+    bApiCallRegister(dummy_handler, "frm.bcast", NULL);
+    send_text(conn, "{\"FID\":\"frm.bcast\",\"FLAGS\":0,\"SID\":1}");
     ws_server_on_disconnect(conn);
     uint8_t buf[] = "{}";
-    LONGS_EQUAL(0, bApiCallSendJsonFidGroup(0x2004, buf, 2));
+    LONGS_EQUAL(0, bApiCallSendJsonFidGroup("frm.bcast", buf, 2));
 }
 
 TEST(WsServerFrame, DeeplyNestedJsonIsDroppedSafely) {
-    /* Ровно то, что роняло устройство: cJSON разбирал это рекурсивно и на
+    /* Ровно то, что роняло устройство: прежний разбор шёл рекурсивно и на
      * глубине ~400 заканчивал стек задачи httpd. Разбор на jsmn итеративный,
      * токенов на такую вложенность не хватает — кадр отбрасывается, память под
      * него освобождается (проверяет LeakSanitizer). */
-    std::string deep = "{\"FID\":1,\"FLAGS\":0,\"SID\":1,\"ARG\":";
+    std::string deep = "{\"FID\":\"frm.deep\",\"FLAGS\":0,\"SID\":1,\"ARG\":";
     deep.append(500, '[');
     deep.append(500, ']');
     deep += "}";
@@ -288,7 +342,7 @@ TEST_GROUP(WsServerFragments) {
         ws_server_init();
         conn = ws_conn_stub_make(1);
         ws_server_on_connect(conn);
-        bApiCallRegister(dummy_handler, 0x2008, NULL);
+        bApiCallRegister(dummy_handler, "frag.one", NULL);
     }
     void teardown() {
         ws_server_on_disconnect(conn);
@@ -300,7 +354,7 @@ TEST_GROUP(WsServerFragments) {
 TEST(WsServerFragments, MessageIsAssembledFromParts) {
     /* Сообщение, разрезанное на три кадра, должно дойти до обработчика целиком:
      * первый фрагмент идёт с FIN=0, дальше — продолжения (WS_FRAME_CONT). */
-    const char *p1 = "{\"FID\":8200,\"FLAGS\":0,";
+    const char *p1 = "{\"FID\":\"frag.one\",\"FLAGS\":0,";
     const char *p2 = "\"SID\":1,";
     const char *p3 = "\"ARG\":{}}";
     ws_server_on_frame(conn, WS_FRAME_TEXT, heap_str(p1), strlen(p1), 0);
@@ -318,14 +372,16 @@ TEST(WsServerFragments, ContinuationWithoutStartIsDropped) {
 TEST(WsServerFragments, UnfinishedAssemblyIsDroppedOnNewMessage) {
     /* Начали собирать, но пришло новое сообщение: недособранное выбрасываем
      * (иначе оно склеилось бы с чужими данными), а новое обрабатываем. */
-    ws_server_on_frame(conn, WS_FRAME_TEXT, heap_str("{\"FID\":8200,"), 12, 0);
-    send_text(conn, "{\"FID\":9999,\"FLAGS\":0,\"SID\":1}");
+    const char *part = "{\"FID\":\"frag.one\",";
+    ws_server_on_frame(conn, WS_FRAME_TEXT, heap_str(part), strlen(part), 0);
+    send_text(conn, "{\"FID\":\"frm.unknown\",\"FLAGS\":0,\"SID\":1}");
     LONGS_EQUAL(1, ws_conn_stub_send_calls(conn));   /* ответ NO_HANDLER */
 }
 
 TEST(WsServerFragments, DisconnectReleasesPartialAssembly) {
     /* Незавершённый сбор не должен утечь при обрыве соединения (LeakSanitizer). */
-    ws_server_on_frame(conn, WS_FRAME_TEXT, heap_str("{\"FID\":8200,"), 12, 0);
+    const char *part = "{\"FID\":\"frag.one\",";
+    ws_server_on_frame(conn, WS_FRAME_TEXT, heap_str(part), strlen(part), 0);
     ws_server_on_disconnect(conn);
     ws_conn_set_user_data(conn, NULL);
 }
@@ -351,8 +407,8 @@ TEST_GROUP(WsServerWorkCycle) {
 TEST(WsServerWorkCycle, HandlerGetsPulsesWithoutData) {
     /* Имя вызова и такт работы различаются только данными: такт приходит с
      * data == NULL и не несёт запроса клиента. */
-    bApiCallRegister(long_handler, 0x2006, NULL);
-    send_text(conn, "{\"FID\":8198,\"FLAGS\":0,\"SID\":1}");  /* 0x2006 */
+    bApiCallRegister(long_handler, "cycle.pulse", NULL);
+    send_text(conn, "{\"FID\":\"cycle.pulse\",\"FLAGS\":0,\"SID\":1}");
     ws_server_test_worker_step();          /* первичный вызов — уже с данными */
     /* Шаг задачи сам состоит из такта работы, поэтому считаем прирост, а не
      * абсолютное значение. */
@@ -369,8 +425,8 @@ TEST(WsServerWorkCycle, FinishedCallGetsNoMorePulses) {
     /* Обработчик вернул 0 — вызов завершён и снят со списка: следующий такт
      * работы до него уже не доходит (иначе вызов с контекстом копился бы в
      * списке навсегда — замерено накопление 215 вызовов за минуту). */
-    bApiCallRegister(long_handler, 0x2007, NULL);
-    send_text(conn, "{\"FID\":8199,\"FLAGS\":0,\"SID\":1}");  /* 0x2007 */
+    bApiCallRegister(long_handler, "cycle.done", NULL);
+    send_text(conn, "{\"FID\":\"cycle.done\",\"FLAGS\":0,\"SID\":1}");
     ws_server_test_worker_step();
     const int base = long_handler_pulses;
     for (int i = 0; i < 3; i++) {
@@ -402,22 +458,26 @@ TEST_GROUP(WsServerFidQueue) {
     }
 };
 
+TEST(WsServerFidQueue, RegisterNullQueueFails) {
+    LONGS_EQUAL(0, ws_server_register_fid_queue("q.null", NULL));
+}
+
 TEST(WsServerFidQueue, RegisterQueueSucceeds) {
     void *q = ws_hal_queue_create(4, sizeof(void *));
-    LONGS_EQUAL(1, ws_server_register_fid_queue(0x3001, q));
+    LONGS_EQUAL(1, ws_server_register_fid_queue("q.one", q));
 }
 
 TEST(WsServerFidQueue, RegisterDuplicateQueueFails) {
     void *q = ws_hal_queue_create(4, sizeof(void *));
-    ws_server_register_fid_queue(0x3002, q);
-    LONGS_EQUAL(0, ws_server_register_fid_queue(0x3002, q));
+    ws_server_register_fid_queue("q.two", q);
+    LONGS_EQUAL(0, ws_server_register_fid_queue("q.two", q));
 }
 
 TEST(WsServerFidQueue, TextWithQueuedFidEnqueuesNoImmediateSend) {
     /* Queue-routed FID: call enqueued for worker forwarding, no immediate reply */
     void *q = ws_hal_queue_create(4, sizeof(void *));
-    ws_server_register_fid_queue(0x3003, q);
-    send_text(conn, "{\"FID\":12291,\"FLAGS\":0,\"SID\":1}");  /* 0x3003 */
+    ws_server_register_fid_queue("q.three", q);
+    send_text(conn, "{\"FID\":\"q.three\",\"FLAGS\":0,\"SID\":1}");
     LONGS_EQUAL(0, ws_conn_stub_send_calls(conn));
 }
 
@@ -445,7 +505,7 @@ TEST_GROUP(WsServerMultiClient) {
 
 TEST(WsServerMultiClient, ErrorReplyGoesOnlyToSender) {
     /* Unregistered FID → NO_HANDLER sent only to conn1, not conn2 */
-    send_text(conn1, "{\"FID\":9998,\"FLAGS\":0,\"SID\":1}");
+    send_text(conn1, "{\"FID\":\"multi.unknown\",\"FLAGS\":0,\"SID\":1}");
     LONGS_EQUAL(1, ws_conn_stub_send_calls(conn1));
     LONGS_EQUAL(0, ws_conn_stub_send_calls(conn2));
 }
@@ -466,9 +526,9 @@ TEST(WsServerMultiClient, DisconnectOneClientDoesNotBreakOther) {
 /* ── Additional WsServerRegister tests ───────────────────────────────── */
 
 TEST(WsServerRegister, ReregisterAfterUnregisterSucceeds) {
-    bApiCallRegister(dummy_handler, 0x4001, NULL);
-    bApiCallUnregister(0x4001);
-    LONGS_EQUAL(1, bApiCallRegister(dummy_handler, 0x4001, NULL));
+    bApiCallRegister(dummy_handler, "reg.four", NULL);
+    bApiCallUnregister("reg.four");
+    LONGS_EQUAL(1, bApiCallRegister(dummy_handler, "reg.four", NULL));
 }
 
 /* ── TEST_GROUP: WsServerApiCalls ────────────────────────────────────── */
@@ -484,7 +544,7 @@ TEST_GROUP(WsServerApiCalls) {
 };
 
 TEST(WsServerApiCalls, SendStatusNullCallReturnsFail) {
-    /* pxApiCall=NULL and ulFid=0 → invalid combination, returns 0 */
+    /* Вызов не задан и имя не задано — рассылать некому, возвращаем 0 */
     LONGS_EQUAL(0, bApiCallSendStatus(NULL, 0));
 }
 
@@ -495,7 +555,7 @@ TEST(WsServerApiCalls, SendJsonNullCallReturnsFail) {
 
 TEST(WsServerApiCalls, SendJsonFidGroupNoSubscribersReturnsFail) {
     uint8_t buf[] = "{}";
-    LONGS_EQUAL(0, bApiCallSendJsonFidGroup(0xDEAD, buf, 2));
+    LONGS_EQUAL(0, bApiCallSendJsonFidGroup("no.subscribers", buf, 2));
 }
 
 /* ── TEST_GROUP: ApiCallGetId ─────────────────────────────────────────── */
@@ -524,8 +584,8 @@ TEST(WsServerApiCallGetId, NullOutIdReturnsFail) {
 /* One test per fixed bug. The failures here are memory errors, so they are
  * only reliable under ASan (enabled in the Makefile). */
 
-#define REG_FID_HANDLER  0x6001   /* handler only, no peripheral queue */
-#define REG_FID_QUEUE    0x6002   /* routed to periph_q                */
+#define REG_FID_HANDLER  "regx.handler"   /* handler only, no peripheral queue */
+#define REG_FID_QUEUE    "regx.queue"     /* routed to periph_q                */
 
 TEST_GROUP(WsServerRegression) {
     ws_conn_t *conn;
@@ -557,7 +617,7 @@ TEST(WsServerRegression, PingFailOnLastPendingCallDoesNotTouchNullSession) {
      * through and store ulPingTs into NULL->ulPingTs (crash on target:
      * StoreProhibited, EXCVADDR=0x0000000c; on the 64-bit host ASan reports
      * the address as 0x10). */
-    send_text(conn, "{\"FID\":24577,\"FLAGS\":2,\"SID\":1}");  /* 0x6001 */
+    send_text(conn, "{\"FID\":\"regx.handler\",\"FLAGS\":2,\"SID\":1}");
     ws_conn_stub_set_send_result(conn, -1);
     ws_hal_stub_advance_tick(1000);   /* >= CONFIG_WEB_SOCKET_PING_DELAY */
 
@@ -574,8 +634,8 @@ TEST(WsServerRegression, ToDeleteFreesSameCallQueuedRightAfterIt) {
      * call with the same fd/FID/SID — including `next` when the client sent
      * the target call right after the delete. `item = next` then walked
      * freed memory. */
-    send_text(conn, "{\"FID\":24578,\"FLAGS\":8,\"SID\":7}");  /* 0x6002 */
-    send_text(conn, "{\"FID\":24578,\"FLAGS\":4,\"SID\":7}");
+    send_text(conn, "{\"FID\":\"regx.queue\",\"FLAGS\":8,\"SID\":7}");
+    send_text(conn, "{\"FID\":\"regx.queue\",\"FLAGS\":4,\"SID\":7}");
 
     ws_server_test_worker_step();
 

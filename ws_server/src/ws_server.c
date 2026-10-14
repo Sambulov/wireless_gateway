@@ -3,7 +3,6 @@
 #include <string.h>
 #include <stdbool.h>
 
-#include "cJSON.h"
 #include "GwJson.h"
 #include "CodeLib.h"
 #include "ws_hal.h"
@@ -19,7 +18,7 @@ static const char *TAG = "ws_server";
 typedef struct {
     __LinkedListObject__
     ApiHandler_t fHandler;
-    uint32_t ulFid;
+    char fid[API_FID_NAME_MAX];
     void *xHandlerContext;
 } ApiHandlerItem_t;
 
@@ -59,7 +58,7 @@ typedef struct {
     uint8_t  bHasSid;
     void *pxHandlerContext;
     ApiHandler_t fHandler;
-    uint32_t ulFid;
+    char fid[API_FID_NAME_MAX];
     uint32_t ulCallPending;
     /* Обработчику уже отдали первичный запрос: только после этого его можно
      * дёргать тактом работы, иначе он получит data == NULL раньше запроса. */
@@ -85,32 +84,25 @@ static LinkedList_t pxWsApiHandlers = NULL;
 static LinkedList_t pxWsApiCall = NULL;
 static LinkedList_t pxWsApiWaitingForResponse = NULL;
 static ws_queue_t xWsWorkerQueue = NULL;
-static uint32_t call_id = 1; /* 0 is reserved as "broadcast" sentinel in periph_msg.id */
 
-static ws_queue_t ws_get_fid_queue(uint32_t ulFid);
+static ws_queue_t ws_get_fid_queue(const char *name);
 
 void *get_ws_worker_queue(void) {
     return xWsWorkerQueue;
 }
 
 static uint8_t bHandlerFidMatch(LinkedListItem_t *item, void *arg) {
-    uint32_t fid = (uint32_t)arg;
-    return LinkedListGetObject(ApiHandlerItem_t, item)->ulFid == fid;
-}
-
-static uint8_t bCallClientMatch(LinkedListItem_t *item, void *arg) {
-    uint32_t fd  = cl_tuple_get(arg, 0, uint32_t);
-    uint32_t fid = cl_tuple_get(arg, 1, uint32_t);
-    ApiCall_t *call = LinkedListGetObject(ApiCall_t, item);
-    return call->session && (call->session->fd == fd) && (call->ulFid == fid);
+    const char *name = (const char *)arg;
+    return (name != NULL) && (strcmp(LinkedListGetObject(ApiHandlerItem_t, item)->fid, name) == 0);
 }
 
 static uint8_t bCallClientIdMatch(LinkedListItem_t *item, void *arg) {
     uint32_t fd  = cl_tuple_get(arg, 0, uint32_t);
-    uint32_t fid = cl_tuple_get(arg, 1, uint32_t);
+    const char *name = cl_tuple_get(arg, 1, const char *);
     uint32_t id  = cl_tuple_get(arg, 2, uint32_t);
     ApiCall_t *call = LinkedListGetObject(ApiCall_t, item);
-    return call->session && (call->session->fd == fd) && (call->ulFid == fid) && (call->ulId == id);
+    return call->session && (call->session->fd == (int)fd)
+           && (strcmp(call->fid, name) == 0) && (call->ulId == id);
 }
 
 static uint8_t bCallIdMatch(LinkedListItem_t *item, void *arg) {
@@ -119,9 +111,9 @@ static uint8_t bCallIdMatch(LinkedListItem_t *item, void *arg) {
 }
 
 static uint8_t bCallFidMatch(LinkedListItem_t *item, void *arg) {
-    uint32_t fid = (uint32_t)arg;
+    const char *name = (const char *)arg;
     ApiCall_t *call = LinkedListGetObject(ApiCall_t, item);
-    return ((call->ulFid == fid) && call->session);
+    return (name != NULL) && (strcmp(call->fid, name) == 0) && call->session;
 }
 
 static void vBreakApiCallByFd(LinkedListItem_t *item, void *arg) {
@@ -133,8 +125,9 @@ static void vBreakApiCallByFd(LinkedListItem_t *item, void *arg) {
 }
 
 static void vBreakApiCallByFid(LinkedListItem_t *item, void *arg) {
+    const char *name = (const char *)arg;
     ApiCall_t *call = LinkedListGetObject(ApiCall_t, item);
-    if(call->ulFid == (uint32_t)arg) {
+    if((name != NULL) && (strcmp(call->fid, name) == 0)) {
         ws_hal_log_i(TAG, "Break call id:%lu", call->ulId);
         call->session = NULL;
     }
@@ -148,10 +141,10 @@ static void vBreakApiCallsByFd(uint32_t timeout_ms, uint32_t fd) {
     }
 }
 
-static void vBreakApiCallsByFid(uint32_t timeout_ms, uint32_t fid) {
+static void vBreakApiCallsByFid(uint32_t timeout_ms, const char *name) {
     if(ws_hal_mutex_take(xWsApiMutex, timeout_ms)) {
-        ulLinkedListDoForeach(pxWsApiCall, vBreakApiCallByFid, (void *)fid);
-        ulLinkedListDoForeach(pxWsApiWaitingForResponse, vBreakApiCallByFid, (void *)fid);
+        ulLinkedListDoForeach(pxWsApiCall, vBreakApiCallByFid, (void *)name);
+        ulLinkedListDoForeach(pxWsApiWaitingForResponse, vBreakApiCallByFid, (void *)name);
         ws_hal_mutex_give(xWsApiMutex);
     }
 }
@@ -212,12 +205,14 @@ static void vWsTransferComplete_cb(int err, int fd, void *arg) {
         free(arg);
 }
 
-uint8_t bApiCallRegister(ApiHandler_t fHandler, uint32_t ulFid, void *pxContext) {
-    if((fHandler == NULL) ||
-       (ulFid == API_HANDLER_ID_GENEGAL) ||
+uint8_t bApiCallRegister(ApiHandler_t fHandler, const char *name, void *pxContext) {
+    char fid[API_FID_NAME_MAX];
+    /* Имя обязательно: раньше «нет FID» выражалось нулевым кодом, теперь —
+     * пустой строкой или NULL, и оба случая регистрацией не считаются. */
+    if((fHandler == NULL) || !bApiFidSet(fid, name) ||
        (!ws_hal_mutex_take(xWsApiMutex, 10))) return 0;
 
-    ApiHandlerItem_t *registered = LinkedListGetObject(ApiHandlerItem_t, pxLinkedListFindFirst(pxWsApiHandlers, bHandlerFidMatch, (void *)ulFid));
+    ApiHandlerItem_t *registered = LinkedListGetObject(ApiHandlerItem_t, pxLinkedListFindFirst(pxWsApiHandlers, bHandlerFidMatch, (void *)fid));
     if(registered != NULL) {
         ws_hal_mutex_give(xWsApiMutex);
         return 0;
@@ -228,22 +223,23 @@ uint8_t bApiCallRegister(ApiHandler_t fHandler, uint32_t ulFid, void *pxContext)
         return 0;
     }
     hd->fHandler = fHandler;
-    hd->ulFid = ulFid;
+    mem_cpy(hd->fid, fid, sizeof(hd->fid));
     hd->xHandlerContext = pxContext;
     vLinkedListInsertLast(&pxWsApiHandlers, LinkedListItem(hd));
-    ws_hal_log_i(TAG, "Api handler registered %lu", hd->ulFid);
+    ws_hal_log_i(TAG, "Api handler registered %s", hd->fid);
     ws_hal_mutex_give(xWsApiMutex);
     return 1;
 }
 
-uint8_t bApiCallUnregister(uint32_t ulFid) {
-    if((ulFid == API_HANDLER_ID_GENEGAL) ||
+uint8_t bApiCallUnregister(const char *name) {
+    char fid[API_FID_NAME_MAX];
+    if(!bApiFidSet(fid, name) ||
        (!ws_hal_mutex_take(xWsApiMutex, 10))) return 0;
-    ApiHandlerItem_t *registered = LinkedListGetObject(ApiHandlerItem_t, pxLinkedListFindFirst(pxWsApiHandlers, bHandlerFidMatch, (void *)ulFid));
+    ApiHandlerItem_t *registered = LinkedListGetObject(ApiHandlerItem_t, pxLinkedListFindFirst(pxWsApiHandlers, bHandlerFidMatch, (void *)fid));
     if(registered != NULL) {
-        vBreakApiCallsByFid(WS_HAL_WAIT_NONE, ulFid);
+        vBreakApiCallsByFid(WS_HAL_WAIT_NONE, fid);
         vLinkedListUnlink(LinkedListItem(registered));
-        ws_hal_log_i(TAG, "Api handler unregistered %08lx", registered->ulFid);
+        ws_hal_log_i(TAG, "Api handler unregistered %s", registered->fid);
         free(registered);
         ws_hal_mutex_give(xWsApiMutex);
         return 1;
@@ -287,12 +283,16 @@ static void _send_to_session(ApiCall_t *sub, ApiData_t *resp, int *res) {
     }
 }
 
-static uint8_t _bApiCallSendJson(void *pxApiCall, uint32_t ulFid, const uint8_t *ucJson, uint32_t ulLen) {
-    if(((pxApiCall == NULL) && (ulFid == 0)) || ((pxApiCall != NULL) && (ulFid != 0))) return 0;
+/* Ответ конкретному вызову (pxApiCall != NULL) или рассылка всем вызовам с
+ * этим именем (pxApiCall == NULL, задано имя). Смешивать нельзя: вызов уже
+ * знает своё имя, а рассылка — нет. */
+static uint8_t _bApiCallSendJson(void *pxApiCall, const char *group_name, const uint8_t *ucJson, uint32_t ulLen) {
+    if(((pxApiCall == NULL) && ((group_name == NULL) || !group_name[0])) ||
+       ((pxApiCall != NULL) && (group_name != NULL))) return 0;
 
     int res = 0;
     ApiCall_t *call = pxApiCall;
-    uint32_t fid_out = (call != NULL) ? call->ulFid : ulFid;
+    const char *fid_out = (call != NULL) ? call->fid : group_name;
     uint32_t sid = (call != NULL) ? call->ulId : 0;
 
     ws_hal_mutex_take(xWsApiMutex, WS_HAL_WAIT_FOREVER);
@@ -301,8 +301,8 @@ static uint8_t _bApiCallSendJson(void *pxApiCall, uint32_t ulFid, const uint8_t 
     if(call != NULL) {
         targets = (call->session != NULL) ? 1 : 0;
     } else {
-        targets = ulLinkedListCount(pxWsApiWaitingForResponse, bCallFidMatch, (void *)ulFid)
-                + ulLinkedListCount(pxWsApiCall, bCallFidMatch, (void *)ulFid);
+        targets = ulLinkedListCount(pxWsApiWaitingForResponse, bCallFidMatch, (void *)group_name)
+                + ulLinkedListCount(pxWsApiCall, bCallFidMatch, (void *)group_name);
     }
 
     if(targets == 0) {
@@ -313,14 +313,17 @@ static uint8_t _bApiCallSendJson(void *pxApiCall, uint32_t ulFid, const uint8_t 
     /* SID в ответе — только если клиент его назначил. Публичные подписки
      * (рассылка по FID без конкретного вызова) идут без SID всегда. */
     uint8_t has_sid = (call != NULL) && call->bHasSid;
-    char pucTemplate[] = "{\"FID\":\"0x%08lx\",\"SID\":\"0x%08lx\",\"ARG\":";
-    char pucTemplateNoSid[] = "{\"FID\":\"0x%08lx\",\"ARG\":";
-    uint32_t len = ulLen + sizeof(pucTemplate) + 6;
+    /* В ответе — то же имя, что прислал клиент. Шаблоны с запасом под имя и
+     * SID, длину берём по факту ниже. */
+    char pucTemplate[] = "{\"FID\":\"%s\",\"SID\":\"0x%08lx\",\"ARG\":";
+    char pucTemplateNoSid[] = "{\"FID\":\"%s\",\"ARG\":";
+    uint32_t len = ulLen + sizeof(pucTemplate) + sizeof(pucTemplateNoSid)
+                   + 2 * API_FID_NAME_MAX + 16;
 
     ApiData_t *resp = malloc(sizeof(ApiData_t) + len);
     if(resp != NULL) {
         int offset = has_sid
-                   ? sprintf((char *)resp->payload, pucTemplate, fid_out, sid)
+                   ? sprintf((char *)resp->payload, pucTemplate, fid_out, (unsigned long)sid)
                    : sprintf((char *)resp->payload, pucTemplateNoSid, fid_out);
         mem_cpy(&resp->payload[offset], ucJson, ulLen);
         offset += ulLen;
@@ -337,16 +340,16 @@ static uint8_t _bApiCallSendJson(void *pxApiCall, uint32_t ulFid, const uint8_t 
         if(call != NULL) {
             _send_to_session(call, resp, &res);
         } else {
-            LinkedListItem_t *item = pxLinkedListFindFirst(pxWsApiWaitingForResponse, bCallFidMatch, (void *)ulFid);
+            LinkedListItem_t *item = pxLinkedListFindFirst(pxWsApiWaitingForResponse, bCallFidMatch, (void *)group_name);
             while(item != NULL) {
                 ApiCall_t *sub = LinkedListGetObject(ApiCall_t, item);
-                item = pxLinkedListFindNextNoOverlap(item, bCallFidMatch, (void *)ulFid);
+                item = pxLinkedListFindNextNoOverlap(item, bCallFidMatch, (void *)group_name);
                 _send_to_session(sub, resp, &res);
             }
-            item = pxLinkedListFindFirst(pxWsApiCall, bCallFidMatch, (void *)ulFid);
+            item = pxLinkedListFindFirst(pxWsApiCall, bCallFidMatch, (void *)group_name);
             while(item != NULL) {
                 ApiCall_t *sub = LinkedListGetObject(ApiCall_t, item);
-                item = pxLinkedListFindNextNoOverlap(item, bCallFidMatch, (void *)ulFid);
+                item = pxLinkedListFindNextNoOverlap(item, bCallFidMatch, (void *)group_name);
                 _send_to_session(sub, resp, &res);
             }
         }
@@ -359,37 +362,40 @@ static uint8_t _bApiCallSendJson(void *pxApiCall, uint32_t ulFid, const uint8_t 
 }
 
 uint8_t bApiCallSendJson(void *pxApiCall, const uint8_t *ucJson, uint32_t ulLen) {
-    return _bApiCallSendJson(pxApiCall, 0, ucJson, ulLen);
+    return _bApiCallSendJson(pxApiCall, NULL, ucJson, ulLen);
 }
 
 uint8_t bApiCallSendStatus(void *pxApiCall, uint32_t ulSta) {
     uint8_t sta[21];
-    uint32_t len = sprintf((char *)sta, "{\"STA\":\"0x%08lx\"}", ulSta);
-    return _bApiCallSendJson(pxApiCall, 0, sta, len);
+    uint32_t len = sprintf((char *)sta, "{\"STA\":\"0x%08lx\"}", (unsigned long)ulSta);
+    return _bApiCallSendJson(pxApiCall, NULL, sta, len);
 }
 
-uint8_t bApiCallSendJsonFidGroup(uint32_t ulFid, const uint8_t *ucJson, uint32_t ulLen) {
-    return _bApiCallSendJson(NULL, ulFid, ucJson, ulLen);
+uint8_t bApiCallSendJsonFidGroup(const char *name, const uint8_t *ucJson, uint32_t ulLen) {
+    return _bApiCallSendJson(NULL, name, ucJson, ulLen);
 }
 
 /* --- FID → peripheral queue routing table -------------------------------- */
 
 typedef struct {
     __LinkedListObject__
-    uint32_t ulFid;
+    char fid[API_FID_NAME_MAX];
     void *xQueue;
 } FidQueueItem_t;
 
 static LinkedList_t pxWsFidQueues = NULL;
 
 static uint8_t bFidQueueMatch(LinkedListItem_t *item, void *arg) {
-    return LinkedListGetObject(FidQueueItem_t, item)->ulFid == (uint32_t)(uintptr_t)arg;
+    const char *name = (const char *)arg;
+    return (name != NULL) && (strcmp(LinkedListGetObject(FidQueueItem_t, item)->fid, name) == 0);
 }
 
-uint8_t ws_server_register_fid_queue(uint32_t ulFid, void *xQueue) {
+uint8_t ws_server_register_fid_queue(const char *name, void *xQueue) {
+    char fid[API_FID_NAME_MAX];
+    if(!bApiFidSet(fid, name) || !xQueue) return 0;
     if(!ws_hal_mutex_take(xWsApiMutex, 10)) return 0;
     FidQueueItem_t *existing = LinkedListGetObject(FidQueueItem_t,
-        pxLinkedListFindFirst(pxWsFidQueues, bFidQueueMatch, (void *)(uintptr_t)ulFid));
+        pxLinkedListFindFirst(pxWsFidQueues, bFidQueueMatch, (void *)fid));
     if(existing) {
         ws_hal_mutex_give(xWsApiMutex);
         return 0;
@@ -399,17 +405,18 @@ uint8_t ws_server_register_fid_queue(uint32_t ulFid, void *xQueue) {
         ws_hal_mutex_give(xWsApiMutex);
         return 0;
     }
-    fq->ulFid  = ulFid;
+    mem_cpy(fq->fid, fid, sizeof(fq->fid));
     fq->xQueue = xQueue;
     vLinkedListInsertLast(&pxWsFidQueues, LinkedListItem(fq));
-    ws_hal_log_i(TAG, "FID queue registered 0x%lx", ulFid);
+    ws_hal_log_i(TAG, "FID queue registered %s", fq->fid);
     ws_hal_mutex_give(xWsApiMutex);
     return 1;
 }
 
-static ws_queue_t ws_get_fid_queue(uint32_t ulFid) {
+static ws_queue_t ws_get_fid_queue(const char *name) {
+    if(!name || !name[0]) return NULL;
     FidQueueItem_t *fq = LinkedListGetObject(FidQueueItem_t,
-        pxLinkedListFindFirst(pxWsFidQueues, bFidQueueMatch, (void *)(uintptr_t)ulFid));
+        pxLinkedListFindFirst(pxWsFidQueues, bFidQueueMatch, (void *)name));
     return fq ? fq->xQueue : NULL;
 }
 
@@ -576,18 +583,19 @@ static void ws_server_on_text(ws_conn_t *conn, uint8_t *data, size_t len) {
         return;
     }
 
-    /* FID: число или hex-строка (например, "0x1012") */
-    uint32_t fid = 0;
-    if (!gw_json_id(&json, "FID", &fid) || fid == API_HANDLER_ID_GENEGAL) {
-        ws_hal_log_w(TAG, "Api call bad FID property");
+    /* FID — только строка: имя вида "<подсистема>.<действие>". Числовой код
+     * отклоняем: протокол переведён на имена целиком, и принимать оба вида
+     * значило бы держать два протокола в одном месте. */
+    if (!gw_json_str(&json, "FID", wscd->fid, sizeof(wscd->fid))) {
+        ws_hal_log_w(TAG, "Api call bad FID property (нужно имя строкой, например \"uart2.modbus\")");
         free(data);
         free(wscd);
         return;
     }
-    wscd->ulFid = fid;
 
     /* ARG отдаём обработчику как есть — срезом исходного кадра, без дерева и
-     * без печати в строку (у cJSON это была вторая аллокация на запрос). */
+     * без печати в строку (у прежнего сборщика JSON это была вторая
+     * аллокация на запрос). */
     const char *arg_s = NULL;
     size_t      arg_n = 0;
     if (gw_json_raw(&json, "ARG", &arg_s, &arg_n)) {
@@ -619,7 +627,7 @@ static void ws_server_on_text(ws_conn_t *conn, uint8_t *data, size_t len) {
     /* FLAGS остаётся обязательным полем протокола */
     int32_t flags;
     if (!gw_json_int(&json, "FLAGS", &flags)) {
-        ws_hal_log_w(TAG, "Missing FLAGS, dropping call fid:%lu", wscd->ulFid);
+        ws_hal_log_w(TAG, "Missing FLAGS, dropping call fid:%s", wscd->fid);
         bApiCallSendStatus(wscd, API_CALL_ERROR_STATUS_BAD_REQ);
         free(wscd->pucReqData);
         free(wscd);
@@ -638,7 +646,8 @@ static void ws_server_on_text(ws_conn_t *conn, uint8_t *data, size_t len) {
     }
 
     /* Токены указывают внутрь кадра, поэтому буфер живёт до последнего чтения
-     * из них (в cJSON дерево владело своими копиями строк и это было неважно). */
+     * из них (у прежнего сборщика JSON дерево владело своими копиями строк, и
+     * это было неважно). */
     free(data);
 
     ws_hal_mutex_take(xWsApiMutex, WS_HAL_WAIT_FOREVER);
@@ -647,10 +656,10 @@ static void ws_server_on_text(ws_conn_t *conn, uint8_t *data, size_t len) {
     ApiHandlerItem_t *hlr = LinkedListGetObject(ApiHandlerItem_t,
                                                 pxLinkedListFindFirst(pxWsApiHandlers,
                                                                       bHandlerFidMatch,
-                                                                      (void *)wscd->ulFid));
-    uint8_t has_queue = (ws_get_fid_queue(wscd->ulFid) != NULL);
+                                                                      (void *)wscd->fid));
+    uint8_t has_queue = (ws_get_fid_queue(wscd->fid) != NULL);
     if(!hlr && !has_queue) {
-        ws_hal_log_w(TAG, "No handler or queue for FID %lu, dropping call id:%lu", wscd->ulFid, wscd->ulId);
+        ws_hal_log_w(TAG, "No handler or queue for FID %s, dropping call id:%lu", wscd->fid, wscd->ulId);
         bApiCallSendStatus(wscd, API_CALL_ERROR_STATUS_NO_HANDLER);
         free(wscd->pucReqData);
         free(wscd);
@@ -660,7 +669,7 @@ static void ws_server_on_text(ws_conn_t *conn, uint8_t *data, size_t len) {
             wscd->pxHandlerContext = hlr->xHandlerContext;
         }
         vLinkedListInsertLast(&pxWsApiCall, LinkedListItem(wscd));
-        ws_hal_log_d(TAG, "New api call %lu enqueued with id:%lu", wscd->ulFid, wscd->ulId);
+        ws_hal_log_d(TAG, "New api call %s enqueued with id:%lu", wscd->fid, wscd->ulId);
     }
 
     ws_hal_mutex_give(xWsApiMutex);
@@ -682,7 +691,9 @@ static void vForwardCallToPeripheral(ApiCall_t *call, ws_queue_t queue) {
     webapi_msg_t *msg = malloc(sizeof(webapi_msg_t));
     if(!msg)
         return;
-    msg->fid = call->ulFid;
+    /* Имя копируем, а не передаём указателем: вызов живёт на своём стеке
+     * задачи, а сообщение уезжает в очередь другого. */
+    bApiFidSet(msg->fid, call->fid);
     msg->id  = call->ulId;
     msg->len = call->ulReqDataLen;
     /* Socket the request came in on, so handlers can tell AP clients from
@@ -701,7 +712,7 @@ static void vForwardCallToPeripheral(ApiCall_t *call, ws_queue_t queue) {
             msg->data = NULL;
         }
         if(!ws_hal_queue_send(queue, &msg, WS_HAL_WAIT_NONE)) {
-            ws_hal_log_w(TAG, "periph queue full, FID 0x%lx dropped", call->ulFid);
+            ws_hal_log_w(TAG, "periph queue full, FID %s dropped", call->fid);
             free(msg->data);
             free(msg);
             bApiCallSendStatus(call, API_CALL_STATUS_BUSY);
@@ -712,7 +723,7 @@ static void vForwardCallToPeripheral(ApiCall_t *call, ws_queue_t queue) {
         if(ws_hal_queue_send(queue, &msg, WS_HAL_WAIT_NONE)) {
             call->pucReqData = NULL; /* ownership transferred to msg */
         } else {
-            ws_hal_log_w(TAG, "periph queue full, FID 0x%lx dropped", call->ulFid);
+            ws_hal_log_w(TAG, "periph queue full, FID %s dropped", call->fid);
             free(msg);
             bApiCallSendStatus(call, API_CALL_STATUS_BUSY);
             call->session = NULL;
@@ -827,7 +838,7 @@ static void vWsApiCallWorkerStep(void) {
                 bApiCallSendStatus(call, API_CALL_STATUS_DELIVERED);
                 if(call->session) {
                     void *key = cl_tuple_make((void *)(uintptr_t)call->session->fd,
-                                             (void *)(uintptr_t)call->ulFid,
+                                             (void *)call->fid,
                                              (void *)(uintptr_t)call->ulId);
                     call->session = NULL;
                     LinkedListItem_t *found;
@@ -865,7 +876,7 @@ static void vWsApiCallWorkerStep(void) {
                 continue;
             }
 
-            ws_queue_t queue = ws_get_fid_queue(call->ulFid);
+            ws_queue_t queue = ws_get_fid_queue(call->fid);
             if(queue) {
                 vForwardCallToPeripheral(call, queue);
                 vLinkedListInsertLast(&pxWsApiWaitingForResponse, item);
@@ -903,7 +914,7 @@ static void vWsApiCallWorkerStep(void) {
                     free(call);
                 }
             } else {
-                ws_hal_log_i(TAG, "no handler or queue for FID %lu, send status INVALID", call->ulFid);
+                ws_hal_log_i(TAG, "no handler or queue for FID %s, send status INVALID", call->fid);
                 bApiCallSendStatus(call, API_CALL_STATUS_INVALID);
                 vLinkedListUnlink(item);
                 free(call->pucReqData);
@@ -927,8 +938,8 @@ static void vWsApiCallWorkerStep(void) {
                     if(c->fHandler)
                         c->fHandler(c, &c->pxHandlerContext, periph_msg.data, periph_msg.len);
                     if(periph_msg.len) {
-                        ws_hal_log_i(TAG, "broadcast fid:%lu len:%lu", periph_msg.fid, periph_msg.len);
-                        _bApiCallSendJson(c, 0, periph_msg.data, periph_msg.len);
+                        ws_hal_log_i(TAG, "broadcast fid:%s len:%lu", periph_msg.fid, periph_msg.len);
+                        _bApiCallSendJson(c, NULL, periph_msg.data, periph_msg.len);
                     }
                     if(!(c->flags & CALL_FLAG_LONG_TERM)) {
                         vLinkedListUnlink(it);
@@ -958,7 +969,7 @@ static void vWsApiCallWorkerStep(void) {
                 call2->fHandler(call2, &call2->pxHandlerContext, periph_msg.data, periph_msg.len);
             if(periph_msg.len) {
                 ws_hal_log_d(TAG, "sent: %s : %lu", periph_msg.data, periph_msg.len);
-                _bApiCallSendJson(call2, 0, periph_msg.data, periph_msg.len);
+                _bApiCallSendJson(call2, NULL, periph_msg.data, periph_msg.len);
             }
 
             if(!(call2->flags & CALL_FLAG_LONG_TERM)) {
@@ -1040,12 +1051,12 @@ void ws_server_test_reset(void) {
 #endif
 
 
-uint8_t api_call_register(api_handler_t, uint32_t, void *) __attribute__ ((alias ("bApiCallRegister")));
-uint8_t api_call_unregister(uint32_t) __attribute__ ((alias ("bApiCallUnregister")));
+uint8_t api_call_register(api_handler_t, const char *, void *) __attribute__ ((alias ("bApiCallRegister")));
+uint8_t api_call_unregister(const char *) __attribute__ ((alias ("bApiCallUnregister")));
 
 uint8_t api_call_get_id(void *, uint32_t *) __attribute__ ((alias ("bApiCallGetId")));
 void api_call_complete(void *) __attribute__ ((alias ("vApiCallComplete")));
 
 uint8_t api_call_send_status(void *, uint32_t) __attribute__ ((alias ("bApiCallSendStatus")));
 uint8_t api_call_send_json(void *, const uint8_t *, uint32_t) __attribute__ ((alias ("bApiCallSendJson")));
-uint8_t api_call_send_json_fid_group(uint32_t, const uint8_t *, uint32_t) __attribute__ ((alias ("bApiCallSendJsonFidGroup")));
+uint8_t api_call_send_json_fid_group(const char *, const uint8_t *, uint32_t) __attribute__ ((alias ("bApiCallSendJsonFidGroup")));

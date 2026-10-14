@@ -11,7 +11,6 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
-#include "cJSON.h"
 
 #include <lwip/sockets.h>
 #include <esp_netif.h>

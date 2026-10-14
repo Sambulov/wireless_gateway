@@ -118,8 +118,8 @@
         <label>MB адрес:&nbsp;<input type="number" id="mb-addr" value="1" min="1" max="247" style="width:60px"></label>
         <label>UART:&nbsp;
             <select id="uart-sel">
-                <option value="4371">UART1 (0x1113)</option>
-                <option value="4387">UART2 (0x1123)</option>
+                <option value="uart1.modbus">UART1</option>
+                <option value="uart2.modbus" selected>UART2 (RS-485)</option>
             </select>
         </label>
         <button onclick="reconnect()">Переподключить</button>
@@ -212,7 +212,7 @@
 
         <!-- UART port config -->
         <div class="config-card">
-            <h3>UART шлюза (FID 0x1010 / 0x1020)</h3>
+            <h3>UART шлюза</h3>
             <div class="cfg-row">
                 <label>Скорость</label>
                 <select id="uart-baud">
@@ -349,7 +349,7 @@
     let sidCounter = 1;
     let _pollSentAt = 0;
 
-    function getFid()    { return parseInt(document.getElementById('uart-sel').value); }
+    function getFid()    { return document.getElementById('uart-sel').value; }
     function getMbAddr() { return parseInt(document.getElementById('mb-addr').value) || 1; }
     function nextSid()   { return sidCounter++ & 0xffff; }
 
@@ -418,7 +418,7 @@
     function onMsg(evt) {
         let obj;
         try { obj = JSON.parse(evt.data); } catch { return; }
-        if (parseInt(obj.FID, 16) !== getFid()) return;
+        if (obj.FID !== getFid()) return;
         const arg = obj.ARG;
         if (_writeSentAt > 0 && arg && parseInt(arg.STA, 16) === 0x00000003) {
             _writeSentAt = 0;
@@ -595,8 +595,8 @@
 
     function sendUartConfig() {
         const modbusReqFid = getFid();
-        // map MODBUS_REQ FID → UART_CNF FID: 0x1113→0x1010, 0x1123→0x1020
-        const cnfFid = modbusReqFid === 0x1113 ? 0x1010 : 0x1020;
+        // имя запроса к прибору → имя настройки того же порта
+        const cnfFid = (modbusReqFid === 'uart1.modbus') ? 'uart1.config' : 'uart2.config';
         const arg = {
             BR:  parseInt(document.getElementById('uart-baud').value),
             WL:  parseInt(document.getElementById('uart-wl').value),

@@ -84,8 +84,8 @@
             <button id="map-reload" type="button">Обновить список</button>
             <div><label class="field" for="port-sel">Порт шлюза</label>
                  <select id="port-sel">
-                     <option value="4387" selected>UART2 (RS485, 0x1123)</option>
-                     <option value="4371">UART1 (0x1113)</option>
+                     <option value="4387" selected>UART2 (RS485)</option>
+                     <option value="4371">UART1</option>
                  </select></div>
             <div><label class="field" for="mb-addr">Адрес прибора</label>
                  <input type="number" id="mb-addr" min="1" max="247" value="1" style="width:80px"></div>
@@ -395,7 +395,11 @@ let currentGroup = null;
 
 const $ = id => document.getElementById(id);
 
-const PORT_FID = { 4387: { read: 0x1123, cfg: 0x1020 }, 4371: { read: 0x1113, cfg: 0x1010 } };
+/* Имена FID вместо кодов: подсистема.действие. Порт виден по имени. */
+const PORT_FID = {
+    4387: { read: 'uart2.modbus', cfg: 'uart2.config' },
+    4371: { read: 'uart1.modbus', cfg: 'uart1.config' },
+};
 
 /* ── WebSocket к шлюзу ───────────────────────────────────────────────────── */
 
@@ -458,7 +462,7 @@ async function withRetry(what, tries, fn) {
 
 async function loadMapList() {
     const sel = $('map-sel');
-    const res = await withRetry('Список карт', 4, () => wsSend(0x0014, { PATH: REGMAP_DIR }, 8000));
+    const res = await withRetry('Список карт', 4, () => wsSend('sys.files', { PATH: REGMAP_DIR }, 8000));
     if (!res || res.ERR) {
         sel.innerHTML = '<option>— карты не найдены —</option>';
         msg('conn-msg', `Не удалось прочитать каталог ${REGMAP_DIR}. `

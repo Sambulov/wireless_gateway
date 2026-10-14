@@ -5,7 +5,6 @@
 
 #include "app.h"
 #include "uart.h"
-#include "cJSON.h"
 #include "GwJson.h"
 #include "web_api.h"
 #include "ws_hal.h"
@@ -22,7 +21,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-/* System API (FIDs 0x0001, 0x0010..0x0014, see app.h).
+/* System API (FID names echo, wifi.sta/ap, sys.info/reboot/files/net, see app.h).
  *
  * ws_server only forwards a call to its handler when the response comes back
  * from a peripheral queue, so every request-serving FID needs a queue of its
@@ -64,39 +63,64 @@ static void netif_ip_str(const char *ifkey, char *out, size_t out_size) {
     snprintf(out, out_size, IPSTR, IP2STR(&ip.ip));
 }
 
-static cJSON *make_answer(const char *sta) {
-    cJSON *json = cJSON_CreateObject();
-    if (json) cJSON_AddStringToObject(json, "STA", sta);
-    return json;
+/* Ответ собирается прямо в буфер, без дерева и без узлов: раньше на каждый
+ * объект, ключ и значение прежний сборщик делал отдельным malloc, а потом весь
+ * ответ печатался ещё одной аллокацией.
+ *
+ * Буфер статический, а не на стеке: задача обслуживает запросы по одному, а
+ * стек у ws_sys всего 5 КБ, тогда как листинг каталога бывает в килобайты.
+ * Единственная аллокация за ответ — копия готового текста: владение ею
+ * переходит к каркасу, который её освободит. */
+/* Хватает с запасом: самый большой ответ — листинг каталога (имя файла до 255
+ * байт плюс размер и признак каталога, то есть ~290 байт на запись), остальные
+ * ответы в сотни байт. Не влезло — отвечаем отказом NOMEM, за границу буфера не
+ * пишем. */
+#define SYS_RESP_MAX 8192
+static char       sys_resp_buf[SYS_RESP_MAX];
+static gw_jsonw_t sys_w;
+
+/* Корень ответа — объект; дальше обработчик дописывает поля */
+static void resp_begin(void) {
+    gw_jsonw_reset(&sys_w);
+    gw_jsonw_obj(&sys_w, NULL);
 }
 
 /* A short machine-readable failure for the configuration page */
-static cJSON *make_error(const char *sta, const char *err, const char *msg) {
-    cJSON *json = make_answer(sta);
-    if (json) {
-        cJSON_AddStringToObject(json, "ERR", err);
-        if (msg) cJSON_AddStringToObject(json, "MSG", msg);
-    }
-    return json;
+static void resp_error(const char *sta, const char *err, const char *msg) {
+    gw_jsonw_str(&sys_w, "STA", sta);
+    if (err) gw_jsonw_str(&sys_w, "ERR", err);
+    if (msg) gw_jsonw_str(&sys_w, "MSG", msg);
+}
+
+static void resp_ok(void) {
+    resp_error(SYS_OK, NULL, NULL);
 }
 
 /* Hands the answer to ws_server, which owns the buffer from here on */
-static void send_response(uint32_t id, uint32_t fid, cJSON *json) {
+static void send_response(uint32_t id, const char *fid) {
+    if (!gw_jsonw_ok(&sys_w)) {
+        ESP_LOGE(TAG, "Ответ не влез в %d байт — отвечаю отказом", SYS_RESP_MAX);
+        resp_begin();
+        resp_error(SYS_NO_MEM, "NOMEM", NULL);
+    }
+    size_t len = gw_jsonw_finish(&sys_w);
+
     webapi_msg_t msg = {0};
-    if (json) {
-        char *txt = cJSON_PrintUnformatted(json);
-        if (txt) {
-            msg.data = (uint8_t *)txt;
-            msg.len  = strlen(txt);
-        }
+    /* +1 и ноль на конце — как было у прежнего сборщика: каркас видит в ответе
+     * C-строку (в частности, логирует её), а длину берёт отдельно. */
+    msg.data = malloc(len + 1);
+    if (msg.data) {
+        memcpy(msg.data, sys_resp_buf, len);
+        msg.data[len] = '\0';
+        msg.len = len;
     }
     msg.id  = id;
-    msg.fid = fid;
+    bApiFidSet(msg.fid, fid);
     if (!ws_hal_queue_send(get_ws_worker_queue(), &msg, WS_HAL_WAIT_NONE))
         free(msg.data);
 }
 
-static void send_verbatim(uint32_t id, uint32_t fid, const uint8_t *data, uint32_t len) {
+static void send_verbatim(uint32_t id, const char *fid, const uint8_t *data, uint32_t len) {
     webapi_msg_t msg = {0};
     static const char null_json[] = "null";
 
@@ -114,7 +138,7 @@ static void send_verbatim(uint32_t id, uint32_t fid, const uint8_t *data, uint32
         }
     }
     msg.id  = id;
-    msg.fid = fid;
+    bApiFidSet(msg.fid, fid);
     if (!ws_hal_queue_send(get_ws_worker_queue(), &msg, WS_HAL_WAIT_NONE))
         free(msg.data);
 }
@@ -133,19 +157,19 @@ static uint8_t config_allowed(int fd, uint8_t clients) {
 }
 
 /* Refusal that tells the page what exactly is missing */
-static cJSON *access_denied(int fd, uint8_t clients) {
-    cJSON *resp = request_from_softap(fd)
-        ? make_error(SYS_NO_ACCESS, "AP_CLIENTS",
-                     "Exactly one client must be connected to the softAP")
-        : make_error(SYS_NO_ACCESS, "AP_ONLY",
-                     "Wi-Fi and network settings can only be changed from the softAP");
-    if (resp) cJSON_AddNumberToObject(resp, "CLIENTS", clients);
-    return resp;
+static void resp_denied(int fd, uint8_t clients) {
+    if (request_from_softap(fd))
+        resp_error(SYS_NO_ACCESS, "AP_CLIENTS",
+                   "Exactly one client must be connected to the softAP");
+    else
+        resp_error(SYS_NO_ACCESS, "AP_ONLY",
+                   "Wi-Fi and network settings can only be changed from the softAP");
+    gw_jsonw_int(&sys_w, "CLIENTS", clients);
 }
 
-/* ── 0x0010 station (STA) credentials ────────────────────────────────────── */
+/* ── wifi.sta: station (STA) credentials ────────────────────────────────────── */
 
-static cJSON *handle_sta(app_context_t *app, const uint8_t *data, uint32_t len, int fd) {
+static void handle_sta(app_context_t *app, const uint8_t *data, uint32_t len, int fd) {
     uint8_t clients = wifi_ap_clients_count();
     uint8_t allowed = config_allowed(fd, clients);
 
@@ -165,27 +189,29 @@ static cJSON *handle_sta(app_context_t *app, const uint8_t *data, uint32_t len, 
                     && gw_json_str(&json, "PASS", pass, sizeof(pass));
 
     if (!write) {
-        cJSON *resp = make_answer(SYS_OK);
-        if (!resp) return NULL;
-        cJSON_AddStringToObject(resp, "SSID", (char *)app->sta_cnf.sta.ssid);
-        cJSON_AddStringToObject(resp, "PASS", allowed ? (char *)app->sta_cnf.sta.password : "");
-        cJSON_AddBoolToObject(resp, "PASS_HIDDEN", !allowed);
-        cJSON_AddBoolToObject(resp, "FROM_AP", request_from_softap(fd));
-        cJSON_AddNumberToObject(resp, "CLIENTS", clients);
-        return resp;
+        resp_ok();
+        gw_jsonw_str(&sys_w, "SSID", (char *)app->sta_cnf.sta.ssid);
+        gw_jsonw_str(&sys_w, "PASS", allowed ? (char *)app->sta_cnf.sta.password : "");
+        gw_jsonw_bool(&sys_w, "PASS_HIDDEN", !allowed);
+        gw_jsonw_bool(&sys_w, "FROM_AP", request_from_softap(fd));
+        gw_jsonw_int(&sys_w, "CLIENTS", clients);
+        return;
     }
 
     if (!allowed) {
             ESP_LOGW(TAG, "STA credentials refused (from_ap=%u clients=%u)",
                  request_from_softap(fd), clients);
-        return access_denied(fd, clients);
+        resp_denied(fd, clients);
+        return;
     }
 
     if (ssid[0] == '\0' || strlen(ssid) > SSID_MAX) {
-            return make_error(SYS_BAD_ARG, "SSID", "SSID must be 1..31 characters");
+        resp_error(SYS_BAD_ARG, "SSID", "SSID must be 1..31 characters");
+        return;
     }
     if (!wifi_password_valid(pass)) {
-            return make_error(SYS_BAD_ARG, "PASS", "Password must be 8..63 characters or empty");
+        resp_error(SYS_BAD_ARG, "PASS", "Password must be 8..63 characters or empty");
+        return;
     }
 
     strlcpy((char *)app->sta_cnf.sta.ssid, ssid, sizeof(app->sta_cnf.sta.ssid));
@@ -200,18 +226,18 @@ static cJSON *handle_sta(app_context_t *app, const uint8_t *data, uint32_t len, 
     }
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "STA configuration failed: %s", esp_err_to_name(err));
-        return make_error(SYS_INTERNAL, "WIFI", esp_err_to_name(err));
+        resp_error(SYS_INTERNAL, "WIFI", esp_err_to_name(err));
+        return;
     }
 
     ESP_LOGI(TAG, "STA set to SSID '%s', connecting...", app->sta_cnf.sta.ssid);
-    cJSON *resp = make_answer(SYS_OK);
-    if (resp) cJSON_AddStringToObject(resp, "SSID", (char *)app->sta_cnf.sta.ssid);
-    return resp;
+    resp_ok();
+    gw_jsonw_str(&sys_w, "SSID", (char *)app->sta_cnf.sta.ssid);
 }
 
-/* ── 0x0011 softAP credentials ───────────────────────────────────────────── */
+/* ── wifi.ap: softAP credentials ───────────────────────────────────────────── */
 
-static cJSON *handle_ap(app_context_t *app, const uint8_t *data, uint32_t len, int fd) {
+static void handle_ap(app_context_t *app, const uint8_t *data, uint32_t len, int fd) {
     uint8_t clients = wifi_ap_clients_count();
     uint8_t allowed = config_allowed(fd, clients);
 
@@ -226,27 +252,29 @@ static cJSON *handle_ap(app_context_t *app, const uint8_t *data, uint32_t len, i
                     && gw_json_str(&json, "PASS", pass, sizeof(pass));
 
     if (!write) {
-        cJSON *resp = make_answer(SYS_OK);
-        if (!resp) return NULL;
-        cJSON_AddStringToObject(resp, "SSID", (char *)app->ap_cnf.ap.ssid);
-        cJSON_AddStringToObject(resp, "PASS", allowed ? (char *)app->ap_cnf.ap.password : "");
-        cJSON_AddBoolToObject(resp, "PASS_HIDDEN", !allowed);
-        cJSON_AddBoolToObject(resp, "FROM_AP", request_from_softap(fd));
-        cJSON_AddNumberToObject(resp, "CLIENTS", clients);
-        return resp;
+        resp_ok();
+        gw_jsonw_str(&sys_w, "SSID", (char *)app->ap_cnf.ap.ssid);
+        gw_jsonw_str(&sys_w, "PASS", allowed ? (char *)app->ap_cnf.ap.password : "");
+        gw_jsonw_bool(&sys_w, "PASS_HIDDEN", !allowed);
+        gw_jsonw_bool(&sys_w, "FROM_AP", request_from_softap(fd));
+        gw_jsonw_int(&sys_w, "CLIENTS", clients);
+        return;
     }
 
     if (!allowed) {
             ESP_LOGW(TAG, "AP credentials refused (from_ap=%u clients=%u)",
                  request_from_softap(fd), clients);
-        return access_denied(fd, clients);
+        resp_denied(fd, clients);
+        return;
     }
 
     if (ssid[0] == '\0' || strlen(ssid) > SSID_MAX) {
-            return make_error(SYS_BAD_ARG, "SSID", "SSID must be 1..31 characters");
+        resp_error(SYS_BAD_ARG, "SSID", "SSID must be 1..31 characters");
+        return;
     }
     if (!wifi_password_valid(pass)) {
-            return make_error(SYS_BAD_ARG, "PASS", "Password must be 8..63 characters or empty");
+        resp_error(SYS_BAD_ARG, "PASS", "Password must be 8..63 characters or empty");
+        return;
     }
 
     strlcpy((char *)app->ap_cnf.ap.ssid, ssid, sizeof(app->ap_cnf.ap.ssid));
@@ -257,24 +285,22 @@ static cJSON *handle_ap(app_context_t *app, const uint8_t *data, uint32_t len, i
     esp_err_t err = esp_wifi_set_config(WIFI_IF_AP, &app->ap_cnf);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "AP configuration failed: %s", esp_err_to_name(err));
-        return make_error(SYS_INTERNAL, "WIFI", esp_err_to_name(err));
+        resp_error(SYS_INTERNAL, "WIFI", esp_err_to_name(err));
+        return;
     }
 
     save_wifi_ap_config((char *)app->ap_cnf.ap.ssid, (char *)app->ap_cnf.ap.password);
     ESP_LOGW(TAG, "AP set to SSID '%s' (password %s)", app->ap_cnf.ap.ssid,
              app->ap_cnf.ap.password[0] ? "changed" : "cleared, network is open");
 
-    cJSON *resp = make_answer(SYS_OK);
-    if (resp) {
-        cJSON_AddStringToObject(resp, "SSID", (char *)app->ap_cnf.ap.ssid);
-        cJSON_AddNumberToObject(resp, "CLIENTS", clients);
-    }
-    return resp;
+    resp_ok();
+    gw_jsonw_str(&sys_w, "SSID", (char *)app->ap_cnf.ap.ssid);
+    gw_jsonw_int(&sys_w, "CLIENTS", clients);
 }
 
-/* ── 0x0012 device status ────────────────────────────────────────────────── */
+/* ── sys.info: device status ────────────────────────────────────────────────── */
 
-static cJSON *handle_info(app_context_t *app, int fd) {
+static void handle_info(app_context_t *app, int fd) {
     uint8_t mac[6] = {0};
     char mac_ap[18], mac_sta[18], ip_sta[16], ip_ap[16];
     uint8_t clients = wifi_ap_clients_count();
@@ -290,43 +316,41 @@ static cJSON *handle_info(app_context_t *app, int fd) {
     size_t fs_total = 0, fs_used = 0;
     esp_littlefs_info(conf.partition_label, &fs_total, &fs_used);
 
-    cJSON *resp = make_answer(SYS_OK);
-    if (!resp) return NULL;
+    resp_ok();
 
-    cJSON_AddStringToObject(resp, "MAC_AP", mac_ap);
-    cJSON_AddStringToObject(resp, "MAC_STA", mac_sta);
-    cJSON_AddStringToObject(resp, "AP_SSID", (char *)app->ap_cnf.ap.ssid);
-    cJSON_AddStringToObject(resp, "AP_IP", ip_ap);
-    cJSON_AddNumberToObject(resp, "AP_CLIENTS", clients);
-    cJSON_AddBoolToObject(resp, "FROM_AP", from_ap);
+    gw_jsonw_str(&sys_w, "MAC_AP", mac_ap);
+    gw_jsonw_str(&sys_w, "MAC_STA", mac_sta);
+    gw_jsonw_str(&sys_w, "AP_SSID", (char *)app->ap_cnf.ap.ssid);
+    gw_jsonw_str(&sys_w, "AP_IP", ip_ap);
+    gw_jsonw_int(&sys_w, "AP_CLIENTS", clients);
+    gw_jsonw_bool(&sys_w, "FROM_AP", from_ap);
     /* The page uses this to enable configuration controls */
-    cJSON_AddBoolToObject(resp, "CAN_CONFIGURE", config_allowed(fd, clients));
-    cJSON_AddStringToObject(resp, "STA_SSID", (char *)app->sta_cnf.sta.ssid);
-    cJSON_AddStringToObject(resp, "STA_IP", ip_sta);
-    cJSON_AddBoolToObject(resp, "STA_CONNECTED", ip_sta[0] != '\0');
-    cJSON_AddNumberToObject(resp, "UPTIME", (double)(esp_timer_get_time() / 1000000));
-    cJSON_AddNumberToObject(resp, "HEAP", (double)esp_get_free_heap_size());
-    cJSON_AddNumberToObject(resp, "FS_TOTAL", (double)fs_total);
-    cJSON_AddNumberToObject(resp, "FS_USED", (double)fs_used);
+    gw_jsonw_bool(&sys_w, "CAN_CONFIGURE", config_allowed(fd, clients));
+    gw_jsonw_str(&sys_w, "STA_SSID", (char *)app->sta_cnf.sta.ssid);
+    gw_jsonw_str(&sys_w, "STA_IP", ip_sta);
+    gw_jsonw_bool(&sys_w, "STA_CONNECTED", ip_sta[0] != '\0');
+    gw_jsonw_int(&sys_w, "UPTIME", (int64_t)(esp_timer_get_time() / 1000000));
+    gw_jsonw_uint(&sys_w, "HEAP", (uint64_t)esp_get_free_heap_size());
+    gw_jsonw_uint(&sys_w, "FS_TOTAL", (uint64_t)fs_total);
+    gw_jsonw_uint(&sys_w, "FS_USED", (uint64_t)fs_used);
 
     /* Firmware identity and OTA slots, so the page can show what is running and
      * what an upload would replace */
     const esp_app_desc_t *desc = esp_app_get_description();
     if (desc) {
-        cJSON_AddStringToObject(resp, "FW_NAME", desc->project_name);
-        cJSON_AddStringToObject(resp, "FW_VERSION", desc->version);
-        cJSON_AddStringToObject(resp, "FW_DATE", desc->date);
-        cJSON_AddStringToObject(resp, "FW_IDF", desc->idf_ver);
+        gw_jsonw_str(&sys_w, "FW_NAME", desc->project_name);
+        gw_jsonw_str(&sys_w, "FW_VERSION", desc->version);
+        gw_jsonw_str(&sys_w, "FW_DATE", desc->date);
+        gw_jsonw_str(&sys_w, "FW_IDF", desc->idf_ver);
     }
     const esp_partition_t *running = esp_ota_get_running_partition();
     const esp_partition_t *next = esp_ota_get_next_update_partition(NULL);
-    cJSON_AddStringToObject(resp, "OTA_RUNNING", running ? running->label : "");
-    cJSON_AddStringToObject(resp, "OTA_NEXT", next ? next->label : "");
-    cJSON_AddNumberToObject(resp, "OTA_NEXT_SIZE", next ? (double)next->size : 0);
-    return resp;
+    gw_jsonw_str(&sys_w, "OTA_RUNNING", running ? running->label : "");
+    gw_jsonw_str(&sys_w, "OTA_NEXT", next ? next->label : "");
+    gw_jsonw_uint(&sys_w, "OTA_NEXT_SIZE", next ? (uint64_t)next->size : 0);
 }
 
-/* ── 0x0013 reboot ───────────────────────────────────────────────────────── */
+/* ── sys.reboot ───────────────────────────────────────────────────────── */
 
 static void vRebootTask(void *arg) {
     vTaskDelay(pdMS_TO_TICKS((uint32_t)(uintptr_t)arg));
@@ -334,15 +358,14 @@ static void vRebootTask(void *arg) {
     esp_restart();
 }
 
-static cJSON *handle_reboot(void) {
-    cJSON *resp = make_answer(SYS_OK);
-    if (resp) cJSON_AddNumberToObject(resp, "DELAY_MS", REBOOT_DELAY_MS);
+static void handle_reboot(void) {
+    resp_ok();
+    gw_jsonw_int(&sys_w, "DELAY_MS", REBOOT_DELAY_MS);
     if (xTaskCreate(vRebootTask, "reboot", 2560, (void *)(uintptr_t)REBOOT_DELAY_MS, 5, NULL) != pdPASS)
         ESP_LOGE(TAG, "Failed to schedule reboot");
-    return resp;
 }
 
-/* ── 0x0014 filesystem listing ───────────────────────────────────────────── */
+/* ── sys.files: filesystem listing ───────────────────────────────────────────── */
 
 /* Приводит запрошенный путь к безопасному виду: только внутри файловой системы,
  * без "..", без двойных и хвостовых слэшей. Возвращает нормализованный путь
@@ -385,24 +408,23 @@ static void fs_arg_path(const uint8_t *data, uint32_t len, char *out, size_t out
         strlcpy(out, "/", out_size);
 }
 
-static cJSON *handle_files(const uint8_t *data, uint32_t len) {
+static void handle_files(const uint8_t *data, uint32_t len) {
     size_t fs_total = 0, fs_used = 0;
     esp_littlefs_info(conf.partition_label, &fs_total, &fs_used);
 
     char requested[256], path[256];
     fs_arg_path(data, len, requested, sizeof(requested));
 
-    cJSON *resp = make_answer(SYS_OK);
-    if (!resp) return NULL;
-    cJSON_AddNumberToObject(resp, "TOTAL", (double)fs_total);
-    cJSON_AddNumberToObject(resp, "USED", (double)fs_used);
+    resp_ok();
+    gw_jsonw_uint(&sys_w, "TOTAL", (uint64_t)fs_total);
+    gw_jsonw_uint(&sys_w, "USED", (uint64_t)fs_used);
 
     if (!fs_path_sanitize(requested, path, sizeof(path))) {
-        cJSON_AddStringToObject(resp, "ERR", "PATH");
-        cJSON_AddStringToObject(resp, "STA", SYS_BAD_ARG);
-        return resp;
+        gw_jsonw_str(&sys_w, "ERR", "PATH");
+        gw_jsonw_str(&sys_w, "STA", SYS_BAD_ARG);
+        return;
     }
-    cJSON_AddStringToObject(resp, "PATH", path);
+    gw_jsonw_str(&sys_w, "PATH", path);
 
     /* Каталог выше по дереву, чтобы страница могла нарисовать «наверх» */
     char parent[256];
@@ -413,25 +435,24 @@ static cJSON *handle_files(const uint8_t *data, uint32_t len) {
             strlcpy(parent, "/", sizeof(parent));
         else if (slash)
             *slash = '\0';
-        cJSON_AddStringToObject(resp, "PARENT", parent);
+        gw_jsonw_str(&sys_w, "PARENT", parent);
     }
 
     char full[400];
     int written = snprintf(full, sizeof(full), "%s%s", conf.base_path, path);
     if (written < 0 || written >= (int)sizeof(full)) {
-        cJSON_AddStringToObject(resp, "ERR", "PATH");
-        return resp;
+        gw_jsonw_str(&sys_w, "ERR", "PATH");
+        return;
     }
 
-    cJSON *files = cJSON_AddArrayToObject(resp, "FILES");
-    if (!files) return resp;
+    gw_jsonw_arr(&sys_w, "FILES");
 
     DIR *dir = opendir(full);
     if (!dir) {
         ESP_LOGW(TAG, "Cannot open %s", full);
-        cJSON_AddStringToObject(resp, "ERR", "FS");
-        cJSON_AddStringToObject(resp, "STA", SYS_BAD_ARG);
-        return resp;
+        gw_jsonw_str(&sys_w, "ERR", "FS");
+        gw_jsonw_str(&sys_w, "STA", SYS_BAD_ARG);
+        return;
     }
 
     struct dirent *entry;
@@ -446,22 +467,25 @@ static cJSON *handle_files(const uint8_t *data, uint32_t len) {
         if (stat(item_path, &st) != 0)
             continue;
 
-        cJSON *item = cJSON_CreateObject();
-        if (!item) break;
-        cJSON_AddStringToObject(item, "NAME", entry->d_name);
-        cJSON_AddNumberToObject(item, "SIZE", (double)st.st_size);
-        cJSON_AddBoolToObject(item, "DIR", S_ISDIR(st.st_mode) ? 1 : 0);
-        cJSON_AddItemToArray(files, item);
+        /* Буфер не резиновый: как только он кончился, прекращаем перечисление
+         * (раньше на этом месте заканчивалась память под очередной узел) */
+        if (!gw_jsonw_ok(&sys_w))
+            break;
+
+        gw_jsonw_obj(&sys_w, NULL);
+        gw_jsonw_str(&sys_w, "NAME", entry->d_name);
+        gw_jsonw_int(&sys_w, "SIZE", (int64_t)st.st_size);
+        gw_jsonw_bool(&sys_w, "DIR", S_ISDIR(st.st_mode) ? 1 : 0);
+        gw_jsonw_end(&sys_w);
     }
     closedir(dir);
-    return resp;
 }
 
-/* ── 0x0015 interface IPv4 settings ──────────────────────────────────────── */
+/* ── sys.net: interface IPv4 settings ──────────────────────────────────────── */
 
 #define NET_APPLY_DELAY_MS 1000
 
-static void net_cfg_to_json(cJSON *parent, const char *name, const net_iface_cnf_t *cfg) {
+static void net_cfg_to_json(const char *name, const net_iface_cnf_t *cfg) {
     char ip[16], mask[16], gw[16], dns1[16], dns2[16];
 
     net_format_ip4(cfg->ip, ip, sizeof(ip));
@@ -470,14 +494,14 @@ static void net_cfg_to_json(cJSON *parent, const char *name, const net_iface_cnf
     net_format_ip4(cfg->dns1, dns1, sizeof(dns1));
     net_format_ip4(cfg->dns2, dns2, sizeof(dns2));
 
-    cJSON *o = cJSON_AddObjectToObject(parent, name);
-    if (!o) return;
-    cJSON_AddStringToObject(o, "MODE", (cfg->mode == NET_MODE_STATIC) ? "static" : "dhcp");
-    cJSON_AddStringToObject(o, "IP", ip);
-    cJSON_AddStringToObject(o, "MASK", mask);
-    cJSON_AddStringToObject(o, "GW", gw);
-    cJSON_AddStringToObject(o, "DNS1", dns1);
-    cJSON_AddStringToObject(o, "DNS2", dns2);
+    gw_jsonw_obj(&sys_w, name);
+    gw_jsonw_str(&sys_w, "MODE", (cfg->mode == NET_MODE_STATIC) ? "static" : "dhcp");
+    gw_jsonw_str(&sys_w, "IP", ip);
+    gw_jsonw_str(&sys_w, "MASK", mask);
+    gw_jsonw_str(&sys_w, "GW", gw);
+    gw_jsonw_str(&sys_w, "DNS1", dns1);
+    gw_jsonw_str(&sys_w, "DNS2", dns2);
+    gw_jsonw_end(&sys_w);
 }
 
 /* A netmask has to be a run of ones followed by a run of zeros */
@@ -496,7 +520,7 @@ static void vNetApplyTask(void *arg) {
     vTaskDelete(NULL);
 }
 
-static cJSON *handle_net(app_context_t *app, const uint8_t *data, uint32_t len, int fd) {
+static void handle_net(app_context_t *app, const uint8_t *data, uint32_t len, int fd) {
     uint8_t clients = wifi_ap_clients_count();
     uint8_t allowed = config_allowed(fd, clients);
 
@@ -512,9 +536,8 @@ static cJSON *handle_net(app_context_t *app, const uint8_t *data, uint32_t len, 
         netif_ip_str("WIFI_STA_DEF", ip_sta, sizeof(ip_sta));
         netif_ip_str("WIFI_AP_DEF", ip_ap, sizeof(ip_ap));
 
-        cJSON *resp = make_answer(SYS_OK);
-        if (!resp) return NULL;
-        net_cfg_to_json(resp, "STA_CFG", &app->net_sta);
+        resp_ok();
+        net_cfg_to_json("STA_CFG", &app->net_sta);
 
         /* Nothing configured yet means the built-in default is in force — show
          * the address actually in use so the form can be edited as is. */
@@ -528,24 +551,26 @@ static cJSON *handle_net(app_context_t *app, const uint8_t *data, uint32_t len, 
                 ap_show.gw   = ip_info.gw.addr;
             }
         }
-        net_cfg_to_json(resp, "AP_CFG", &ap_show);
-        cJSON_AddStringToObject(resp, "STA_ADDR", ip_sta);
-        cJSON_AddStringToObject(resp, "AP_ADDR", ip_ap);
-        cJSON_AddBoolToObject(resp, "CAN_CONFIGURE", allowed);
-        cJSON_AddNumberToObject(resp, "CLIENTS", clients);
-        return resp;
+        net_cfg_to_json("AP_CFG", &ap_show);
+        gw_jsonw_str(&sys_w, "STA_ADDR", ip_sta);
+        gw_jsonw_str(&sys_w, "AP_ADDR", ip_ap);
+        gw_jsonw_bool(&sys_w, "CAN_CONFIGURE", allowed);
+        gw_jsonw_int(&sys_w, "CLIENTS", clients);
+        return;
     }
 
     if (!allowed) {
             ESP_LOGW(TAG, "Network settings refused (from_ap=%u clients=%u)",
                  request_from_softap(fd), clients);
-        return access_denied(fd, clients);
+        resp_denied(fd, clients);
+        return;
     }
 
     uint8_t is_sta = (strcasecmp(iface, "STA") == 0);
     uint8_t is_ap  = (strcasecmp(iface, "AP") == 0);
     if (!is_sta && !is_ap) {
-            return make_error(SYS_BAD_ARG, "IF", "IF must be STA or AP");
+        resp_error(SYS_BAD_ARG, "IF", "IF must be STA or AP");
+        return;
     }
 
     char mode[16] = {0}, s_ip[NW_ADDR_MAX] = {0}, s_mask[NW_ADDR_MAX] = {0};
@@ -562,7 +587,7 @@ static cJSON *handle_net(app_context_t *app, const uint8_t *data, uint32_t len, 
     uint8_t want_static = is_ap || (mode[0] != '\0' && strcasecmp(mode, "static") == 0);
 
     net_iface_cnf_t cfg = is_sta ? app->net_sta : app->net_ap;
-    cJSON *err = NULL;
+    uint8_t bad = 0;
 
     if (!want_static) {
         cfg.mode = NET_MODE_DHCP;
@@ -570,18 +595,24 @@ static cJSON *handle_net(app_context_t *app, const uint8_t *data, uint32_t len, 
     } else {
         uint32_t ip = 0, mask = 0, gw = 0, dns1 = 0, dns2 = 0;
 
-        if (s_ip[0] == '\0' || net_parse_ip4(s_ip, &ip) || ip == 0)
-            err = make_error(SYS_BAD_ARG, "IP", "A valid IPv4 address is required");
-        else if (s_mask[0] == '\0' || net_parse_ip4(s_mask, &mask) || !net_mask_valid(mask))
-            err = make_error(SYS_BAD_ARG, "MASK", "A contiguous netmask is required, e.g. 255.255.255.0");
-        else if (s_gw[0] && (net_parse_ip4(s_gw, &gw) || (gw & mask) != (ip & mask)))
-            err = make_error(SYS_BAD_ARG, "GW", "The gateway must be inside the IP/mask subnet");
-        else if (s_dns1[0] && net_parse_ip4(s_dns1, &dns1))
-            err = make_error(SYS_BAD_ARG, "DNS1", "Invalid DNS address");
-        else if (s_dns2[0] && net_parse_ip4(s_dns2, &dns2))
-            err = make_error(SYS_BAD_ARG, "DNS2", "Invalid DNS address");
+        if (s_ip[0] == '\0' || net_parse_ip4(s_ip, &ip) || ip == 0) {
+            resp_error(SYS_BAD_ARG, "IP", "A valid IPv4 address is required");
+            bad = 1;
+        } else if (s_mask[0] == '\0' || net_parse_ip4(s_mask, &mask) || !net_mask_valid(mask)) {
+            resp_error(SYS_BAD_ARG, "MASK", "A contiguous netmask is required, e.g. 255.255.255.0");
+            bad = 1;
+        } else if (s_gw[0] && (net_parse_ip4(s_gw, &gw) || (gw & mask) != (ip & mask))) {
+            resp_error(SYS_BAD_ARG, "GW", "The gateway must be inside the IP/mask subnet");
+            bad = 1;
+        } else if (s_dns1[0] && net_parse_ip4(s_dns1, &dns1)) {
+            resp_error(SYS_BAD_ARG, "DNS1", "Invalid DNS address");
+            bad = 1;
+        } else if (s_dns2[0] && net_parse_ip4(s_dns2, &dns2)) {
+            resp_error(SYS_BAD_ARG, "DNS2", "Invalid DNS address");
+            bad = 1;
+        }
 
-        if (!err) {
+        if (!bad) {
             cfg.mode = NET_MODE_STATIC;
             cfg.ip = ip;
             cfg.mask = mask;
@@ -592,69 +623,54 @@ static cJSON *handle_net(app_context_t *app, const uint8_t *data, uint32_t len, 
         }
     }
 
-    if (err) return err;
+    if (bad) return;
 
     if (is_sta) app->net_sta = cfg;
     else        app->net_ap  = cfg;
     net_save_config(app);
 
-    cJSON *resp = make_answer(SYS_OK);
-    if (resp) {
-        cJSON_AddStringToObject(resp, "IF", is_sta ? "STA" : "AP");
-        net_cfg_to_json(resp, is_sta ? "STA_CFG" : "AP_CFG", &cfg);
-    }
+    resp_ok();
+    gw_jsonw_str(&sys_w, "IF", is_sta ? "STA" : "AP");
+    net_cfg_to_json(is_sta ? "STA_CFG" : "AP_CFG", &cfg);
 
     if (is_ap) {
         /* Changing the access point address drops the very connection this answer
          * travels over, so apply it once the response has gone out. */
-        if (resp) cJSON_AddBoolToObject(resp, "RECONNECT", true);
+        gw_jsonw_bool(&sys_w, "RECONNECT", 1);
         if (xTaskCreate(vNetApplyTask, "net_apply", 2560, app, 5, NULL) != pdPASS)
             ESP_LOGE(TAG, "Failed to schedule network apply");
     } else {
         net_apply_config(app);
     }
-    return resp;
 }
 
 /* ── task ────────────────────────────────────────────────────────────────── */
 
+/* Имя FID сравнивается целиком: "sys.info" и "sys.info2" — разные вызовы, и
+ * префиксное совпадение здесь недопустимо (иначе чужой вызов попал бы в этот
+ * обработчик). */
 static void handle_msg(app_context_t *app, webapi_msg_t *in_msg) {
-    cJSON *resp = NULL;
+    const char *fid = in_msg->fid;
 
-    switch (in_msg->fid) {
-    case ESP_WS_API_ECHO_ID:
+    if (strcmp(fid, ESP_WS_API_ECHO_ID) == 0) {
         /* Documented echo test: the argument comes back unchanged */
-        send_verbatim(in_msg->id, in_msg->fid, in_msg->data, in_msg->len);
-        return;
-    case ESP_WS_API_SYS_WIFI_STA:
-        resp = handle_sta(app, in_msg->data, in_msg->len, in_msg->fd);
-        break;
-    case ESP_WS_API_SYS_WIFI_AP:
-        resp = handle_ap(app, in_msg->data, in_msg->len, in_msg->fd);
-        break;
-    case ESP_WS_API_SYS_INFO:
-        resp = handle_info(app, in_msg->fd);
-        break;
-    case ESP_WS_API_SYS_REBOOT:
-        resp = handle_reboot();
-        break;
-    case ESP_WS_API_SYS_FILES:
-        resp = handle_files(in_msg->data, in_msg->len);
-        break;
-    case ESP_WS_API_SYS_NET:
-        resp = handle_net(app, in_msg->data, in_msg->len, in_msg->fd);
-        break;
-    default:
-        ESP_LOGW(TAG, "No system handler for FID %d", in_msg->fid);
+        send_verbatim(in_msg->id, fid, in_msg->data, in_msg->len);
         return;
     }
 
-    if (!resp)
-        resp = make_error(SYS_NO_MEM, "NOMEM", NULL);
-    if (resp) {
-        send_response(in_msg->id, in_msg->fid, resp);
-        cJSON_Delete(resp);
+    resp_begin();
+    if      (strcmp(fid, ESP_WS_API_SYS_WIFI_STA) == 0) handle_sta(app, in_msg->data, in_msg->len, in_msg->fd);
+    else if (strcmp(fid, ESP_WS_API_SYS_WIFI_AP)  == 0) handle_ap(app, in_msg->data, in_msg->len, in_msg->fd);
+    else if (strcmp(fid, ESP_WS_API_SYS_INFO)     == 0) handle_info(app, in_msg->fd);
+    else if (strcmp(fid, ESP_WS_API_SYS_REBOOT)   == 0) handle_reboot();
+    else if (strcmp(fid, ESP_WS_API_SYS_FILES)    == 0) handle_files(in_msg->data, in_msg->len);
+    else if (strcmp(fid, ESP_WS_API_SYS_NET)      == 0) handle_net(app, in_msg->data, in_msg->len, in_msg->fd);
+    else {
+        ESP_LOGW(TAG, "No system handler for FID %s", fid);
+        return;
     }
+
+    send_response(in_msg->id, fid);
 }
 
 static void ws_sys_task(void *param) {
@@ -672,6 +688,11 @@ static void ws_sys_task(void *param) {
 }
 
 esp_err_t api_sys_run(app_context_t *app) {
+    /* Сборщик ответов должен знать свой буфер до первого ответа: без этого он
+     * считает себя переполненным и на КАЖДЫЙ запрос отвечает отказом
+     * (проверено: страница конфигурации оставалась с прочерками). */
+    gw_jsonw_init(&sys_w, sys_resp_buf, sizeof(sys_resp_buf));
+
     sys_cmd_queue = ws_hal_queue_create(8, sizeof(void *));
     if (!sys_cmd_queue) {
         ESP_LOGE(TAG, "Cannot create system API queue");
@@ -687,6 +708,6 @@ esp_err_t api_sys_run(app_context_t *app) {
     ws_server_register_fid_queue(ESP_WS_API_SYS_NET,      sys_cmd_queue);
 
     ws_hal_task_create(ws_sys_task, "ws_sys", 5120, app, 5);
-    ESP_LOGI(TAG, "System API ready (FIDs 0x0001, 0x0010..0x0015)");
+    ESP_LOGI(TAG, "System API ready (echo, wifi.sta, wifi.ap, sys.info, sys.reboot, sys.files, sys.net)");
     return ESP_OK;
 }

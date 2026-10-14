@@ -5,7 +5,6 @@
 #endif
 #include "uart.h"
 #include "GwJson.h"
-#include "cJSON.h"
 
 /* Токенов на разбор ARG UART: WL/BR/PAR/SB (или E) — с большим запасом. */
 #define UART_ARG_MAX_TOKENS 16
@@ -61,17 +60,25 @@ static void uart_event_on_rx(void *event_trigger, void *sender, void *context) {
 }
 
 
-static cJSON *format_uart_resp(const gw_uart_config_t *cnf)
-{
-	cJSON *json = cJSON_CreateObject();
+/* Буферы ответов статические: задача обслуживает запросы по одному, а стек у
+ * ws_uart всего 4 КБ — на нём уже лежат tmp[UART_TMP_BUF_SIZE] и массив под
+ * base64. Сборка идёт прямо в буфер, дерева и узлов нет. */
+#define UART_RESP_MAX 96
+static char uart_resp_buf[UART_RESP_MAX];
 
-	if (!json)
-		return NULL;
-	cJSON_AddNumberToObject(json, "BR",  cnf->boud);
-	cJSON_AddNumberToObject(json, "WL",  cnf->bits);
-	cJSON_AddNumberToObject(json, "PAR", cnf->parity);
-	cJSON_AddNumberToObject(json, "SB",  cnf->stop);
-	return json;
+/* Ответ RAW_RX — это base64 (4/3 от принятого) в кавычках: сам буфер, кавычки и
+ * завершающий ноль. */
+#define UART_RAW_B64_MAX (4 * ((UART_TMP_BUF_SIZE + 2) / 3))
+static char uart_raw_buf[UART_RAW_B64_MAX + 3];
+
+static void format_uart_resp(gw_jsonw_t *w, const gw_uart_config_t *cnf)
+{
+	gw_jsonw_init(w, uart_resp_buf, sizeof(uart_resp_buf));
+	gw_jsonw_obj(w, NULL);
+	gw_jsonw_int(w, "BR",  cnf->boud);
+	gw_jsonw_int(w, "WL",  cnf->bits);
+	gw_jsonw_int(w, "PAR", cnf->parity);
+	gw_jsonw_int(w, "SB",  cnf->stop);
 }
 
 static uint8_t uart1_buf[UART_TMP_BUF_SIZE];
@@ -101,27 +108,29 @@ static gw_uart_config_t uart_config(struct app_uart_t *uart, void *new_cfg, size
     return gw_cfg;
 }
 
-static void send_uart_response(int id, int fid, cJSON *json)
+/* w == NULL — отвечать нечем (пустой опрос RAW_RX): уходит пустой ответ, как и
+ * раньше, когда дерева не было вовсе. */
+static void send_uart_response(int id, const char *fid, gw_jsonw_t *w)
 {
 	/* Peripheral-originated answer: no client socket of its own */
 	webapi_msg_t msg = { .fd = -1 };
 
-    //todo: refactor
-    if (json) {
-    	msg.data = (uint8_t *)cJSON_PrintUnformatted(json);
-    	if (!msg.data) {
-            msg.data = NULL;
-            msg.len = 0; 
-        } else {
-	        msg.len = strlen((char *)msg.data);
-        }
-    } else {
-        msg.data = NULL;
-        msg.len = 0; 
-    }
+	if (w) {
+		uint8_t room = gw_jsonw_ok(w);
+		size_t  len  = gw_jsonw_finish(w);
+		if (room && len) {
+			/* +1 и ноль на конце — как было у прежнего сборщика */
+			msg.data = malloc(len + 1);
+			if (msg.data) {
+				mem_cpy(msg.data, w->buf, len);
+				msg.data[len] = '\0';
+				msg.len = len;
+			}
+		}
+	}
 
 	msg.id  = id;
-	msg.fid = fid;
+	bApiFidSet(msg.fid, fid);
 	ws_hal_queue_send(get_ws_worker_queue(), &msg, WS_HAL_WAIT_NONE);
 }
 
@@ -159,6 +168,28 @@ static uint8_t parse_uart_params(const uint8_t *data, size_t len,
 	return 1;
 }
 
+/* Порт из имени FID: "uart1.*" → 0, "uart2.*" → 1, иначе -1. Разбор строгий —
+ * ровно "uart" + одна цифра + точка, чтобы "uart12.rx" не попал в первый порт. */
+static int uart_fid_port(const char *fid)
+{
+	if (!fid || strncmp(fid, "uart", 4) != 0)
+		return -1;
+	if (fid[4] != '1' && fid[4] != '2')
+		return -1;
+	if (fid[5] != '.')
+		return -1;
+	return (fid[4] == '2') ? 1 : 0;
+}
+
+/* Действие из имени: хвост после "uartN.". */
+static const char *uart_fid_action(const char *fid)
+{
+	if (!fid)
+		return "";
+	const char *dot = strchr(fid, '.');
+	return dot ? (dot + 1) : "";
+}
+
 static void handle_msg(app_context_t *app, webapi_msg_t *in_msg)
 {
 	struct app_uart_t *app_uart = NULL;
@@ -166,33 +197,34 @@ static void handle_msg(app_context_t *app, webapi_msg_t *in_msg)
 	gw_uart_config_t new_cfg;
 	uint32_t amount = 0;
 	uint8_t tmp[UART_TMP_BUF_SIZE];
+	/* Имя разбирается на порт и действие: префикс "uartN." задаёт порт, хвост —
+	 * что делать. Сравнение полное: "uart2.rx" и "uart2.rx2" — разные вызовы. */
+	const char *fid  = in_msg->fid;
+	int         port = uart_fid_port(fid);
+	const char *act  = uart_fid_action(fid);
 
-	switch (in_msg->fid) {
-	case ESP_WS_API_UART1_CNF:
-		app_uart = &app->uart.port[0];
-		__attribute__((fallthrough));
-	case ESP_WS_API_UART2_CNF:
-		if (!app_uart)
-			app_uart = &app->uart.port[1];
+	if (port < 0) {
+		ws_hal_log_i(TAG, "UART have no FID (%s) handler\n", fid);
+		return;
+	}
+
+	if (strcmp(act, "config") == 0) {
+		app_uart = &app->uart.port[port];
 
 		if (!in_msg->data)
-			break;
+			return;
 		api_cmd_uart_t cmd = {0};
 		if (parse_uart_params(in_msg->data, in_msg->len, &cmd)) {
 			new_cfg = uart_config(app_uart, &cmd, sizeof(cmd));
-			cJSON *resp_json = format_uart_resp(&new_cfg);
-			if (resp_json) {
-				send_uart_response(in_msg->id, in_msg->fid, resp_json);
-				cJSON_Delete(resp_json);
-			}
+			gw_jsonw_t w;
+			format_uart_resp(&w, &new_cfg);
+			send_uart_response(in_msg->id, fid, &w);
 		}
-		break;
-	case ESP_WS_API_UART1_RAW_RX:
-		ctx = &uart_context[0];
-		__attribute__((fallthrough));
-	case ESP_WS_API_UART2_RAW_RX:
-		if (!ctx)
-			ctx = &uart_context[1];
+		return;
+	}
+
+	if (strcmp(act, "rx") == 0) {
+		ctx = &uart_context[port];
 
 		ws_hal_mutex_take(ctx->lock, WS_HAL_WAIT_FOREVER);
 		amount = ctx->amount;
@@ -209,24 +241,22 @@ static void handle_msg(app_context_t *app, webapi_msg_t *in_msg)
 			int32_t b64_len = base64_encode(b64_buf, b64_size, tmp, amount);
 			if (b64_len > 0) {
 				b64_buf[b64_len] = '\0';
-				cJSON *json = cJSON_CreateString((char *)b64_buf);
-				if (json) {
-					/* id=0: broadcast to all subscribers of this FID */
-					send_uart_response(0, in_msg->fid, json);
-					cJSON_Delete(json);
-				}
+				/* Ответ — голая строка JSON с base64, без объекта */
+				gw_jsonw_t w;
+				gw_jsonw_init(&w, uart_raw_buf, sizeof(uart_raw_buf));
+				gw_jsonw_str(&w, NULL, (char *)b64_buf);
+				/* id=0: broadcast to all subscribers of this FID */
+				send_uart_response(0, fid, &w);
 			}
 		} else {
 			/* id=0: broadcast (empty poll — no data, no response needed) */
-			send_uart_response(0, in_msg->fid, NULL);
+			send_uart_response(0, fid, NULL);
 		}
-		break;
-	case ESP_WS_API_UART1_RAW_TX:
-		ctx = &uart_context[0];
-		__attribute__((fallthrough));
-	case ESP_WS_API_UART2_RAW_TX:
-		if (!ctx)
-			ctx = &uart_context[1];
+		return;
+	}
+
+	if (strcmp(act, "tx") == 0) {
+		ctx = &uart_context[port];
 
 		if (in_msg->data && in_msg->len > 2) {
 			uint8_t *b64 = in_msg->data + 1;       /* skip leading '"' */
@@ -238,25 +268,21 @@ static void handle_msg(app_context_t *app, webapi_msg_t *in_msg)
 				int32_t decoded = base64_decode(buf, buf_size, b64, b64_len);
 
 				if (decoded > 0) {
-					int port = (ctx == &uart_context[0]) ? 0 : 1;
 					int32_t written = gw_uart_write(&app->uart.port[port].desc, buf, decoded);
 
-					cJSON *resp_json = cJSON_CreateObject();
-					if (resp_json) {
-						cJSON_AddNumberToObject(resp_json, "written", written);
-						send_uart_response(in_msg->id, in_msg->fid, resp_json);
-						cJSON_Delete(resp_json);
-					}
+					gw_jsonw_t w;
+					gw_jsonw_init(&w, uart_resp_buf, sizeof(uart_resp_buf));
+					gw_jsonw_obj(&w, NULL);
+					gw_jsonw_int(&w, "written", written);
+					send_uart_response(in_msg->id, fid, &w);
 				}
 			}
 		}
-		break;
-	case ESP_WS_API_UART1_ECHO:
-		app_uart = &app->uart.port[0];
-		/* fall through */
-	case ESP_WS_API_UART2_ECHO:
-		if (!app_uart)
-			app_uart = &app->uart.port[1];
+		return;
+	}
+
+	if (strcmp(act, "echo") == 0) {
+		app_uart = &app->uart.port[port];
 
 		if (in_msg->data && in_msg->len) {
 			GW_JSON_TOKENS(toks, UART_ARG_MAX_TOKENS);
@@ -268,18 +294,16 @@ static void handle_msg(app_context_t *app, webapi_msg_t *in_msg)
 				gw_uart_set_echo(&app_uart->desc, val ? 1 : 0);
 		}
 		{
-			cJSON *resp = cJSON_CreateObject();
-			if (resp) {
-				cJSON_AddNumberToObject(resp, "E", gw_uart_get_echo(&app_uart->desc));
-				send_uart_response(in_msg->id, in_msg->fid, resp);
-				cJSON_Delete(resp);
-			}
+			gw_jsonw_t w;
+			gw_jsonw_init(&w, uart_resp_buf, sizeof(uart_resp_buf));
+			gw_jsonw_obj(&w, NULL);
+			gw_jsonw_int(&w, "E", gw_uart_get_echo(&app_uart->desc));
+			send_uart_response(in_msg->id, fid, &w);
 		}
-		break;
-	default:
-		ws_hal_log_i(TAG, "UART have no FID (%d) handler\n", in_msg->fid);
-		break;
+		return;
 	}
+
+	ws_hal_log_i(TAG, "UART have no FID (%s) handler\n", fid);
 }
 
 //void api_handler_uart_work(app_context_t *app) {
