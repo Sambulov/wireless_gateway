@@ -29,4 +29,7 @@ void ws_hal_task_self_delete(void);
 
 /* Log */
 void ws_hal_log_i(const char *tag, const char *fmt, ...);
+/* Подробные логи уровня debug: на каждый пакет их слишком много для
+ * консоли 115200 — вывод синхронный и тормозит обработку. */
+void ws_hal_log_d(const char *tag, const char *fmt, ...);
 void ws_hal_log_w(const char *tag, const char *fmt, ...);

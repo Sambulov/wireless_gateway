@@ -99,7 +99,8 @@ static gw_uart_config_t uart_config(struct app_uart_t *uart, void *new_cfg, size
 
 static void send_uart_response(int id, int fid, cJSON *json)
 {
-	webapi_msg_t msg;
+	/* Peripheral-originated answer: no client socket of its own */
+	webapi_msg_t msg = { .fd = -1 };
 
     //todo: refactor
     if (json) {
@@ -129,8 +130,17 @@ static uint8_t parse_uart_params(const uint8_t *data, size_t len,
 	if (!json)
 		return 0;
 	cmd->wl_set = json_parse_int(json, "WL", &val);
-	if (cmd->wl_set)
-		cmd->wl = val;
+	if (cmd->wl_set) {
+		/* Принимаем и число бит (7/8), и значение перечисления (0/1):
+		 * в структуре поле всего двухбитное, поэтому 8 превращалось в 0
+		 * и устройство молча переключалось на 7 бит данных. */
+		if (val == 7 || val == 0)
+			cmd->wl = GW_UART_WORD_7BIT;
+		else if (val == 8 || val == 1)
+			cmd->wl = GW_UART_WORD_8BIT;
+		else
+			cmd->wl_set = 0;
+	}
 	cmd->boud_set = json_parse_int(json, "BR", &val);
 	if (cmd->boud_set)
 		cmd->boud = val;
@@ -155,6 +165,7 @@ static void handle_msg(app_context_t *app, webapi_msg_t *in_msg)
 	switch (in_msg->fid) {
 	case ESP_WS_API_UART1_CNF:
 		app_uart = &app->uart.port[0];
+		__attribute__((fallthrough));
 	case ESP_WS_API_UART2_CNF:
 		if (!app_uart)
 			app_uart = &app->uart.port[1];
@@ -173,6 +184,7 @@ static void handle_msg(app_context_t *app, webapi_msg_t *in_msg)
 		break;
 	case ESP_WS_API_UART1_RAW_RX:
 		ctx = &uart_context[0];
+		__attribute__((fallthrough));
 	case ESP_WS_API_UART2_RAW_RX:
 		if (!ctx)
 			ctx = &uart_context[1];
@@ -206,6 +218,7 @@ static void handle_msg(app_context_t *app, webapi_msg_t *in_msg)
 		break;
 	case ESP_WS_API_UART1_RAW_TX:
 		ctx = &uart_context[0];
+		__attribute__((fallthrough));
 	case ESP_WS_API_UART2_RAW_TX:
 		if (!ctx)
 			ctx = &uart_context[1];

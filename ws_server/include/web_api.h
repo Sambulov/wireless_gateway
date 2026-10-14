@@ -9,6 +9,10 @@ typedef struct webapi_msg {
     int      id;
     uint8_t *data;
     size_t   len;
+    /* Socket the request arrived on, -1 for messages a peripheral originates
+     * on its own. Lets a handler tell which interface a client is connected
+     * through (see request_from_softap() in main/apih_sys.c). */
+    int      fd;
 } webapi_msg_t;
 
 #define API_HANDLER_ID_GENEGAL                      0x00000000

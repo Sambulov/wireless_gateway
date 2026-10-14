@@ -75,6 +75,13 @@ void ws_hal_log_i(const char *tag, const char *fmt, ...) {
     va_end(args);
 }
 
+void ws_hal_log_d(const char *tag, const char *fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    ws_hal_log_write(ESP_LOG_DEBUG, tag, fmt, args);
+    va_end(args);
+}
+
 void ws_hal_log_w(const char *tag, const char *fmt, ...) {
     va_list args;
     va_start(args, fmt);

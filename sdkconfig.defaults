@@ -1,9 +1,25 @@
 CONFIG_HTTPD_WS_SUPPORT=y
+# esp_http_server >= v6 answers the WebSocket handshake itself and does not call
+# the URI handler for it, so the session is created in ws_post_handshake_cb
+# (see main/ws_transport_httpd.c).
+CONFIG_HTTPD_WS_POST_HANDSHAKE_CB_SUPPORT=y
+# WPA3/SAE is off on purpose: the supplicant plus SAE crypto cost about 63 KB of
+# the application partition, which is the tightest resource here. The gateway
+# runs WPA2-PSK on its access point and connects to WPA2 networks only. Turn
+# these back on only after the app partition has room for them.
+# CONFIG_ESP_WIFI_ENABLE_WPA3_SAE is not set
+# CONFIG_ESP_WIFI_ENABLE_SAE_H2E is not set
+# CONFIG_ESP_WIFI_ENABLE_SAE_PK is not set
+# CONFIG_ESP_WIFI_SOFTAP_SAE_SUPPORT is not set
+# CONFIG_ESP_WIFI_ENABLE_WPA3_OWE_STA is not set
 # Two httpd instances (HTTP file server + dedicated WS server, see
-# start_webserver()/start_ws_server() in main/web_server.c) plus the TFTP
-# server share this single global socket pool; the IDF default of 10 is
-# not enough headroom for two httpd instances at once.
-CONFIG_LWIP_MAX_SOCKETS=16
+# start_webserver()/start_ws_server() in main/web_server.c) share this single
+# global socket pool; the IDF default of 10 is not enough headroom for two
+# httpd instances at once.
+CONFIG_LWIP_MAX_SOCKETS=32
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+# Station (STA) default network — gateway connects to this AP on boot.
+CONFIG_WIFI_STA_DEFAULT_SSID="HomeNet"
+CONFIG_WIFI_STA_DEFAULT_PASS="B3chpfysasym"

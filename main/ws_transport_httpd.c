@@ -3,12 +3,30 @@
 
 #include "freertos/FreeRTOS.h"
 #include "esp_http_server.h"
+#include "esp_idf_version.h"
 #include "esp_log.h"
 #include "CodeLib.h"
 #include "connection.h"
 #include "ws_transport.h"
 
 static const char *TAG = "ws_transport";
+
+/* esp_http_server answers the WebSocket handshake itself since ESP-IDF v6 and
+ * returns before invoking the URI handler ("If the request is websocket
+ * handshake, then do not call the uri->handler", httpd_uri.c). The handshake
+ * request is handed to ws_post_handshake_cb instead, so the per-session
+ * ws_conn_t has to be allocated from that callback. Up to v5.x the handler was
+ * still called with method == HTTP_GET, which is where the allocation used to
+ * live; that path is kept for older IDF versions. */
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(6, 0, 0)
+#define WS_CONN_FROM_POST_HANDSHAKE_CB 1
+#else
+#define WS_CONN_FROM_POST_HANDSHAKE_CB 0
+#endif
+
+#if WS_CONN_FROM_POST_HANDSHAKE_CB && !CONFIG_HTTPD_WS_POST_HANDSHAKE_CB_SUPPORT
+#error "ESP-IDF >= 6.0 never calls the URI handler for the WebSocket handshake: enable CONFIG_HTTPD_WS_POST_HANDSHAKE_CB_SUPPORT"
+#endif
 
 /* ws_server callbacks — defined in ws_server.c */
 void ws_server_on_connect(ws_conn_t *conn);
@@ -74,25 +92,63 @@ static void free_conn(void *ctx) {
     free(conn);
 }
 
+/* Allocates the connection object once per session and hands it to ws_server.
+ * It is stored in req->sess_ctx: esp_http_server propagates that into the
+ * session on request cleanup and copies it back into every later request of the
+ * same session, while free_conn releases it when the session goes away. */
+static ws_conn_t *ws_conn_open(httpd_req_t *req, int fd) {
+    ws_conn_t *conn = (ws_conn_t *)req->sess_ctx;
+    if (conn) return conn;
+
+    conn = malloc(sizeof(ws_conn_t));
+    if (!conn) return NULL;
+    conn->hd        = req->handle;
+    conn->fd        = fd;
+    conn->user_data = NULL;
+    conn->delegate.handler = link_event_handler;
+    conn->delegate.context = conn;
+    socket_link_subscribe(fd, &conn->delegate);
+    req->sess_ctx = conn;
+    req->free_ctx = free_conn;
+    ws_server_on_connect(conn);
+    return conn;
+}
+
+#if WS_CONN_FROM_POST_HANDSHAKE_CB
+/* The handshake response has already been sent when this runs; the socket is a
+ * WebSocket from here on. */
+static esp_err_t ws_httpd_post_handshake(httpd_req_t *req) {
+    int fd = httpd_req_to_sockfd(req);
+    if (!ws_conn_open(req, fd)) {
+        ESP_LOGE(TAG, "No memory for WS session, fd=%d", fd);
+        return ESP_ERR_NO_MEM;
+    }
+    ESP_LOGI(TAG, "WS session opened, fd=%d", fd);
+    return ESP_OK;
+}
+#endif
+
 static esp_err_t ws_httpd_handler(httpd_req_t *req) {
     int fd = httpd_req_to_sockfd(req);
 
     if (req->method == HTTP_GET) {
-        ws_conn_t *conn = malloc(sizeof(ws_conn_t));
-        if (!conn) return ESP_ERR_NO_MEM;
-        conn->hd        = req->handle;
-        conn->fd        = fd;
-        conn->user_data = NULL;
-        conn->delegate.handler = link_event_handler;
-        conn->delegate.context = conn;
-        socket_link_subscribe(fd, &conn->delegate);
-        req->sess_ctx = conn;
-        req->free_ctx = free_conn;
-        ws_server_on_connect(conn);
+#if WS_CONN_FROM_POST_HANDSHAKE_CB
+        /* Handshake already answered by esp_http_server; the session was created
+         * in ws_httpd_post_handshake() above. */
         return ESP_OK;
+#else
+        if (!ws_conn_open(req, fd)) return ESP_ERR_NO_MEM;
+        return ESP_OK;
+#endif
     }
 
     ws_conn_t *conn = (ws_conn_t *)req->sess_ctx;
+    if (!conn) {
+        /* Without the session object there is no one to dispatch to; dropping
+         * the frame is better than dereferencing NULL. */
+        ESP_LOGW(TAG, "WS frame without session context, fd=%d", fd);
+        return ESP_FAIL;
+    }
 
     httpd_ws_frame_t f = {0};
     esp_err_t ret = httpd_ws_recv_frame(req, &f, 0);
@@ -132,5 +188,8 @@ httpd_uri_t *ws_transport_httpd_init(char *uri) {
     h->handler                  = ws_httpd_handler;
     h->is_websocket             = true;
     h->handle_ws_control_frames = true;
+#if WS_CONN_FROM_POST_HANDSHAKE_CB
+    h->ws_post_handshake_cb     = ws_httpd_post_handshake;
+#endif
     return h;
 }

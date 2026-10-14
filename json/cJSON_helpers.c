@@ -1,6 +1,7 @@
 
 #include "cJSON_helpers.h"
 #include "cJSON.h"
+#include "stdlib.h"
 #include "string.h"
 
 uint8_t cJSON_ParseInt(cJSON *pxJson, const char *pcName, uint32_t *pulOutVal) {

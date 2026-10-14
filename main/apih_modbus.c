@@ -60,7 +60,8 @@ static void mb_on_complete(modbus_t *mb, void *ctx, modbus_frame_t *frame) {
 }
 
 static void send_mb_msg(int id, int fid, const char *json_str, size_t len) {
-    webapi_msg_t msg;
+    /* Peripheral-originated answer: no client socket of its own */
+    webapi_msg_t msg = { .fd = -1 };
     msg.id  = id;
     msg.fid = fid;
     if (json_str && len > 0) {
@@ -218,6 +219,12 @@ static void handle_modbus_msg(modbus_worker_t *w, webapi_msg_t *msg) {
     };
     modbus_init(&w->mb, &cfg_update);
 
+    TickType_t t_req = xTaskGetTickCount();
+    /* Уровень debug: при непрерывном опросе это десятки строк в секунду, а
+     * вывод на консоль синхронный и сам становится тормозом. */
+    ESP_LOGD(TAG, "запрос fd=%d id=%lu: ADR=%u FN=%u RA=%u RVC=%u AWT=%lu",
+             msg->fd, msg->id, frame.ucAddr, frame.ucFunc,
+             frame.usRegAddr, frame.usRegValueCount, (unsigned long)awt_ms);
     uint32_t tid = modbus_request(&w->mb, &frame, mb_on_complete, &cb);
     if (!tid) {
         gw_uart_unlock_rx(&w->app_uart->desc);
@@ -225,18 +232,27 @@ static void handle_modbus_msg(modbus_worker_t *w, webapi_msg_t *msg) {
         return;
     }
 
+    /* Ждём ответ, но не крутимся вхолостую: при непрерывном опросе такой цикл
+     * занимал ядро почти целиком (замерено: интерфейс прибора начинал отвечать
+     * по 15 секунд). Пауза в один тик FreeRTOS даёт ядру другим задачам, а
+     * задержка обнаружения ответа — не больше этого тика. */
     TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(awt_ms + 500);
     while (!cb.done && (int32_t)(xTaskGetTickCount() - deadline) < 0) {
         modbus_work(&w->mb);
-        taskYIELD();
+        if (!cb.done) vTaskDelay(1);
     }
 
     if (!cb.done) {
         modbus_cancel_request(&w->mb, tid);
         gw_uart_unlock_rx(&w->app_uart->desc);
+        ESP_LOGW(TAG, "modbus %lu: таймаут транзакции %lu мс",
+                 msg->id, (unsigned long)((xTaskGetTickCount() - t_req) * portTICK_PERIOD_MS));
         send_mb_error(msg->id, msg->fid, 4);
         return;
     }
+    ESP_LOGD(TAG, "modbus %lu порт %d: транзакция %lu мс",
+             msg->id, w->port_no,
+             (unsigned long)((xTaskGetTickCount() - t_req) * portTICK_PERIOD_MS));
 
     gw_uart_unlock_rx(&w->app_uart->desc);
     format_and_send_mb_response(msg->id, msg->fid, &cb);
@@ -253,6 +269,7 @@ static void ws_modbus_task(void *param) {
     webapi_msg_t    *msg;
     for (;;) {
         if (queue_receive(w->queue, &msg, portMAX_DELAY) == pdPASS) {
+            ESP_LOGD(TAG, "modbus %lu порт %d: взят из очереди", msg->id, w->port_no);
             handle_modbus_msg(w, msg);
             free(msg->data);
             free(msg);
@@ -285,7 +302,14 @@ esp_err_t ws_modbus_run(app_context_t *app) {
             return ESP_FAIL;
         }
 
-        mb_queues[i] = queue_create(32, sizeof(void *));
+        /* Очередь короткая намеренно. Транзакция занимает ~40 мс, но клиентов
+         * может быть несколько вкладок: при десяти запросах в секунду очередь
+         * любой разумной глубины стоит полной, и тогда КАЖДЫЙ запрос ждёт
+         * своей очереди — при глубине 8 это 400+ мс, при 32 завал копился на
+         * секунды, и страница выглядела мёртвой. Глубина 3 держит потолок
+         * ожидания около 150 мс; лишние запросы отсекаются на входе с ошибкой,
+         * а свежие данные придут следующим тактом. */
+        mb_queues[i] = queue_create(3, sizeof(void *));
         w->queue = mb_queues[i];
 
         app->uart.port[i].proto_context = &w->mb;

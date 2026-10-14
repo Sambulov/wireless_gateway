@@ -66,6 +66,12 @@ void app_main(void)
     }
     ESP_ERROR_CHECK(ret);
     load_config(&app_context);
+#if CONFIG_WIFI_AP_ENABLE
+    /* The default softAP secret is derived from the MAC, so it has to be
+     * discoverable: it is printed here and shown on /config.html. */
+    ESP_LOGI(TAG, "SoftAP '%s' password '%s'",
+             app_context.ap_cnf.ap.ssid, app_context.ap_cnf.ap.password);
+#endif
 
     gpio_reset_pin(LED_D2_GPIO);
     gpio_set_direction(LED_D2_GPIO, GPIO_MODE_OUTPUT);
@@ -82,8 +88,11 @@ void app_main(void)
     eth_init_openeth();
 #else
     wifi_init_ap_sta(&app_context.ap_cnf, &app_context.sta_cnf);
-    tftp_example_init_server();
 #endif
+
+    /* Static addresses (when configured) must be in place before the servers
+     * start answering on them; DHCP/esp_netif defaults stay untouched. */
+    net_apply_config(&app_context);
 
     // /* Start the server for the first time */
     app_context.web_server = start_webserver();
@@ -92,29 +101,34 @@ void app_main(void)
     ESP_LOGI(TAG, "Registering URI handlers");
     ws_server_init();
     webserver_register_handler(app_context.ws_server, ws_transport_httpd_init("/ws"));
-    webserver_register_handler(app_context.web_server, &dir_list);
     webserver_register_handler(app_context.web_server, &file_upload);
     webserver_register_handler(app_context.web_server, &file_delete);
+    webserver_register_handler(app_context.web_server, &file_rename);
+    webserver_register_handler(app_context.web_server, &ota_update);
+    /* Короткий адрес интерпретатора и вшитая страница — до catch-all file_server */
+    webserver_register_handler(app_context.web_server, &modbus_alias);
+
+    /* The built-in configuration page must be registered before the
+     * catch-all file_server */
+    webserver_register_handler(app_context.web_server, &config_page);
+    webserver_register_handler(app_context.web_server, &config_page_html);
     webserver_register_handler(app_context.web_server, &file_server);
 
     ESP_LOGI(TAG, "Run");
 
     ret = ws_uart_run(&app_context);
-    if (!ret)
-	ESP_LOGI("app", "can't run ws_uart task");
+    if (ret != ESP_OK)
+        ESP_LOGE("app", "can't run ws_uart task: %s", esp_err_to_name(ret));
 
     if (ws_modbus_run(&app_context) != ESP_OK)
         ESP_LOGI("app", "can't run ws_modbus tasks");
 
-#if 0
-    //TOOD: move test to other place.
-    ws_uart_integrational_test_run(&app_context);
-#endif
+    if (api_sys_run(&app_context) != ESP_OK)
+        ESP_LOGE("app", "can't run system api task");
 
     uint32_t led_tick = 0;
     uint8_t led_state = 0;
     while (1) {
-        api_handler_system_work(&app_context);
         if (++led_tick >= CONFIG_FREERTOS_HZ) {
             led_tick = 0;
             led_state ^= 1;

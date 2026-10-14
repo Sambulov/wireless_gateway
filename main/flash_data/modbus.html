@@ -1,0 +1,1232 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Modbus — работа с приборами</title>
+<style>
+    :root { --bg:#f1f5f9; --card:#fff; --line:#e2e8f0; --ink:#1e293b; --dim:#64748b;
+            --accent:#0f3460; --ok:#16a34a; --err:#dc2626; --warn:#d97706; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--ink);
+           font:14px/1.45 -apple-system,"Segoe UI",Roboto,Arial,sans-serif; }
+    .header { background:linear-gradient(90deg,#1a1a2e,#0f3460); color:#e2e8f0;
+              padding:10px 16px; display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
+    .header h1 { font-size:16px; margin:0; font-weight:600; }
+    .badge { padding:2px 10px; border-radius:10px; font-size:12px; background:#334155; }
+    .badge.ok { background:var(--ok); color:#fff; }
+    .badge.err { background:var(--err); color:#fff; }
+    .badge.warn { background:var(--warn); color:#fff; }
+    .wrap { max-width:1180px; margin:0 auto; padding:14px; display:flex; flex-direction:column; gap:14px; }
+    .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:14px; }
+    .card h2 { font-size:15px; margin:0 0 10px; color:var(--accent); }
+    .card h2 small { color:var(--dim); font-weight:400; font-size:12px; margin-left:6px; }
+    .row { display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap; }
+    label.field { display:block; margin:6px 0 2px; color:var(--dim); font-size:12px; }
+    select, input[type=text], input[type=number] { padding:6px 8px; border:1px solid #cbd5e1;
+        border-radius:5px; font-size:13px; font-family:inherit; background:#fff; max-width:100%; }
+    input[type=number] { width:110px; }
+    #map-sel { min-width:220px; max-width:300px; }
+    #regs-bar { margin:2px 0 10px; align-items:center; gap:12px; }
+    #regs-bar .hint { margin:0; }
+    button { border:1px solid #cbd5e1; background:#f8fafc; border-radius:5px; padding:6px 12px;
+             font-size:13px; cursor:pointer; font-family:inherit; }
+    button:hover:not(:disabled) { background:#e2e8f0; }
+    button:disabled { opacity:.5; cursor:not-allowed; }
+    button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+    button.primary:hover:not(:disabled) { background:#164a80; }
+    button.danger { background:#fee2e2; border-color:#fecaca; color:#991b1b; }
+    button.small { padding:3px 8px; font-size:12px; }
+    .msg { margin-top:8px; font-size:13px; min-height:18px; }
+    .msg.ok { color:var(--ok); } .msg.err { color:var(--err); } .msg.warn { color:var(--warn); }
+    .hint { color:var(--dim); font-size:12px; margin-top:6px; }
+    .tabs { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:10px; }
+    .tabs button.active { background:var(--accent); border-color:var(--accent); color:#fff; }
+    table { width:100%; border-collapse:collapse; font-size:13px; }
+    th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+    th { color:var(--dim); font-weight:600; font-size:12px; position:sticky; top:0; background:var(--card); }
+    td.addr { color:var(--dim); font-family:ui-monospace,Menlo,monospace; width:64px; }
+    td.val { font-family:ui-monospace,Menlo,monospace; width:150px; }
+    td.name { width:26%; }
+    td.desc { color:var(--dim); font-size:12px; }
+    td.act { width:230px; white-space:nowrap; }
+    /* Поле ввода не растягивается на всю ячейку, иначе кнопка уезжает за край */
+    .ctl { display:inline-flex; align-items:center; gap:6px; }
+    .ctl select { width:150px; max-width:150px; }
+    .ctl input[type=number] { width:92px; }
+    .ro { color:var(--dim); }
+    .alarm-on { background:#fee2e2; }
+    .alarm-off { color:var(--ok); }
+    /* Гасим только устаревшее значение, но не элементы управления: строка
+     * целиком не должна выглядеть неактивной. */
+    .val.stale { opacity:.5; }
+    .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:6px 18px; }
+    .kv { display:flex; justify-content:space-between; gap:10px; border-bottom:1px dashed var(--line); padding:3px 0; }
+    .kv span:first-child { color:var(--dim); }
+    .kv span:last-child { font-family:ui-monospace,Menlo,monospace; text-align:right; }
+</style>
+</head>
+<body>
+<div class="header">
+    <h1>🔌 Modbus — работа с приборами</h1>
+    <span class="badge" id="ws-status">нет связи</span>
+    <span class="badge" id="map-badge">карта не выбрана</span>
+    <span class="badge" id="poll-badge">опрос остановлен</span>
+</div>
+
+<div class="wrap">
+
+    <div class="card">
+        <h2>Подключение</h2>
+        <div class="row">
+            <div><label class="field" for="map-sel">Описание прибора (карта)</label>
+                 <select id="map-sel" style="min-width:240px"><option>— загрузка… —</option></select></div>
+            <button id="map-reload" type="button">Обновить список</button>
+            <div><label class="field" for="port-sel">Порт шлюза</label>
+                 <select id="port-sel">
+                     <option value="4387" selected>UART2 (RS485, 0x1123)</option>
+                     <option value="4371">UART1 (0x1113)</option>
+                 </select></div>
+            <div><label class="field" for="mb-addr">Адрес прибора</label>
+                 <input type="number" id="mb-addr" min="1" max="247" value="1" style="width:80px"></div>
+            <div><label class="field" for="mb-baud">Скорость</label>
+                 <select id="mb-baud"></select></div>
+            <div><label class="field" for="mb-par">Чётность</label>
+                 <select id="mb-par"><option value="0" selected>None</option>
+                     <option value="1">Odd</option><option value="2">Even</option></select></div>
+            <div><label class="field" for="mb-sb">Стоп-биты</label>
+                 <select id="mb-sb"><option value="1" selected>1</option><option value="2">2</option></select></div>
+            <div><label class="field" for="poll-ms">Период опроса</label>
+                 <select id="poll-ms">
+                     <option value="500">0,5 с</option>
+                     <option value="1000">1 с</option>
+                     <option value="2000" selected>2 с</option>
+                     <option value="5000">5 с</option>
+                     <option value="10000">10 с</option>
+                     <option value="-1">непрерывно (как успевает прибор)</option>
+                     <option value="0">только по кнопке</option>
+                 </select></div>
+            <button class="primary" id="connect">Подключить</button>
+            <button id="disconnect" type="button">Остановить опрос</button>
+        </div>
+        <div class="msg" id="conn-msg"></div>
+        <div class="hint">Карта выбирает параметры связи по умолчанию; лимит прибора на один запрос
+            берётся из карты (у INNOVERT ISD — 16 регистров). Запись выполняется только в регистры
+            с доступом «чтение/запись» и только по нажатию кнопки.
+            Период опроса задаёт, как часто страница перечитывает изменяемые регистры открытой
+            группы: один такт — это несколько запросов к прибору, поэтому на линии 9600 бод
+            разумный минимум — около секунды. Уставки читаются один раз и по кнопке
+            «Обновить группу», от периода они не зависят.</div>
+    </div>
+
+    <div class="card" id="alarms-card" style="display:none">
+        <h2>Аварии</h2>
+        <div class="grid" id="alarms"></div>
+    </div>
+
+    <div class="card" id="commands-card" style="display:none">
+        <h2>Команды</h2>
+        <div class="row" id="commands"></div>
+        <div class="msg" id="cmd-msg"></div>
+    </div>
+
+    <div class="card" id="regs-card" style="display:none">
+        <h2>Регистры <small id="group-desc"></small></h2>
+        <div class="tabs" id="group-tabs"></div>
+        <div class="row" id="regs-bar">
+            <button id="regs-refresh" type="button">Обновить группу</button>
+            <span class="hint" id="poll-hint"></span>
+        </div>
+        <table>
+            <thead><tr><th>Адрес</th><th>Название</th><th>Значение</th><th>Описание</th><th>Запись</th></tr></thead>
+            <tbody id="reg-body"></tbody>
+        </table>
+    </div>
+
+</div>
+
+<script>
+/* ═══════════════════════════════════════════════════════════════════════════
+ *  Универсальный интерпретатор карт регистров (modbus-regmap/1.0)
+ *  Карты лежат на устройстве в /regmaps/*.jsonc, спецификация — tools/regmap/FORMAT.md
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+const WS_PORT = 81;                                  // CONFIG_WEB_SOCKET_SERVER_PORT
+const REGMAP_DIR = '/regmaps';
+
+/* ── JSONC: комментарии и висячие запятые ─────────────────────────────────── */
+
+function jsoncParse(text) {
+    let out = '', inStr = false;
+    for (let i = 0; i < text.length; i++) {
+        const ch = text[i];
+        if (inStr) {
+            out += ch;
+            if (ch === '\\') { out += text[++i] || ''; continue; }
+            if (ch === '"') inStr = false;
+            continue;
+        }
+        if (ch === '"') { inStr = true; out += ch; continue; }
+        if (ch === '/' && text[i + 1] === '/') { while (i < text.length && text[i] !== '\n') i++; out += '\n'; continue; }
+        if (ch === '/' && text[i + 1] === '*') {
+            i += 2;
+            while (i < text.length && !(text[i] === '*' && text[i + 1] === '/')) { if (text[i] === '\n') out += '\n'; i++; }
+            i++;
+            continue;
+        }
+        if (ch === ',') {                            // висячая запятая перед } или ]
+            let j = i + 1;
+            while (j < text.length && /\s/.test(text[j])) j++;
+            if (text[j] === '}' || text[j] === ']') continue;
+        }
+        out += ch;
+    }
+    return JSON.parse(out);
+}
+
+/* ── Работа со словами регистров ──────────────────────────────────────────── */
+
+const TYPES = { u16: [2, false], s16: [2, true], u32: [4, false], s32: [4, true],
+                u64: [8, false], s64: [8, true], f32: [4, 'f'], f64: [8, 'f'],
+                bcd: [2, false], bits: [2, false], string: [0, 's'], time: [0, 'x'], struct: [0, 'x'] };
+
+function typeWords(reg) {
+    if (TYPES[reg.type] === undefined) return 1;
+    const [bytes, kind] = TYPES[reg.type];
+    if (kind === 's' || kind === 'x') return reg.count || 1;
+    return bytes / 2;
+}
+
+/* Порядок слов. Строка вида ABCD говорит, какой логический байт значения лежит
+ * на каждой позиции в потоке регистров. Для 8-байтовых величин та же перестановка
+ * применяется к каждой половине (ABCD → ABCD|EFGH, CDAB → CDAB|GHEF). */
+const ORDERS = ['ABCD', 'CDAB', 'BADC', 'DCBA'];
+
+function orderLetters(order, n) {
+    let o = (order || 'ABCD').toUpperCase();
+    if (!ORDERS.includes(o)) o = 'ABCD';
+    if (n <= 2) return 'AB';
+    if (n <= 4) return o;
+    const shift = off => [...o].map(c => String.fromCharCode(c.charCodeAt(0) + off)).join('');
+    return shift(0) + shift(4);
+}
+
+function orderBytes(stream, letters) {
+    const map = {};
+    for (let i = 0; i < letters.length && i < stream.length; i++) map[letters[i]] = stream[i];
+    const out = [];
+    for (const ch of 'ABCDEFGH') if (map[ch] !== undefined) out.push(map[ch]);
+    return out;
+}
+
+function wordsToBytes(words, order) {
+    const stream = [];
+    for (const w of words) stream.push((w >>> 8) & 0xff, w & 0xff);
+    if (stream.length <= 2 || !order) return stream;
+    return orderBytes(stream, orderLetters(order, stream.length));
+}
+
+function bytesToWords(bytes) {
+    const words = [];
+    for (let i = 0; i < bytes.length; i += 2) words.push(((bytes[i] || 0) << 8) | (bytes[i + 1] || 0));
+    return words;
+}
+
+/* Обратное преобразование: логические байты значения → поток регистров.
+ * На позиции i потока обязан лежать тот логический байт, чья буква стоит в
+ * letters[i] — иначе декодирование не восстановит исходные байты. */
+const LETTER_IDX = { A: 0, B: 1, C: 2, D: 3, E: 4, F: 5, G: 6, H: 7 };
+
+function reverseOrder(words, order) {
+    const logical = wordsToBytes(words, null);
+    const letters = orderLetters(order, logical.length);
+    return bytesToWords([...letters].map(ch => logical[LETTER_IDX[ch]] || 0));
+}
+
+/* ── Декодирование и кодирование значений ─────────────────────────────────── */
+
+function readNumber(bytes, signed, isFloat, big) {
+    const dv = new DataView(new Uint8Array(bytes).buffer);
+    if (isFloat) return bytes.length === 4 ? dv.getFloat32(0) : dv.getFloat64(0);
+    if (bytes.length === 2) return signed ? dv.getInt16(0) : dv.getUint16(0);
+    if (bytes.length === 4) return signed ? dv.getInt32(0) : dv.getUint32(0);
+    const big64 = big || (signed ? dv.getBigInt64(0) : dv.getBigUint64(0));
+    return Number(big64);
+}
+
+function decodeBcd(raw, nibbles) {
+    let text = '';
+    let shift = nibbles.reduce((a, b) => a + b, 0) * 4;
+    for (const n of nibbles) {
+        shift -= n * 4;
+        const part = (raw >> shift) & ((1 << (n * 4)) - 1);
+        text += (text ? '.' : '') + part.toString(16).padStart(n, '0');
+    }
+    return text;
+}
+
+/* Возвращает {raw, bits:[{bit,text}], text} для одного регистра */
+function decodeRegister(map, reg, words) {
+    const order = reg.byte_order || map.transport.byte_order || 'ABCD';
+    const bytes = wordsToBytes(words, order);
+    let raw;
+    /* Наличие полей важнее токена типа: в описаниях из мануалов bits/bcd часто
+     * заданы полем, а тип остаётся базовым. */
+    if (reg.bcd) {
+        raw = words[0];
+        return { raw, text: decodeBcd(raw, reg.bcd) };
+    }
+    if (reg.type === 'bcd') {
+        raw = words[0];
+        return { raw, text: decodeBcd(raw, reg.bcd || [4]) };
+    }
+    if (reg.type === 'string') {
+        let s = '';
+        for (const b of bytes) s += String.fromCharCode(b);
+        s = s.replace(/\0+$/, '').replace(/^\0+/, '');
+        try { s = decodeURIComponent(escape(s)); } catch (_) {}
+        return { raw: null, text: s.trim() };
+    }
+    if (reg.type === 'time' || reg.type === 'struct') {
+        const parts = [];
+        for (const f of reg.fields || []) {
+            const idx = f.addr - reg.addr;
+            const w = words[idx] || 0;
+            let v = w;
+            if (f.bits) {
+                const [hi, lo] = f.bits;
+                v = (w >> lo) & ((1 << (hi - lo + 1)) - 1);
+            }
+            parts.push(`${f.name}: ${v}`);
+        }
+        return { raw: null, text: parts.join(', ') };
+    }
+    const [bytesLen, kind] = TYPES[reg.type] || [2, false];
+    raw = readNumber(bytes, kind === true, kind === 'f');
+    if (reg.bits || reg.type === 'bits') {
+        const list = [];
+        for (const b of reg.bits || []) {
+            const shift = Math.log2(b.mask & -b.mask);
+            const val = (raw & b.mask) >>> shift;
+            let text = b.name;
+            const en = resolveEnum(map, b.enum);
+            if (en) {
+                const hit = en.find(e => e.v === val);
+                text += ': ' + (hit ? hit.t : val);
+            } else if (b.mask & (b.mask - 1)) {
+                text += ': ' + val;
+            } else {
+                text += val ? ' — есть' : ' — нет';
+            }
+            list.push({ bit: val, text });
+        }
+        return { raw, bits: list };
+    }
+    return { raw, text: null };
+}
+
+function resolveEnum(map, name) {
+    if (Array.isArray(name)) return name;
+    if (typeof name === 'string') return map.enums[name] || null;
+    return null;
+}
+
+/* Инженерное значение: raw * scale + offset */
+function toEng(reg, raw) {
+    const v = reg.value || {};
+    const scale = v.scale === undefined ? 1 : v.scale;
+    const offset = v.offset || 0;
+    return raw * scale + offset;
+}
+
+function fmtEng(reg, value) {
+    const v = reg.value || {};
+    const dec = v.decimals !== undefined ? v.decimals
+              : (v.scale && v.scale < 1 ? (v.scale <= 0.01 ? 2 : 1) : 0);
+    let text = Number(value).toFixed(dec);
+    if (v.format) text = v.format.replace(/\{X\}/g, text).replace(/\{Y\}/g, '');
+    return text + (v.unit ? ' ' + v.unit : '');
+}
+
+function clampRaw(reg, raw) {
+    const bits = typeWords(reg) * 16;
+    const signed = (TYPES[reg.type] || [2, false])[1] === true;
+    if (signed) return Math.max(-(2 ** (bits - 1)), Math.min(2 ** (bits - 1) - 1, Math.round(raw)));
+    return Math.max(0, Math.min(2 ** bits - 1, Math.round(raw)));
+}
+
+/* Инженерное значение → слова регистров */
+function encodeRegister(map, reg, value) {
+    const v = reg.value || {};
+    const scale = v.scale === undefined ? 1 : v.scale;
+    const raw = clampRaw(reg, (value - (v.offset || 0)) / scale);
+    if (reg.type === 'bcd') return [raw & 0xffff];
+    const order = reg.byte_order || map.transport.byte_order || 'ABCD';
+    const bytesLen = (TYPES[reg.type] || [2, false])[0];
+    const buf = new ArrayBuffer(bytesLen);
+    const dv = new DataView(buf);
+    switch (reg.type) {
+        case 'f32': dv.setFloat32(0, raw); break;
+        case 'f64': dv.setFloat64(0, raw); break;
+        case 's16': dv.setInt16(0, raw); break;
+        case 's32': dv.setInt32(0, raw); break;
+        case 's64': dv.setBigInt64(0, BigInt(raw)); break;
+        case 'u64': dv.setBigUint64(0, BigInt(raw)); break;
+        case 'u32': dv.setUint32(0, raw); break;
+        default: dv.setUint16(0, raw);
+    }
+    const bytes = Array.from(new Uint8Array(buf));
+    return reverseOrder(bytesToWords(bytes), order).map(w => w & 0xffff);
+}
+
+/* ── Состояние ───────────────────────────────────────────────────────────── */
+
+let ws = null, sid = 1;
+const pending = new Map();
+let map = null;                       // разобранная карта
+let mapListLoaded = false;            // список карт уже прочитан
+let regIndex = new Map();             // addr → регистр
+let state = new Map();                // addr → слова (сырые)
+let stateTs = new Map();              // addr → время обновления
+let pollTimer = null;
+let polling = false;
+let connected = false;
+let currentGroup = null;
+
+const $ = id => document.getElementById(id);
+
+const PORT_FID = { 4387: { read: 0x1123, cfg: 0x1020 }, 4371: { read: 0x1113, cfg: 0x1010 } };
+
+/* ── WebSocket к шлюзу ───────────────────────────────────────────────────── */
+
+function wsConnect() {
+    ws = new WebSocket(`ws://${location.hostname}:${WS_PORT}/ws`);
+    ws.onopen = () => {
+        setWs(true);
+        /* Карту перечитываем только когда её ещё нет: на неровной связи
+         * переподключения частые, а карта весит 122 КБ — иначе получается
+         * лавина повторных загрузок. */
+        if (!map) loadMapList();
+        else connectAndPoll();
+    };
+    ws.onclose = () => { setWs(false); setTimeout(wsConnect, 1500); };
+    ws.onerror = () => setWs(false);
+    ws.onmessage = e => {
+        let obj;
+        try { obj = JSON.parse(e.data); } catch (_) { return; }
+        const arg = (obj.ARG && typeof obj.ARG === 'object') ? obj.ARG : {};
+        if (arg.STA === '0x00000005') return;                 // DELIVERED
+        const cb = pending.get(obj.SID);
+        if (cb) { pending.delete(obj.SID); cb(arg); }
+    };
+}
+
+function setWs(ok) {
+    $('ws-status').className = 'badge ' + (ok ? 'ok' : 'err');
+    $('ws-status').textContent = ok ? 'связь есть' : 'нет связи';
+    if (!ok) { connected = false; setPollBadge(false); }
+}
+
+function wsSend(fid, arg, timeout = 4000) {
+    return new Promise(resolve => {
+        if (!ws || ws.readyState !== WebSocket.OPEN) { resolve(null); return; }
+        const id = sid++ & 0xffff;
+        const key = '0x' + id.toString(16).padStart(8, '0');
+        const timer = setTimeout(() => { pending.delete(key); resolve(null); }, timeout);
+        pending.set(key, arg2 => { clearTimeout(timer); resolve(arg2); });
+        ws.send(JSON.stringify({ FID: fid, FLAGS: 0, SID: id, ARG: arg }));
+    });
+}
+
+/* ── Загрузка карт ───────────────────────────────────────────────────────── */
+
+/* Связь по Wi-Fi бывает неровной: ответ на список карт или сама карта могут не
+ * успеть прийти с первого раза. Раньше страница в этом случае просто сдавалась
+ * и оставалась с надписью «карта не выбрана» — приходилось перезагружать её
+ * руками. Теперь пробуем несколько раз с нарастающей паузой. */
+async function withRetry(what, tries, fn) {
+    for (let i = 0; i < tries; i++) {
+        const r = await fn(i);
+        if (r !== null && r !== undefined) return r;
+        if (i < tries - 1) {
+            msg('conn-msg', `${what}: попытка ${i + 1} из ${tries} не удалась, повторяем…`, 'warn');
+            await new Promise(r2 => setTimeout(r2, 700 * (i + 1)));
+        }
+    }
+    return null;
+}
+
+async function loadMapList() {
+    const sel = $('map-sel');
+    const res = await withRetry('Список карт', 4, () => wsSend(0x0014, { PATH: REGMAP_DIR }, 8000));
+    if (!res || res.ERR) {
+        sel.innerHTML = '<option>— карты не найдены —</option>';
+        msg('conn-msg', `Не удалось прочитать каталог ${REGMAP_DIR}. `
+            + 'Проверьте связь и нажмите «Подключить».', 'err');
+        return;
+    }
+    mapListLoaded = true;
+    const maps = (res.FILES || []).filter(f => !f.DIR && f.NAME.endsWith('.jsonc'));
+    sel.innerHTML = '';
+    if (!maps.length) { sel.innerHTML = '<option>— нет карт —</option>'; return; }
+    mapSizes = {};
+    for (const m of maps) {
+        mapSizes[m.NAME] = m.SIZE;
+        const o = document.createElement('option');
+        o.value = m.NAME; o.textContent = `${m.NAME} (${fmtBytes(m.SIZE)})`;
+        sel.appendChild(o);
+    }
+    await selectMap();
+}
+
+/* Карта весит сотню-другую килобайт, и качать её заново при каждом открытии
+ * страницы (да ещё в нескольких вкладках) — главная причина «провала по
+ * производительности». Держим её в localStorage под ключом с именем и размером:
+ * если файл на приборе изменился, размер другой и кэш не подойдёт. */
+let mapSizes = {};
+
+function mapCacheKey(name, size) { return `wg-map:${name}:${size}`; }
+
+function readMapCache(name) {
+    const key = mapCacheKey(name, mapSizes[name]);
+    try {
+        const t = localStorage.getItem(key);
+        if (t) return t;
+    } catch (_) {}
+    return null;
+}
+
+function writeMapCache(name, text) {
+    try {
+        /* убираем прежние версии этой же карты, чтобы не копить объём */
+        for (let i = localStorage.length - 1; i >= 0; i--) {
+            const k = localStorage.key(i);
+            if (k && k.startsWith(`wg-map:${name}:`) && k !== mapCacheKey(name, mapSizes[name]))
+                localStorage.removeItem(k);
+        }
+        localStorage.setItem(mapCacheKey(name, mapSizes[name]), text);
+    } catch (_) { /* места нет — не страшно, просто будем качать заново */ }
+}
+
+async function fetchMapText(name) {
+    const cached = readMapCache(name);
+    if (cached) return cached;
+    const text = await withRetry(`Карта ${name}`, 4, async () => {
+        try {
+            const r = await fetch(`${REGMAP_DIR}/${encodeURIComponent(name)}`, { cache: 'no-store' });
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            return await r.text();
+        } catch (e) {
+            return null;
+        }
+    });
+    if (text) writeMapCache(name, text);
+    return text;
+}
+
+async function selectMap() {
+    const name = $('map-sel').value;
+    if (!name) return;
+    stopPoll();
+    map = null; regIndex = new Map(); state = new Map(); stateTs = new Map();
+    currentGroup = null; rangeCursor = 0;
+    $('map-badge').textContent = 'читаем карту…';
+    msg('conn-msg', `Читаем карту ${name}…`, 'warn');
+    const text = await fetchMapText(name);
+    if (text === null) {
+        msg('conn-msg', `Карта ${name} не прочитана: сервер не ответил. `
+            + 'Нажмите «Подключить», чтобы попробовать снова.', 'err');
+        $('map-badge').textContent = 'карта не выбрана';
+        return;
+    }
+    try {
+        map = jsoncParse(text);
+    } catch (e) {
+        msg('conn-msg', 'Карта не разобрана: ' + e.message, 'err');
+        $('map-badge').textContent = 'карта не выбрана';
+        return;
+    }
+    if (!map || !String(map.format || '').startsWith('modbus-regmap/')) {
+        msg('conn-msg', 'Файл не является картой modbus-regmap', 'err');
+        map = null; $('map-badge').textContent = 'карта не выбрана'; return;
+    }
+    indexMap();
+    applyMapDefaults();
+    renderTabs(); renderAlarms(); renderCommands();
+    $('map-badge').textContent = `${map.device.vendor} ${map.device.model}`;
+    $('regs-card').style.display = '';
+    msg('conn-msg', `Карта «${map.device.vendor} ${map.device.model}» загружена: `
+        + `${regIndex.size} регистров, ${map.groups.length} групп`, 'ok');
+    connectAndPoll();     /* параметры связи берём из карты и сразу начинаем опрос */
+}
+
+function indexMap() {
+    for (const g of map.groups || [])
+        for (const r of g.registers || []) {
+            r._group = g;
+            regIndex.set(r.addr, r);
+        }
+}
+
+function applyMapDefaults() {
+    const t = map.transport || {}, d = t.defaults || {};
+    if (d.address) $('mb-addr').value = d.address;
+    const bauds = [1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200];
+    const sel = $('mb-baud');
+    sel.innerHTML = '';
+    for (const b of bauds) {
+        const o = document.createElement('option');
+        o.value = b; o.textContent = b;
+        if (b === (d.baud || 9600)) o.selected = true;
+        sel.appendChild(o);
+    }
+    $('mb-par').value = d.parity === 'even' ? '2' : d.parity === 'odd' ? '1' : '0';
+    $('mb-sb').value = d.stopbits === 2 ? '2' : '1';
+}
+
+/* ── Опрос ───────────────────────────────────────────────────────────────── */
+
+/* Небольшие промежутки между нужными регистрами читаем заодно.
+ *
+ * Один запрос к прибору стоит 40-90 мс почти независимо от числа регистров в нём
+ * (это плата за кадр и оборот линии), а сами регистры группы лежат кучками. Без
+ * склейки 14 изменяемых регистров группы PA требовали пяти запросов; с запасом
+ * в восемь адресов те же данные приходят двумя. Платим за это парой лишних
+ * байт в кадре — на 9600 бод это доли миллисекунды. */
+const RANGE_GAP = 8;
+
+function rangesFor(regs, limit) {
+    const addrs = [...new Set(regs.map(r => r.addr))].sort((a, b) => a - b)
+        .filter(a => regIndex.get(a));            /* только адреса текущей карты */
+    const out = [];
+    let start = null, end = null;
+    const flush = () => {
+        for (let s = start; s <= end; s += limit)
+            out.push({ ra: s, rc: Math.min(limit, end - s + 1) });
+    };
+    for (const a of addrs) {
+        const last = a + typeWords(regIndex.get(a)) - 1;
+        if (start === null) { start = a; end = last; continue; }
+        const gap = a - end - 1;
+        if (gap <= RANGE_GAP && (last - start + 1) <= limit) end = last;
+        else { flush(); start = a; end = last; }
+    }
+    if (start !== null) flush();
+    return out;
+}
+
+let slowTick = 0;
+let needFull = true;      /* при открытии группы и по кнопке читаем всё, потом — только изменяемое */
+
+/* Что опрашивать: изменяемые (volatile) регистры открытой группы, аварии и то,
+ * что вынесено в плитки. При полном чтении (needFull) — всю группу целиком:
+ * уставки читаются один раз, их незачем гонять по кругу. */
+function regsToPoll(includeStatic) {
+    const fast = [], slow = [], seen = new Set();
+    const add = (list, r) => { if (r && !seen.has(r.addr)) { seen.add(r.addr); list.push(r); } };
+
+    if (currentGroup) {
+        for (const r of currentGroup.registers || []) {
+            if (!includeStatic && !r.volatile) continue;
+            add(r.poll === 'fast' ? fast : slow, r);
+        }
+    }
+    for (const a of map.alarms || []) add(fast, regIndex.get(a.addr));
+    const ui = map.ui || {};
+    for (const u of (ui.gauges || []).concat(ui.charts || [])) add(fast, regIndex.get(u.addr));
+
+    return { fast, slow };
+}
+
+/* За такт опрашиваем не больше нескольких диапазонов и идём по кругу, чтобы
+ * большие группы укладывались в несколько тактов, а не одним шквалом. */
+const RANGES_PER_TICK = 6;
+let rangeCursor = 0;
+
+/* Через сколько считаем, что опрашиваемый регистр перестал отвечать. */
+const STALE_MS = 10000;
+
+function nextRanges(limit) {
+    const full = needFull;
+    const { fast, slow } = regsToPoll(full);
+    slowTick++;
+    const regs = (full || slowTick % 3 === 0) ? fast.concat(slow) : fast;
+    const ranges = rangesFor(regs, limit);
+    if (!ranges.length) { needFull = false; return []; }
+    if (ranges.length <= RANGES_PER_TICK) {
+        rangeCursor = 0;
+        needFull = false;                      /* всё нужное прочитано за такт */
+        return ranges;
+    }
+    const out = [];
+    for (let i = 0; i < RANGES_PER_TICK; i++)
+        out.push(ranges[(rangeCursor + i) % ranges.length]);
+    const next = (rangeCursor + RANGES_PER_TICK) % ranges.length;
+    if (next <= rangeCursor) needFull = false; /* круг замкнулся — дальше только volatile */
+    rangeCursor = next;
+    return out;
+}
+
+/* Живая статистика обмена: сколько запросов в секунду уходит и сколько в
+ * среднем идёт ответ. Это первое, на что смотреть, когда «данные не спешат»:
+ * прибор отвечает за десятки миллисекунд, а задержка в сотни означает, что
+ * линию занимает кто-то ещё (например, забытая вкладка со старой страницей). */
+let reqTimes = [];
+let respTimes = [];
+
+function noteResponse(ms) {
+    respTimes.push(ms);
+    if (respTimes.length > 20) respTimes.shift();
+}
+
+function linkStats() {
+    const now = Date.now();
+    reqTimes = reqTimes.filter(t => now - t < 5000);
+    const rate = (reqTimes.length / 5).toFixed(1);
+    if (!respTimes.length) return `${rate} зап/с`;
+    const avg = Math.round(respTimes.reduce((a, b) => a + b, 0) / respTimes.length);
+    return `${rate} зап/с, ответ ${avg} мс`;
+}
+
+async function pollOnce() {
+    if (!connected || !map) return;
+    const gen = pollGen;                 /* поколение такта: смена группы его отменяет */
+    const port = parseInt($('port-sel').value, 10);
+    const fid = PORT_FID[port].read;
+    const adr = parseInt($('mb-addr').value, 10) || 1;
+    const limit = (map.transport && map.transport.limits && map.transport.limits.max_regs_per_read) || 16;
+    const ranges = nextRanges(limit);
+
+    let answered = 0;
+    /* Запросы одного такта отправляем пачкой, не дожидаясь ответа на каждый.
+     * Иначе выходило так: запрос — ответ — и только потом следующий, а в
+     * промежутке линия простаивает (в замерах это давало треть загрузки шины
+     * вместо полной). Очередь прибора короткая, поэтому пачка небольшая. */
+    for (let i = 0; i < ranges.length; i += IN_FLIGHT) {
+        const batch = ranges.slice(i, i + IN_FLIGHT);
+        await Promise.all(batch.map(async ({ ra, rc }) => {
+            reqTimes.push(Date.now());
+            const t_sent = performance.now();
+            const res = await wsSend(fid, { AWT: 600, FN: 3, ADR: adr, RA: ra, RVC: rc });
+            noteResponse(performance.now() - t_sent);
+            if (!res || !res.RD || !res.RD.length) return;
+            answered++;
+            const words = res.RD.map(toWord);
+            for (let j = 0; j < words.length; j++) {
+                const addr = ra + j;
+                const reg = regIndex.get(addr);
+                if (!reg || j + typeWords(reg) > words.length) continue;
+                state.set(addr, words.slice(j, j + typeWords(reg)));
+                stateTs.set(addr, Date.now());
+            }
+        }));
+        /* Группу переключили, пока шли запросы: такт больше не нужен, а
+         * дослуживать его значит задерживать ответ на клик. */
+        if (gen !== pollGen) return;
+        /* Рисуем по мере прихода: один такт — это несколько запросов, и при
+         * медленном приборе значения иначе ждали бы конца всего такта. */
+        updateValues();
+    }
+    noteLink(answered, ranges.length);
+    updateValues();
+}
+
+/* Прибор может молчать целиком: выключен, отключён или не та скорость. Раньше
+ * страница в этом случае просто показывала прочерки, и было непонятно, что дело
+ * не в отрисовке. */
+let silentTicks = 0;
+let linkWarned = false;
+
+function noteLink(answered, asked) {
+    if (!asked) return;
+    if (answered > 0) {
+        silentTicks = 0;
+        if (linkWarned) {
+            linkWarned = false;
+            msg('conn-msg', 'Связь с прибором восстановлена.', 'ok');
+        }
+        return;
+    }
+    if (++silentTicks === 2 && !linkWarned) {
+        linkWarned = true;
+        msg('conn-msg', 'Прибор не отвечает на запросы: проверьте, что он включён, '
+            + 'подключён к RS485 и что скорость с адресом указаны верно.', 'err');
+    }
+}
+
+/* Такты не должны накладываться друг на друга: если прибор не ответил,
+ * следующий запускаем только после завершения предыдущего.
+ *
+ * Период опроса — 2 с: один такт это до пяти запросов к прибору, а каждый
+ * запрос стоит около 100 мс (сеть 40 мс + путь через API ещё ~50 мс + передача
+ * по линии 9600 бод). На секунде прибор был занят почти непрерывно. */
+const POLL_MS_DEFAULT = 2000;
+/* Сколько запросов к прибору держим в полёте. Очередь прибора рассчитана на
+ * три сообщения, поэтому больше слать смысла нет — лишнее он отвергнет. */
+const IN_FLIGHT = 3;
+let pollMs = POLL_MS_DEFAULT;         /* 0 — опрос только по кнопке */
+let tickBusy = false;
+let tickWanted = false;
+let pollPaused = false;
+let pollGen = 0;
+
+function pollLabel(ms) {
+    if (ms < 0) return 'непрерывно';
+    if (!ms) return 'только по кнопке';
+    return ms < 1000 ? '0,5 с' : (ms / 1000) + ' с';
+}
+
+/* Период опроса выбирается на странице и запоминается между заходами. Один такт
+ * — это несколько запросов к прибору (у INNOVERT 14 изменяемых регистров дают
+ * пять диапазонов), поэтому на 9600 бод период меньше секунды заметно занимает
+ * линию и мешает отзывчивости интерфейса. */
+function applyPollInterval(ms, save) {
+    pollMs = ms;
+    if (save) { try { localStorage.setItem('poll-ms', String(ms)); } catch (_) {} }
+    const sel = $('poll-ms');
+    if (sel) sel.value = String(ms);
+    if (!polling) return;
+    if (ms > 0 || ms < 0) {
+        kickPoll();                   /* новый период вступает в силу сразу */
+    } else if (pollTimer) {
+        clearTimeout(pollTimer); pollTimer = null;
+    }
+    setPollBadge(true);
+}
+
+async function runTick() {
+    if (tickBusy || !polling) return;
+    tickBusy = true;
+    try { await pollOnce(); } finally {
+        tickBusy = false;
+        if (tickWanted) { tickWanted = false; scheduleTick(0); }
+    }
+}
+
+function scheduleTick(delay) {
+    if (pollTimer) clearTimeout(pollTimer);
+    pollTimer = setTimeout(async () => {
+        pollTimer = null;
+        const started = performance.now();
+        await runTick();
+        if (!polling || pollMs === 0) return;
+        /* Период отсчитываем от НАЧАЛА такта, а не от его конца: иначе к
+         * периоду добавлялось время самого опроса, и при 0,5 с обновление
+         * приходило раз в 1,3 с. Отрицательный период — непрерывно, без паузы. */
+        const spent = performance.now() - started;
+        scheduleTick(pollMs < 0 ? 0 : Math.max(0, pollMs - spent));
+    }, delay);
+}
+
+function startPoll() {
+    if (polling) return;
+    polling = true;
+    setPollBadge(true);
+    scheduleTick(0);
+}
+
+/* Прочитать немедленно, не дожидаясь конца текущего периода: при переключении
+ * группы ждать до двух секунд только за тем, чтобы запрос вообще ушёл, — это и
+ * ощущалось как «страница долго отзывается». */
+function kickPoll() {
+    if (!polling) return;
+    if (tickBusy) { tickWanted = true; return; }   /* сразу после текущего */
+    scheduleTick(0);
+}
+
+function stopPoll() {
+    polling = false;
+    if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+    setPollBadge(false);
+}
+
+/* Скрытая вкладка не должна занимать линию: прибор один, а опрос идёт
+ * непрерывно и виден только когда на страницу смотрят. */
+setInterval(() => { if (polling) setPollBadge(true); }, 1000);
+
+document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+        if (polling) { stopPoll(); pollPaused = true; }
+    } else if (pollPaused && map) {
+        pollPaused = false;
+        startPoll();
+        kickPoll();
+    }
+});
+
+function setPollBadge(on) {
+    $('poll-badge').className = 'badge ' + (on ? 'ok' : '');
+    if (!on) { $('poll-badge').textContent = 'опрос остановлен'; return; }
+    $('poll-badge').textContent = (pollMs !== 0 ? `опрос идёт, ${pollLabel(pollMs)}`
+                                                : 'опрос только по кнопке')
+                                  + ' · ' + linkStats();
+}
+
+/* ── Отрисовка ───────────────────────────────────────────────────────────── */
+
+function fmtBytes(n) {
+    if (n < 1024) return n + ' Б';
+    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' КБ';
+    return (n / 1024 / 1024).toFixed(2) + ' МБ';
+}
+
+/* API отдаёт значения RD десятичными числами, но документация обещает
+ * шестнадцатеричные строки — принимаем оба вида. */
+function toWord(v) {
+    if (typeof v === 'number') return v & 0xffff;
+    const s = String(v).trim();
+    return parseInt(s, s.startsWith('0x') || s.startsWith('0X') ? 16 : 10) & 0xffff;
+}
+
+function msg(id, text, cls) {
+    const el = $(id);
+    el.textContent = text;
+    el.className = 'msg ' + (cls || '');
+}
+
+function renderTabs() {
+    const box = $('group-tabs');
+    box.innerHTML = '';
+    const groups = [...(map.groups || [])].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+    /* Открытую группу выбираем ДО отрисовки: иначе при первой загрузке
+     * currentGroup ещё пуст, метка active никому не достаётся, и не видно,
+     * какой раздел сейчас открыт. */
+    if (!currentGroup && groups.length) currentGroup = groups[0];
+    groups.forEach((g, i) => {
+        const b = document.createElement('button');
+        b.textContent = `${g.id} — ${g.name}`;
+        b.onclick = () => {
+            pollGen++;                       /* текущий такт больше не нужен */
+            currentGroup = g; renderTabs(); startPoll(); kickPoll();
+        };
+        if (g === currentGroup) b.className = 'active';
+        box.appendChild(b);
+    });
+    renderGroup();
+    needFull = true;                 /* новую группу читаем целиком */
+}
+
+/* Таблица строится один раз при смене группы: обновление значений больше не
+ * пересоздаёт разметку, поэтому выпадающие списки и поля не «схлопываются». */
+const rowRefs = new Map();
+
+function renderGroup() {
+    const body = $('reg-body');
+    body.innerHTML = '';
+    rowRefs.clear();
+    if (!currentGroup) { $('poll-hint').textContent = ''; return; }
+    $('group-desc').textContent = currentGroup.name || '';
+
+    const regs = [...(currentGroup.registers || [])].sort((a, b) => a.addr - b.addr);
+    const seen = new Set();
+    for (const reg of regs) {
+        if (seen.has(reg.addr)) continue;
+        seen.add(reg.addr);
+
+        const tr = document.createElement('tr');
+        const tdAddr = document.createElement('td');
+        tdAddr.className = 'addr';
+        tdAddr.textContent = reg.addr;
+
+        const tdName = document.createElement('td');
+        tdName.className = 'name';
+        tdName.textContent = reg.name || '';
+
+        const tdVal = document.createElement('td');
+        tdVal.className = 'val';
+
+        const tdDesc = document.createElement('td');
+        tdDesc.className = 'desc';
+        tdDesc.textContent = reg.desc || '';
+
+        const tdAct = document.createElement('td');
+        tdAct.className = 'act';
+        const ctl = writeCell(reg);
+
+        tr.append(tdAddr, tdName, tdVal, tdDesc, tdAct);
+        tdAct.appendChild(ctl.el);
+        body.appendChild(tr);
+        rowRefs.set(reg.addr, { tr, val: tdVal, input: ctl.input });
+    }
+    updateValues();
+}
+
+/* Обновляем только значения — разметка и элементы управления не трогаются. */
+function updateValues() {
+    if (!map || !currentGroup) return;
+    const limit = (map.transport.limits || {}).max_regs_per_read || 16;
+    const { fast, slow } = regsToPoll(false);
+    const volatileCount = fast.length + slow.length;
+
+    /* «Устаревшим» может стать только то, что обязано обновляться по кругу.
+     * Уставки читаются однократно, поэтому гасить их по времени нельзя:
+     * иначе через полминуты простоя вся группа выглядит неактивной. */
+    const polled = new Set(fast.concat(slow).map(r => r.addr));
+
+    for (const [addr, refs] of rowRefs) {
+        const reg = regIndex.get(addr);
+        if (!reg) continue;
+        const words = state.get(addr);
+        const stale = !!words && polled.has(addr)
+            && (Date.now() - (stateTs.get(addr) || 0) > STALE_MS);
+        refs.val.className = 'val' + (stale ? ' stale' : '');
+        paintValue(refs.val, reg, words);
+        /* Поле ввода не подменяем, пока с ним работают */
+        if (refs.input && document.activeElement !== refs.input && words) {
+            const dec = decodeRegister(map, reg, words);
+            if (dec.raw !== null && !refs.input.dataset.touched) {
+                refs.input.value = refs.input.tagName === 'SELECT'
+                    ? dec.raw : +toEng(reg, dec.raw).toFixed(4);
+            }
+        }
+    }
+
+    const nRanges = rangesFor(fast.concat(slow), limit).length;
+    $('poll-hint').textContent = `Регистров в группе: ${rowRefs.size} · `
+        + `изменяемых ${volatileCount}, уставки читаются один раз — `
+        + `кнопка «Обновить» перечитывает группу целиком · `
+        + `диапазонов на полное чтение: ${rangesFor(currentGroup.registers || [], limit).length} `
+        + `(лимит прибора — ${limit})`;
+    refreshAlarms();
+}
+
+function paintValue(cell, reg, words) {
+    const text = valueText(reg, words);
+    if (cell.textContent !== text) cell.textContent = text;
+    cell.title = reg.volatile ? 'изменяемое значение' : 'читается однократно';
+}
+
+function valueText(reg, words) {
+    if (!words) {
+        const d = reg.default !== undefined ? reg.default
+                : (reg.value && reg.value.min !== undefined ? reg.value.min : null);
+        return d !== null ? `≈ ${d}` : '—';
+    }
+    const dec = decodeRegister(map, reg, words);
+    if (dec.bits) return dec.bits.map(b => b.text).join('; ');
+    if (dec.raw === null) return dec.text;
+    const en = reg.enum ? resolveEnum(map, reg.enum)
+             : reg.enum_from ? (resolveEnum(map, (regIndex.get(reg.enum_from.addr) || {}).enum)) : null;
+    if (en) {
+        const hit = en.find(e => e.v === dec.raw);
+        return hit ? hit.t : String(dec.raw);
+    }
+    if (reg.bcd) return decodeBcd(dec.raw, reg.bcd);
+    return fmtEng(reg, toEng(reg, dec.raw));
+}
+
+function refreshAlarms() {
+    for (const a of map.alarms || []) {
+        const el = $('alarm_' + a.addr);
+        const reg = regIndex.get(a.addr);
+        const words = state.get(a.addr);
+        if (!el || !words || !reg) continue;
+        const dec = decodeRegister(map, reg, words);
+        const en = resolveEnum(map, a.enum) || resolveEnum(map, reg.enum);
+        const hit = (en && dec.raw !== null) ? en.find(e => e.v === dec.raw) : null;
+        el.textContent = hit ? hit.t : (dec.raw !== null ? String(dec.raw) : dec.text);
+        el.className = dec.raw ? 'alarm-on' : 'alarm-off';
+    }
+}
+
+function limitsOf(reg) {
+    const v = reg.value || {};
+    const resolve = ref => {
+        if (!ref || ref.addr === undefined) return undefined;
+        const src = regIndex.get(ref.addr), w = src && state.get(src.addr);
+        if (!w) return undefined;
+        const d = decodeRegister(map, src, w);
+        return d.raw === null ? undefined : toEng(src, d.raw);
+    };
+    return {
+        min: v.min !== undefined ? v.min : resolve(v.min_from),
+        max: v.max !== undefined ? v.max : resolve(v.max_from),
+    };
+}
+
+function writeCell(reg) {
+    const box = document.createElement('span');
+    box.className = 'ctl';
+    if (reg.access === 'R') {
+        box.textContent = '—';
+        box.classList.add('ro');
+        return { el: box, input: null };
+    }
+    if (reg.write && reg.write.mode === 'command') {
+        box.textContent = 'только командой';
+        box.classList.add('ro');
+        box.title = 'Запись выполняется специальной командой (см. раздел «Команды»)';
+        return { el: box, input: null };
+    }
+
+    const en = reg.enum ? resolveEnum(map, reg.enum)
+             : reg.enum_from ? resolveEnum(map, (regIndex.get(reg.enum_from.addr) || {}).enum) : null;
+    const words = state.get(reg.addr);
+    const dec = words ? decodeRegister(map, reg, words) : null;
+
+    let input;
+    if (en) {
+        input = document.createElement('select');
+        for (const e of en) {
+            const o = document.createElement('option');
+            o.value = e.v; o.textContent = `${e.v} — ${e.t}`;
+            input.appendChild(o);
+        }
+        if (dec && dec.raw !== null) input.value = dec.raw;
+    } else {
+        input = document.createElement('input');
+        input.type = 'number';
+        const lim = limitsOf(reg);
+        const step = reg.value && reg.value.scale ? reg.value.scale
+                   : reg.value && reg.value.step ? reg.value.step : 1;
+        input.step = step;
+        if (lim.min !== undefined) input.min = lim.min;
+        if (lim.max !== undefined) input.max = lim.max;
+        if (dec && dec.raw !== null) input.value = +toEng(reg, dec.raw).toFixed(4);
+        else if (reg.default !== undefined) input.value = reg.default;
+    }
+    input.title = en ? 'выберите значение' : 'инженерное значение';
+    /* Как только пользователь тронул поле, автообновление его не перезаписывает */
+    input.oninput = () => { input.dataset.touched = '1'; };
+    input.onchange = () => { input.dataset.touched = '1'; };
+
+    const btn = document.createElement('button');
+    btn.className = 'small primary';
+    btn.textContent = 'Записать';
+    btn.onclick = async () => {
+        await writeRegister(reg, en ? parseInt(input.value, 10) : parseFloat(input.value));
+        delete input.dataset.touched;
+    };
+
+    box.append(input, document.createTextNode(' '), btn);
+    return { el: box, input };
+}
+
+async function writeRegister(reg, value) {
+    if (isNaN(value)) { msg('conn-msg', 'Некорректное значение', 'err'); return; }
+    const port = parseInt($('port-sel').value, 10);
+    const fid = PORT_FID[port].read;
+    const adr = parseInt($('mb-addr').value, 10) || 1;
+    const words = encodeRegister(map, reg, value);
+    /* FN6: значение передаётся в RVC; FN16: количество в RVC, данные — массив
+     * чисел в RD (API принимает именно числа, строки превратились бы в нули). */
+    const arg = { AWT: 800, FN: words.length > 1 ? 16 : 6, ADR: adr, RA: reg.addr,
+                  RVC: words.length > 1 ? words.length : words[0] };
+    if (words.length > 1) arg.RD = words;
+    const res = await wsSend(fid, arg, 3000);
+    if (res && res.ERR) { msg('conn-msg', `Ошибка записи ${reg.addr}: код ${res.CV} (${res.ERR})`, 'err'); return; }
+    msg('conn-msg', `Регистр ${reg.addr} записан: ${value}${reg.value && reg.value.unit ? ' ' + reg.value.unit : ''}`, 'ok');
+    state.delete(reg.addr);          /* перечитаем именно этот регистр */
+    needFull = false;
+    await pollOnce();
+    const after = state.get(reg.addr);
+    if (after) msg('conn-msg', `Регистр ${reg.addr} записан и перечитан: `
+        + valueText(reg, after), 'ok');
+}
+
+function renderAlarms() {
+    const list = map.alarms || [];
+    $('alarms-card').style.display = list.length ? '' : 'none';
+    const box = $('alarms');
+    box.innerHTML = '';
+    for (const a of list) {
+        const div = document.createElement('div');
+        div.className = 'kv';
+        const name = document.createElement('span');
+        name.textContent = a.name || ('регистр ' + a.addr);
+        const val = document.createElement('span');
+        val.id = 'alarm_' + a.addr;
+        val.textContent = '—';
+        div.append(name, val);
+        box.appendChild(div);
+    }
+}
+
+function renderCommands() {
+    const list = map.commands || [];
+    $('commands-card').style.display = list.length ? '' : 'none';
+    const box = $('commands');
+    box.innerHTML = '';
+    for (const cmd of list) {
+        const b = document.createElement('button');
+        b.textContent = cmd.name || cmd.id;
+        if (cmd.danger) b.className = 'danger';
+        b.onclick = () => runCommand(cmd);
+        box.appendChild(b);
+    }
+}
+
+async function runCommand(cmd) {
+    if (cmd.danger && !confirm(`Выполнить «${cmd.name || cmd.id}»?`)) return;
+    const port = parseInt($('port-sel').value, 10);
+    const fid = PORT_FID[port].read;
+    const adr = parseInt($('mb-addr').value, 10) || 1;
+    for (const step of cmd.steps || []) {
+        if (!step.write) continue;
+        const w = step.write;
+        const words = Array.isArray(w.value) ? w.value : [w.value];
+        const arg = { AWT: 800, FN: words.length > 1 ? 16 : 6, ADR: adr, RA: w.addr,
+                      RVC: words.length > 1 ? words.length : words[0] };
+        if (words.length > 1) arg.RD = words.map(x => '0x' + (x & 0xffff).toString(16).padStart(4, '0'));
+        const res = await wsSend(fid, arg, 3000);
+        if (res && res.ERR) { msg('cmd-msg', `Шаг не выполнен (адрес ${w.addr}), код ${res.CV}`, 'err'); return; }
+        if (step.delay_ms) await new Promise(r => setTimeout(r, step.delay_ms));
+    }
+    msg('cmd-msg', `Команда «${cmd.name || cmd.id}» выполнена`, 'ok');
+    await pollOnce();
+}
+
+/* ── Подключение ─────────────────────────────────────────────────────────── */
+
+$('connect').onclick = () => connectAndPoll();
+
+async function connectAndPoll() {
+    if (!map) { msg('conn-msg', 'Сначала выберите карту', 'err'); return; }
+    const port = parseInt($('port-sel').value, 10);
+    const cfgFid = PORT_FID[port].cfg;
+    /* WL — значение перечисления, а не число бит: 0 = 7 бит, 1 = 8 бит.
+     * Все приборы Modbus RTU работают восьмибитными словами. */
+    const cfg = await wsSend(cfgFid, {
+        BR: parseInt($('mb-baud').value, 10),
+        PAR: parseInt($('mb-par').value, 10),
+        SB: parseInt($('mb-sb').value, 10),
+        WL: 1,
+    });
+    if (!cfg || cfg.ERR) { msg('conn-msg', 'Не удалось настроить UART шлюза', 'err'); return; }
+    connected = true;
+    setPollBadge(true);
+    msg('conn-msg', `Опрос запущен: ${$('port-sel').selectedOptions[0].textContent}, `
+        + `адрес ${$('mb-addr').value}, ${$('mb-baud').value} бод`, 'ok');
+    startPoll();
+}
+
+$('disconnect').onclick = () => {
+    connected = false;
+    stopPoll();
+    msg('conn-msg', 'Опрос остановлен', 'warn');
+};
+
+$('poll-ms').onchange = () => applyPollInterval(parseInt($('poll-ms').value, 10) || 0, true);
+try {
+    const saved = parseInt(localStorage.getItem('poll-ms'), 10);
+    if (!isNaN(saved) && [-1, 0, 500, 1000, 2000, 5000, 10000].includes(saved)) pollMs = saved;
+} catch (_) {}
+$('poll-ms').value = String(pollMs);
+
+$('regs-refresh').onclick = async () => {
+    if (!map || !currentGroup) return;
+    needFull = true; rangeCursor = 0;
+    msg('conn-msg', 'Читаем группу целиком…', 'warn');
+    await pollOnce();
+    const missing = [...rowRefs.keys()].filter(a => !state.has(a)).length;
+    msg('conn-msg', missing ? `Прочитано, без ответа ${missing} регистров` : 'Группа прочитана', missing ? 'warn' : 'ok');
+};
+
+$('map-reload').onclick = loadMapList;
+$('map-sel').onchange = selectMap;
+$('mb-addr').onchange = () => { state.clear(); stateTs.clear(); };
+
+wsConnect();
+</script>
+</body>
+</html>

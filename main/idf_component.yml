@@ -1,6 +1,4 @@
 dependencies:
-  #protocol_examples_common:
-  #  path: ${IDF_PATH}/examples/common_components/protocol_examples_common
   joltwallet/littlefs: ~=1.16.0
   json:
     path: ../json
@@ -10,10 +8,6 @@ dependencies:
     path: ../ws_server
   ws_api:
     path: ../ws_api
-  tftp_server:
-    path: ../tftp_server
-  protocol_examples_common:
-    path: ../protocol_examples_common
   esp-idf-lib/onewire: '*'
   espressif/ds18b20: '*'
   espressif/onewire_bus: '*'

@@ -284,6 +284,52 @@ static void ip_event_handler(void *arg, esp_event_base_t event_base, int32_t eve
     }
 }
 
+/* ── Канал и полоса точки доступа ─────────────────────────────────────────────
+ *
+ * Радио у прибора одно на обе половины, а режим роутера мы не выбираем: станция
+ * работает как есть, «в авто». Поэтому точку доступа подстраиваем под станцию —
+ * и канал, и полосу. Сами канал с полосой выбираем только когда станции нет:
+ * канал 1 и 20 МГц, самый распространённый и совместимый режим на 2,4 ГГц.
+ *
+ * Разная полоса у половин радио — худший случай: драйвер переключается между
+ * интерфейсами, и отдача проваливается до единиц килобайт в секунду (замерено
+ * 6 КБ/с против 190).
+ */
+#define AP_OWN_CHANNEL 1
+#define AP_OWN_BW      WIFI_BW20
+
+static void ap_apply_bandwidth(wifi_bandwidth_t bw, int channel)
+{
+    if (esp_wifi_set_bandwidth(WIFI_IF_AP, bw) != ESP_OK) {
+        ESP_LOGW(TAG, "AP: не удалось выставить полосу");
+        return;
+    }
+    ESP_LOGI(TAG, "AP: полоса %s%s", bw == WIFI_BW40 ? "40 МГц" : "20 МГц",
+             channel ? " (как у станции)" : " (свой режим)");
+}
+
+/* Станция подключилась: повторяем за роутером. Канал точку доступа заставит
+ * принять сам драйвер (он общий для обеих половин), а полосу выставляем руками. */
+static void ap_follow_sta(void)
+{
+    wifi_ap_record_t ap_info;
+    if (esp_wifi_sta_get_ap_info(&ap_info) != ESP_OK) return;
+    wifi_bandwidth_t bw = (ap_info.second == WIFI_SECOND_CHAN_NONE) ? WIFI_BW20 : WIFI_BW40;
+    ESP_LOGI(TAG, "STA: канал %d, вторичный %d", ap_info.primary, ap_info.second);
+    ap_apply_bandwidth(bw, ap_info.primary);
+}
+
+/* Станции нет: точка доступа возвращается к своему режиму. */
+static void ap_own_mode(void)
+{
+    wifi_config_t ap;
+    if (esp_wifi_get_config(WIFI_IF_AP, &ap) == ESP_OK) {
+        ap.ap.channel = AP_OWN_CHANNEL;
+        esp_wifi_set_config(WIFI_IF_AP, &ap);
+    }
+    ap_apply_bandwidth(AP_OWN_BW, 0);
+}
+
 static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data) {
     //app_context_t* app = (app_context_t*) arg;
     /* todo AP client disconnected kill all sockets by client */
@@ -315,8 +361,12 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
 	    ESP_LOGI(TAG, "Wi-Fi STA disconnected, kill all sockets...");
 	    //kill_socks_on_dead_interaface(server);
+        ap_own_mode();                 /* роутера нет — работаем своим режимом */
         ESP_LOGI(TAG, "Wi-Fi STA disconnected, trying to reconnect...");
         esp_wifi_connect();
+    }
+    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_CONNECTED) {
+        ap_follow_sta();               /* подтянуть канал и полосу за роутером */
     }
     if ((event_base == IP_EVENT) && (event_id == IP_EVENT_STA_GOT_IP)) {
         ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
@@ -324,11 +374,152 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
     }
 }
 
+/* Stations currently associated with our softAP. Used as a guard for AP
+ * credential changes: the gateway only accepts a new AP password while exactly
+ * one station is associated (the administrator configuring it). */
+uint8_t wifi_ap_clients_count(void) {
+    wifi_sta_list_t sta_list = {0};
+    if (esp_wifi_ap_get_sta_list(&sta_list) != ESP_OK)
+        return 0;
+    if (sta_list.num < 0)
+        return 0;
+    return (uint8_t)sta_list.num;
+}
+
+/* ── IPv4 configuration of both interfaces ───────────────────────────────── */
+
+/* Pulls a plain IPv4 address out of a socket address. lwIP sockets here are
+ * dual-stack AF_INET6, so an IPv4 peer shows up as ::FFFF:a.b.c.d — the same
+ * shape socket_link_subscribe() already deals with below. */
+static uint32_t sockaddr_ip4(const struct sockaddr_storage *ss) {
+    if (ss->ss_family == AF_INET)
+        return ((const struct sockaddr_in *)ss)->sin_addr.s_addr;
+
+    if (ss->ss_family == AF_INET6) {
+        static const uint8_t mapped[12] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff};
+        const struct sockaddr_in6 *a6 = (const struct sockaddr_in6 *)ss;
+        if (memcmp(a6->sin6_addr.s6_addr, mapped, sizeof(mapped)) == 0) {
+            uint32_t ip4;
+            memcpy(&ip4, a6->sin6_addr.s6_addr + 12, sizeof(ip4));
+            return ip4;
+        }
+    }
+    return 0;
+}
+
+/* True when the request arrived through our softAP: the local address of that
+ * socket is the AP's own address only for clients of the AP. Used to keep
+ * configuration (Wi-Fi, network, firmware) on the AP side. */
+uint8_t request_from_softap(int fd) {
+    if (fd < 0) return 0;
+
+    struct sockaddr_storage local;
+    socklen_t len = sizeof(local);
+    memset(&local, 0, sizeof(local));
+    if (getsockname(fd, (struct sockaddr *)&local, &len) != 0) {
+        ESP_LOGW(TAG, "getsockname(%d) failed", fd);
+        return 0;
+    }
+
+    uint32_t local_ip = sockaddr_ip4(&local);
+
+    esp_netif_t *ap = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
+    esp_netif_ip_info_t ip;
+    if (!ap || esp_netif_get_ip_info(ap, &ip) != ESP_OK)
+        return 0;
+
+    return (local_ip != 0) && (local_ip == ip.ip.addr);
+}
+
+uint8_t net_parse_ip4(const char *str, uint32_t *out) {
+    /* Note: ESP-IDF v6 turned esp_netif_str_to_ip4() from bool into esp_err_t */
+    esp_ip4_addr_t addr;
+    if (!str || esp_netif_str_to_ip4(str, &addr) != ESP_OK)
+        return 1;
+    if (out) *out = addr.addr;
+    return 0;
+}
+
+void net_format_ip4(uint32_t ip, char *out, size_t out_size) {
+    if (!ip) {
+        out[0] = '\0';
+        return;
+    }
+    esp_ip4_addr_t addr = { .addr = ip };
+    snprintf(out, out_size, IPSTR, IP2STR(&addr));
+}
+
+/* Applies a static address, or (re)starts the DHCP client where the interface
+ * is meant to obtain an address on its own. */
+void net_apply_config(const app_context_t *app) {
+    esp_netif_t *sta = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    if (sta) {
+        if ((app->net_sta.mode == NET_MODE_STATIC) && app->net_sta.ip) {
+            /* The DHCP client has to be stopped before the address can be set */
+            esp_err_t err = esp_netif_dhcpc_stop(sta);
+            if (err != ESP_OK && err != ESP_ERR_ESP_NETIF_DHCP_ALREADY_STOPPED)
+                ESP_LOGW(TAG, "dhcpc stop: %s", esp_err_to_name(err));
+
+            esp_netif_ip_info_t ip = {
+                .ip      = { .addr = app->net_sta.ip },
+                .netmask = { .addr = app->net_sta.mask },
+                .gw      = { .addr = app->net_sta.gw },
+            };
+            err = esp_netif_set_ip_info(sta, &ip);
+            if (err != ESP_OK)
+                ESP_LOGE(TAG, "station static address failed: %s", esp_err_to_name(err));
+
+            esp_netif_dns_info_t dns = {0};
+            dns.ip.type = ESP_IPADDR_TYPE_V4;
+            if (app->net_sta.dns1) {
+                dns.ip.u_addr.ip4.addr = app->net_sta.dns1;
+                esp_netif_set_dns_info(sta, ESP_NETIF_DNS_MAIN, &dns);
+            }
+            if (app->net_sta.dns2) {
+                dns.ip.u_addr.ip4.addr = app->net_sta.dns2;
+                esp_netif_set_dns_info(sta, ESP_NETIF_DNS_BACKUP, &dns);
+            }
+            char buf[16];
+            net_format_ip4(app->net_sta.ip, buf, sizeof(buf));
+            ESP_LOGI(TAG, "Station static address %s", buf);
+        } else {
+            esp_err_t err = esp_netif_dhcpc_start(sta);
+            if (err != ESP_OK && err != ESP_ERR_ESP_NETIF_DHCP_ALREADY_STARTED)
+                ESP_LOGW(TAG, "dhcpc start: %s", esp_err_to_name(err));
+        }
+    }
+
+    esp_netif_t *ap = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
+    if (ap && app->net_ap.ip) {
+        /* The DHCP server has to be stopped while the address changes, and the
+         * AP is its own gateway for the clients. */
+        esp_err_t err = esp_netif_dhcps_stop(ap);
+        if (err != ESP_OK && err != ESP_ERR_ESP_NETIF_DHCP_ALREADY_STOPPED)
+            ESP_LOGW(TAG, "dhcps stop: %s", esp_err_to_name(err));
+
+        esp_netif_ip_info_t ip = {
+            .ip      = { .addr = app->net_ap.ip },
+            .netmask = { .addr = app->net_ap.mask },
+            .gw      = { .addr = app->net_ap.ip },
+        };
+        err = esp_netif_set_ip_info(ap, &ip);
+        if (err != ESP_OK)
+            ESP_LOGE(TAG, "AP address failed: %s", esp_err_to_name(err));
+
+        err = esp_netif_dhcps_start(ap);
+        if (err != ESP_OK && err != ESP_ERR_ESP_NETIF_DHCP_ALREADY_STARTED)
+            ESP_LOGW(TAG, "dhcps start: %s", esp_err_to_name(err));
+
+        char buf[16];
+        net_format_ip4(app->net_ap.ip, buf, sizeof(buf));
+        ESP_LOGI(TAG, "Access point address %s", buf);
+    }
+}
+
 void wifi_init_ap_sta(wifi_config_t *ap_cnf, wifi_config_t *sta_cnf) {
 
     for(uint8_t i = 0; i < LINKS_MAX_AMOUNT; i++)
         linked_list_insert_last(&links_free, linked_list_item(&links_pool[i]));
-
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
@@ -354,15 +545,32 @@ void wifi_init_ap_sta(wifi_config_t *ap_cnf, wifi_config_t *sta_cnf) {
 
     if ((sta_cnf != NULL) && (sta_cnf->sta.ssid[0] != '\0')) {
         ESP_LOGI(TAG, "Station connecting: SSID=%s, Password=%s", sta_cnf->sta.ssid, sta_cnf->sta.password);
-        ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_STA, sta_cnf));
+        ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, sta_cnf));
     }
 
 #if CONFIG_WIFI_AP_ENABLE
     ESP_LOGI(TAG, "Starting AP: SSID=%s, Password=%s", ap_cnf->ap.ssid, ap_cnf->ap.password);
-    ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_AP, ap_cnf));
+    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, ap_cnf));
 #endif
 
     ESP_ERROR_CHECK(esp_wifi_start());
+
+    /* Шлюз питается от сети, экономить энергию незачем, а умолчание
+     * WIFI_PS_MIN_MODEM стоит очень дорого: станция просыпается только к
+     * beacon'ам, поэтому КАЖДЫЙ принятый пакет ждёт окна DTIM. Отсюда
+     * постоянные 60-300 мс на любой запрос (замерено: ответ INFO без всякого
+     * Modbus — 82-297 мс) и провалы скорости отдачи. WIFI_PS_NONE убирает эту
+     * задержку. */
+    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
+
+    /* Станцию не ограничиваем: роутер сам решает, на какой полосе работать, и
+     * наша задача — повторить его режим точкой доступа (см. ap_follow_sta при
+     * событии STA_CONNECTED). Пока станции нет, точка доступа работает своим
+     * режимом — канал 1 и 20 МГц. */
+#if CONFIG_WIFI_AP_ENABLE
+    ap_own_mode();
+#endif
+
     if ((sta_cnf != NULL) && (sta_cnf->sta.ssid[0] != '\0')) {
         ESP_ERROR_CHECK(esp_wifi_connect());
         ESP_LOGI(TAG, "STA: Connecting to %s...", sta_cnf->sta.ssid);

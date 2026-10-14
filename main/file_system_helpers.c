@@ -7,10 +7,8 @@
 #include <sys/stat.h>
 #include "esp_netif.h"
 #include "esp_eth.h"
-#include "protocol_examples_common.h"
 #include "ws_api.h"
 #include "esp_littlefs.h"
-#include <tftp_server_wg.h>
 
 #include <esp_http_server.h>
 #include <stdio.h>

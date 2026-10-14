@@ -145,6 +145,10 @@ void ws_hal_log_i(const char *tag, const char *fmt, ...) {
     stub_log_i_count++;
 }
 
+void ws_hal_log_d(const char *tag, const char *fmt, ...) {
+    (void)tag; (void)fmt;
+}
+
 void ws_hal_log_w(const char *tag, const char *fmt, ...) {
     (void)tag; (void)fmt;
     stub_log_w_count++;

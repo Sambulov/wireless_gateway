@@ -38,17 +38,20 @@ menu "Project Configuration"
 
     config WIFI_AP_DEFAULT_SSID
         string "Default AP name"
-        default "TestNet"
+        default ""
         depends on WIFI_AP_ENABLE
         help
-            Set default AP ssid.
+            Set default AP ssid. Leave empty to generate a unique name per
+            device: "WG-" plus the last three bytes of the AP MAC.
 
     config WIFI_AP_DEFAULT_PASS
         string "Default AP password"
-        default "12345678"
+        default ""
         depends on WIFI_AP_ENABLE
         help
-            Set default AP password.
+            Set default AP password (8..63 characters, empty starts an open
+            network). Leave empty to derive a unique 10-character password
+            from the device MAC.
 
     config WIFI_STA_DEFAULT_SSID
         string "Default STA SSID"

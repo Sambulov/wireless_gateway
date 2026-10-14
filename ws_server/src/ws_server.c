@@ -160,7 +160,7 @@ static void vServeApiCall(LinkedListItem_t *item, void *arg) {
             call->session->ulPingTs = ws_hal_tick();
         }
     } else {
-        ws_hal_log_i(TAG, "Api call complete, id: %lu", call->ulId);
+        ws_hal_log_d(TAG, "Api call complete, id: %lu", call->ulId);
         vLinkedListUnlink(item);
         free(call->pucReqData);
         free(call);
@@ -169,7 +169,7 @@ static void vServeApiCall(LinkedListItem_t *item, void *arg) {
 
 static void vWsTransferComplete_cb(int err, int fd, void *arg) {
     ApiData_t *apiData = (ApiData_t *)arg;
-    ws_hal_log_i(TAG, "Transfer Complete, err: %d, fd: %x", err, fd);
+    ws_hal_log_d(TAG, "Transfer Complete, err: %d, fd: %x", err, fd);
     if(err)
         vBreakApiCallsByFd(100, fd);
     if((!apiData->counter) || !(--apiData->counter))
@@ -244,7 +244,7 @@ uint8_t bApiCallGetId(void *pxApiCall, uint32_t *pulOutId) {
 
 static void _send_to_session(ApiCall_t *sub, ApiData_t *resp, int *res) {
     *res = ws_conn_send_async(sub->session->conn, &resp->frame, vWsTransferComplete_cb, resp);
-    ws_hal_log_i(TAG, "Api call %lu json sending with result: %d", sub->ulId, *res);
+    ws_hal_log_d(TAG, "Api call %lu json sending with result: %d", sub->ulId, *res);
     if(*res != 0) {
         if((!resp->counter) || !(--resp->counter))
             free(resp);
@@ -422,7 +422,7 @@ static void ws_server_on_text(ws_conn_t *conn, uint8_t *data, size_t len) {
         ws_hal_log_i(TAG, "Got packet with empty message");
         return;
     }
-    ws_hal_log_i(TAG, "Got packet with message: %s", data);
+    ws_hal_log_d(TAG, "Got packet with message: %s", data);
 
     ApiCall_t *wscd = malloc(sizeof(ApiCall_t));
     if(!wscd) {
@@ -460,7 +460,7 @@ static void ws_server_on_text(ws_conn_t *conn, uint8_t *data, size_t len) {
     if(arg_json) {
         wscd->pucReqData   = (uint8_t *)cJSON_PrintUnformatted(arg_json);
         wscd->ulReqDataLen = lStrLen((char *)wscd->pucReqData);
-        ws_hal_log_i(TAG, "Api arg %s", wscd->pucReqData);
+        ws_hal_log_d(TAG, "Api arg %s", wscd->pucReqData);
 
         /* ARG.RDL (re-poll delay, ms) throttles CALL_FLAG_LONG_TERM re-arming;
          * generic framework field, meaningful to any FID that uses FLAGS:4. */
@@ -507,7 +507,7 @@ static void ws_server_on_text(ws_conn_t *conn, uint8_t *data, size_t len) {
             wscd->pxHandlerContext = hlr->xHandlerContext;
         }
         vLinkedListInsertLast(&pxWsApiCall, LinkedListItem(wscd));
-        ws_hal_log_i(TAG, "New api call %lu enqueued with id:%lu", wscd->ulFid, wscd->ulId);
+        ws_hal_log_d(TAG, "New api call %lu enqueued with id:%lu", wscd->ulFid, wscd->ulId);
     }
 
     ws_hal_mutex_give(xWsApiMutex);
@@ -532,6 +532,9 @@ static void vForwardCallToPeripheral(ApiCall_t *call, ws_queue_t queue) {
     msg->fid = call->ulFid;
     msg->id  = call->ulId;
     msg->len = call->ulReqDataLen;
+    /* Socket the request came in on, so handlers can tell AP clients from
+     * station-side ones; the session may already be gone for parked calls. */
+    msg->fd  = (call->session != NULL) ? call->session->fd : -1;
 
     if(call->flags & CALL_FLAG_LONG_TERM) {
         /* Long-term calls retain ownership of pucReqData so they can be re-polled.
@@ -632,7 +635,7 @@ static void vWsApiCallWorkerStep(void) {
                 vLinkedListInsertLast(&pxWsApiWaitingForResponse, item);
 
                 if(call->flags & CALL_FLAG_NEW) {
-                    ws_hal_log_i(TAG, "send status DELIVERED");
+                    ws_hal_log_d(TAG, "send status DELIVERED");
                     bool sent = bApiCallSendStatus(call, API_CALL_STATUS_DELIVERED);
                     if(sent)
                         call->flags &= ~CALL_FLAG_NEW;
@@ -692,7 +695,7 @@ static void vWsApiCallWorkerStep(void) {
             if(call2->fHandler)
                 call2->fHandler(call2, &call2->pxHandlerContext, call2->ulCallPending, periph_msg.data, periph_msg.len);
             if(periph_msg.len) {
-                ws_hal_log_i(TAG, "sent: %s : %lu", periph_msg.data, periph_msg.len);
+                ws_hal_log_d(TAG, "sent: %s : %lu", periph_msg.data, periph_msg.len);
                 _bApiCallSendJson(call2, 0, periph_msg.data, periph_msg.len);
             }
 

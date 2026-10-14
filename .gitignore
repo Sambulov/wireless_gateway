@@ -1,6 +1,9 @@
 /build
 /managed_components
 /.vscode
+# Working notes of the AI agent (tools, network, decisions, pitfalls) — never
+# meant to be committed, see local/README.md
+/local
 
 dependencies.lock
 sdkconfig.old

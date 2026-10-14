@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "esp_log.h"
+#include "esp_mac.h"
 #include "nvs_flash.h"
 #include "nvs.h"
 
@@ -11,7 +12,48 @@
 #define NVS_KEY_AP_PASS "ap_pass"
 #define NVS_KEY_STA_SSID "sta_ssid"
 #define NVS_KEY_STA_PASS "sta_pass"
+#define NVS_KEY_NET_STA "net_sta"
+#define NVS_KEY_NET_AP  "net_ap"
 
+#define AP_MAX_CONNECTIONS 4
+
+/* Default softAP credentials are unique per device: the SSID carries the last
+ * three MAC bytes ("WG-310184" for 94:51:dc:31:01:84) and the password is a
+ * 10-character digest of the whole MAC. The alphabet leaves out 0/O/1/l so the
+ * password stays unambiguous when it is read from a log or a label. WPA2 needs
+ * at least 8 characters, 10 fits with room to spare. */
+#define AP_SSID_PREFIX "WG-"
+#define AP_PASS_LEN    10
+
+static const char ap_pass_alphabet[] = "abcdefghijkmnpqrstuvwxyz23456789";
+
+void wifi_ap_credentials_default(char *ssid, size_t ssid_size, char *pass, size_t pass_size) {
+    uint8_t mac[6] = {0};
+    esp_read_mac(mac, ESP_MAC_WIFI_SOFTAP);
+
+    /* Kconfig values, when set, win over the per-device generated ones */
+    const char *cnf_ssid = CONFIG_WIFI_AP_DEFAULT_SSID;
+    const char *cnf_pass = CONFIG_WIFI_AP_DEFAULT_PASS;
+
+    char gen_ssid[33];
+    char gen_pass[AP_PASS_LEN + 1];
+    snprintf(gen_ssid, sizeof(gen_ssid), AP_SSID_PREFIX "%02X%02X%02X", mac[3], mac[4], mac[5]);
+
+    uint32_t h = 0x811C9DC5u; /* FNV-1a over the MAC, then LCG-expanded */
+    for (int i = 0; i < 6; i++) {
+        h ^= mac[i];
+        h *= 0x01000193u;
+    }
+    for (int i = 0; i < AP_PASS_LEN; i++) {
+        gen_pass[i] = ap_pass_alphabet[h & 0x1Fu];
+        h = h * 1664525u + 1013904223u;
+        h ^= h >> 13;
+    }
+    gen_pass[AP_PASS_LEN] = '\0';
+
+    strlcpy(ssid, (cnf_ssid[0] != '\0') ? cnf_ssid : gen_ssid, ssid_size);
+    strlcpy(pass, (cnf_pass[0] != '\0') ? cnf_pass : gen_pass, pass_size);
+}
 
 void save_wifi_sta_config(const char *ssid, const char *password) {
     nvs_handle_t nvs_handle;
@@ -33,19 +75,68 @@ void save_wifi_ap_config(const char *ssid, const char *password) {
     ESP_LOGI(TAG, "Wi-Fi AP settings saved to NVS: SSID=%s", ssid);
 }
 
-static bool _load_config_default(app_context_t *app) {
+/* Secret of the softAP is only usable when it is 8..63 characters long (WPA2);
+ * an empty password means an open network. */
+uint8_t wifi_password_valid(const char *pass) {
+    size_t len = strlen(pass);
+    return (len == 0) || (len >= 8 && len <= 63);
+}
+
+/* ── IPv4 configuration ──────────────────────────────────────────────────── */
+
+/* The station asks for an address by default; the access point keeps the
+ * esp_netif default of 192.168.4.1/24 until somebody sets something else
+ * (ip == 0 means "leave the built-in default alone"). */
+static void _net_defaults(net_iface_cnf_t *sta, net_iface_cnf_t *ap) {
+    memset(sta, 0, sizeof(*sta));
+    sta->mode = NET_MODE_DHCP;
+    memset(ap, 0, sizeof(*ap));
+    ap->mode = NET_MODE_STATIC;
+}
+
+static void _net_load(nvs_handle_t nvs_handle, const char *key, net_iface_cnf_t *cfg) {
+    net_iface_cnf_t tmp;
+    size_t len = sizeof(tmp);
+    if (nvs_get_blob(nvs_handle, key, &tmp, &len) == ESP_OK && len == sizeof(tmp))
+        *cfg = tmp;
+}
+
+void net_save_config(const app_context_t *app) {
+    nvs_handle_t nvs_handle;
+    if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs_handle) != ESP_OK) {
+        ESP_LOGE(TAG, "Cannot open NVS to store network settings");
+        return;
+    }
+    nvs_set_blob(nvs_handle, NVS_KEY_NET_STA, &app->net_sta, sizeof(app->net_sta));
+    nvs_set_blob(nvs_handle, NVS_KEY_NET_AP, &app->net_ap, sizeof(app->net_ap));
+    nvs_commit(nvs_handle);
+    nvs_close(nvs_handle);
+
+    char ip[16];
+    net_format_ip4(app->net_sta.ip, ip, sizeof(ip));
+    ESP_LOGI(TAG, "Network settings saved: station %s, AP %s",
+             app->net_sta.mode == NET_MODE_STATIC ? ip : "dhcp",
+             app->net_ap.ip ? "static" : "default");
+}
+
+static void _fill_ap_default(app_context_t *app) {
 #if CONFIG_WIFI_AP_ENABLE
-    app->ap_cnf.ap.ssid[0] = '\0';
-    app->ap_cnf.ap.ssid_len = min(sizeof(CONFIG_WIFI_AP_DEFAULT_SSID), sizeof(app->ap_cnf.ap.ssid));
-    strlcpy((char *)app->ap_cnf.ap.ssid, CONFIG_WIFI_AP_DEFAULT_SSID, app->ap_cnf.ap.ssid_len);
+    char ssid[sizeof(app->ap_cnf.ap.ssid)];
+    char pass[sizeof(app->ap_cnf.ap.password)];
+    wifi_ap_credentials_default(ssid, sizeof(ssid), pass, sizeof(pass));
 
-    app->ap_cnf.ap.password[0] = '\0';
-    size_t pass_len = min(sizeof(CONFIG_WIFI_AP_DEFAULT_PASS), sizeof(app->ap_cnf.ap.password));
-    strlcpy((char *)app->ap_cnf.ap.password, CONFIG_WIFI_AP_DEFAULT_PASS, pass_len);
-
-    app->ap_cnf.ap.max_connection = 4;
-    app->ap_cnf.ap.authmode = WIFI_AUTH_WPA2_PSK;
+    memset(&app->ap_cnf, 0, sizeof(app->ap_cnf));
+    strlcpy((char *)app->ap_cnf.ap.ssid, ssid, sizeof(app->ap_cnf.ap.ssid));
+    app->ap_cnf.ap.ssid_len = strlen(ssid);
+    strlcpy((char *)app->ap_cnf.ap.password, pass, sizeof(app->ap_cnf.ap.password));
+    app->ap_cnf.ap.max_connection = AP_MAX_CONNECTIONS;
+    app->ap_cnf.ap.authmode = (pass[0] != '\0') ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN;
 #endif
+}
+
+static bool _load_config_default(app_context_t *app) {
+    _fill_ap_default(app);
+    _net_defaults(&app->net_sta, &app->net_ap);
 
     strlcpy((char *)app->sta_cnf.sta.ssid,     CONFIG_WIFI_STA_DEFAULT_SSID, sizeof(app->sta_cnf.sta.ssid));
     strlcpy((char *)app->sta_cnf.sta.password, CONFIG_WIFI_STA_DEFAULT_PASS, sizeof(app->sta_cnf.sta.password));
@@ -59,18 +150,26 @@ bool load_config(app_context_t *app) {
     if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs_handle) != ESP_OK)
         return _load_config_default(app);
 
+    size_t len;
+
+    _net_defaults(&app->net_sta, &app->net_ap);
+    _net_load(nvs_handle, NVS_KEY_NET_STA, &app->net_sta);
+    _net_load(nvs_handle, NVS_KEY_NET_AP, &app->net_ap);
+
 #if CONFIG_WIFI_AP_ENABLE
-    app->ap_cnf.ap.ssid_len = sizeof(app->ap_cnf.ap.ssid);
-    size_t len = sizeof(app->ap_cnf.ap.ssid);
-    app->ap_cnf.ap.ssid_len = 0;
-    if(nvs_get_str(nvs_handle, NVS_KEY_AP_SSID, (char *)app->ap_cnf.ap.ssid, &len) == ESP_OK)
-        app->ap_cnf.ap.ssid_len = len;
+    _fill_ap_default(app);
+
+    len = sizeof(app->ap_cnf.ap.ssid);
+    if (nvs_get_str(nvs_handle, NVS_KEY_AP_SSID, (char *)app->ap_cnf.ap.ssid, &len) == ESP_OK) {
+        /* nvs_get_str() counts the terminator, while ssid_len must not */
+        app->ap_cnf.ap.ssid_len = strlen((char *)app->ap_cnf.ap.ssid);
+    }
 
     len = sizeof(app->ap_cnf.ap.password);
-    if(nvs_get_str(nvs_handle, NVS_KEY_AP_PASS, (char *)app->ap_cnf.ap.password, &len) != ESP_OK)
-        app->ap_cnf.ap.password[0] = '\0';
-#else
-    size_t len;
+    if (nvs_get_str(nvs_handle, NVS_KEY_AP_PASS, (char *)app->ap_cnf.ap.password, &len) == ESP_OK) {
+        app->ap_cnf.ap.authmode = (app->ap_cnf.ap.password[0] != '\0')
+                                  ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN;
+    }
 #endif
 
     len = sizeof(app->sta_cnf.sta.ssid);
@@ -82,6 +181,7 @@ bool load_config(app_context_t *app) {
         strlcpy((char *)app->sta_cnf.sta.password, CONFIG_WIFI_STA_DEFAULT_PASS, sizeof(app->sta_cnf.sta.password));
 
     nvs_close(nvs_handle);
+
     ESP_LOGI(TAG, "App config loaded from NVS");
     return true;
 }
