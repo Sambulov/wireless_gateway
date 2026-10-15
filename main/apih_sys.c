@@ -803,7 +803,9 @@ esp_err_t api_sys_run(app_context_t *app) {
     /* Методы без политики: политики у них нет, поэтому и контекста нет — один
      * экземпляр на все интерфейсы. */
     ok &= register_service(sys_echo_handler,  ESP_WS_API_ECHO_ID,     GW_IFACE_MASK_ANY, NULL);
-    ok &= register_service(sys_files_handler, ESP_WS_API_SYS_FILES,   GW_IFACE_MASK_ANY, NULL);
+    /* Листинг файлов — часть файлового менеджера, а он открыт только из точки
+     * доступа (загрузка/удаление/переименование ограничены так же). */
+    ok &= register_service(sys_files_handler, ESP_WS_API_SYS_FILES,   ap_mask, NULL);
 
     if (!ok) return ESP_FAIL;
 

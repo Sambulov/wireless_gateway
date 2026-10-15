@@ -450,13 +450,6 @@ uint32_t gw_iface_of_socket(int fd) {
     return GW_IFACE_NONE;
 }
 
-/* True when the request arrived through our softAP: the local address of that
- * socket is the AP's own address only for clients of the AP. Used to keep
- * configuration (Wi-Fi, network, firmware) on the AP side. */
-uint8_t request_from_softap(int fd) {
-    return gw_iface_of_socket(fd) == GW_IFACE_AP;
-}
-
 uint8_t net_parse_ip4(const char *str, uint32_t *out) {
     /* Note: ESP-IDF v6 turned esp_netif_str_to_ip4() from bool into esp_err_t */
     esp_ip4_addr_t addr;

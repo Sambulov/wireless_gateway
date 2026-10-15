@@ -3,10 +3,12 @@
 #include <esp_http_server.h>
 #include <esp_wifi.h>
 #include <errno.h>
+#include <stdlib.h>
 #include <sys/socket.h>
 #include <lwip/sockets.h>
 
 #include "app.h"
+#include "web_iface_policy.h"
 
 httpd_handle_t server = NULL;
 
@@ -306,6 +308,82 @@ httpd_handle_t start_ws_server(void)
     return NULL;
 }
 
+/* ── Сервис оказывается интерфейсам, а не «вообще всем» ──────────────────────
+ *
+ * httpd различает только «URI → обработчик»: масок сетевых интерфейсов у него
+ * нет, поэтому доступ решает наш слой. Точка решения — здесь, в единственном
+ * месте регистрации URI: обработчик сервиса, оказанного не всем, оборачивается
+ * в обёртку, которая узнаёт у соединения его интерфейс (gw_iface_of_socket) и
+ * сверяет с маской сервиса из таблицы (web_iface_policy.c). Так политика одна
+ * на все URI и её нельзя забыть в отдельном обработчике.
+ *
+ * Что считается отказом: сервис, не оказанный этому интерфейсу, отвечает
+ * 404 Not Found — так же, как несуществующий путь. Клиенту нечего знать о том,
+ * что путь на устройстве есть; он есть, но не для него.
+ *
+ * Оговорка: WebSocket-рукопожатие httpd отвечает сам, не вызывая обработчик
+ * (см. ws_transport_httpd.c), поэтому /ws в таблице открыт всем, а свои вызовы
+ * он различает регистрацией сервисов по маскам в ядре API.
+ */
+typedef struct {
+    esp_err_t (*handler)(httpd_req_t *req);
+    void *user_ctx;         /* контекст, с которым обработчик регистрировали */
+    uint32_t iface_mask;    /* кому оказан сервис этого URI */
+} web_uri_service_t;
+
+static esp_err_t web_uri_guard_handler(httpd_req_t *req) {
+    const web_uri_service_t *svc = (const web_uri_service_t *)req->user_ctx;
+    if (svc == NULL || svc->handler == NULL) return ESP_FAIL;
+
+    const uint32_t iface = gw_iface_of_socket(httpd_req_to_sockfd(req));
+    if (!web_iface_mask_allows(svc->iface_mask, iface)) {
+        ESP_LOGW(TAG, "URI '%s' не обслуживается на интерфейсе %u (маска 0x%08lx) — 404",
+                 req->uri, (unsigned)iface, (unsigned long)svc->iface_mask);
+        return httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Not found");
+    }
+
+    /* Обработчик должен получить контекст, с которым его регистрировали: в
+     * user_ctx на время запроса лежит наша обёртка. Возвращаем как было — httpd
+     * заполняет это поле заново на каждый запрос. */
+    void *policy_ctx = req->user_ctx;
+    req->user_ctx = svc->user_ctx;
+    const esp_err_t err = svc->handler(req);
+    req->user_ctx = policy_ctx;
+    return err;
+}
+
 uint8_t webserver_register_handler(httpd_handle_t server, httpd_uri_t *uri_handler) {
-  return httpd_register_uri_handler(server, uri_handler) == ESP_OK;
+    if (server == NULL || uri_handler == NULL || uri_handler->handler == NULL) return 0;
+
+    const uint32_t iface_mask = web_iface_service_mask(uri_handler->uri);
+    /* Сервис, оказанный любому интерфейсу, регистрируется как есть: проверять
+     * нечего, и на горячем пути (кадры WebSocket, страницы, файлы) не
+     * появляется ни одного лишнего вызова. */
+    if (iface_mask == GW_IFACE_MASK_ANY)
+        return httpd_register_uri_handler(server, uri_handler) == ESP_OK;
+
+    web_uri_service_t *svc = calloc(1, sizeof(*svc));
+    if (svc == NULL) {
+        /* Регистрировать без политики нельзя: это молча открыло бы сервис
+         * всем — хуже, чем не оказать его вовсе. */
+        ESP_LOGE(TAG, "Нет памяти под политику доступа для '%s'", uri_handler->uri);
+        return 0;
+    }
+    svc->handler    = uri_handler->handler;
+    svc->user_ctx   = uri_handler->user_ctx;
+    svc->iface_mask = iface_mask;
+
+    /* Шаблон копируем: httpd копирует его себе, а исходную структуру (она
+     * статическая и принадлежит своему модулю) не трогаем. */
+    httpd_uri_t guarded = *uri_handler;
+    guarded.handler  = web_uri_guard_handler;
+    guarded.user_ctx = svc;
+
+    if (httpd_register_uri_handler(server, &guarded) != ESP_OK) {
+        free(svc);
+        return 0;
+    }
+    ESP_LOGI(TAG, "Сервис '%s' оказан интерфейсам 0x%08lx; прочим — 404",
+             uri_handler->uri, (unsigned long)iface_mask);
+    return 1;
 }

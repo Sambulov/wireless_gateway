@@ -35,6 +35,7 @@ VPATH := \
 C_SRCS := \
     ws_server.c \
     apih_uart.c \
+    web_iface_policy.c \
     GwJson.c \
     jsmn.c \
     LinkedList.c \
@@ -49,7 +50,8 @@ CPP_SRCS := \
     AllTests.cpp \
     GwJsonTest.cpp \
     WsServerTest.cpp \
-    ApihUartTest.cpp
+    ApihUartTest.cpp \
+    WebIfacePolicyTest.cpp
 
 C_OBJS   := $(patsubst %.c,  $(BUILD)/%.o, $(C_SRCS))
 CPP_OBJS := $(patsubst %.cpp,$(BUILD)/%.o, $(CPP_SRCS))

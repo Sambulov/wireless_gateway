@@ -12,7 +12,13 @@
  * the handler streams it into the spare OTA partition and reboots into it. The
  * upload is accepted only from the softAP side with a single client — the same
  * rule every other configuration endpoint follows, since a wrong image locks
- * the operator out of the device completely. */
+ * the operator out of the device completely.
+ *
+ * Откуда пришёл запрос — решает политика интерфейсов веб-сервера: /update
+ * оказан только точке доступа (web_iface_policy.c), и с другого интерфейса
+ * запрос до этого обработчика просто не доходит — клиент получает 404. Здесь
+ * остаётся правило, к интерфейсу не относящееся: прошивка принимается, только
+ * пока к точке доступа подключён ровно один клиент. */
 
 #define OTA_REBOOT_DELAY_MS 1500
 #define OTA_CHUNK_SIZE      1024
@@ -32,11 +38,10 @@ static esp_err_t ota_fail(httpd_req_t *req, const char *status, const char *msg)
 }
 
 esp_err_t ota_update_handler(httpd_req_t *req) {
-    const int fd = httpd_req_to_sockfd(req);
     const uint8_t clients = wifi_ap_clients_count();
 
-    if (!request_from_softap(fd) || clients != 1) {
-        ESP_LOGW(TAG, "OTA refused (from_ap=%u clients=%u)", request_from_softap(fd), clients);
+    if (clients != 1) {
+        ESP_LOGW(TAG, "OTA refused (clients=%u)", clients);
         return ota_fail(req, "403 Forbidden",
                         "Firmware can only be updated from the access point "
                         "while exactly one client is connected");
