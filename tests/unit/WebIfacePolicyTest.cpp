@@ -6,13 +6,20 @@
  * интерфейсов. Проверяется только решение политики — сам httpd и определение
  * интерфейса соединения (gw_iface_of_socket) в хостовой сборке отсутствуют.
  *
+ * Файловый менеджер (загрузка, удаление, переименование) в этой таблице больше не
+ * описан: он переехал на WebSocket-сервисы sys.file.write/delete/rename, и
+ * граница «только точка доступа» у него — маска регистрации в ядре API
+ * (apih_sys.c), как у листинга sys.files. HTTP-методов /upload/…, /delete/…,
+ * /rename/… нет вовсе, поэтому «только AP» здесь остаётся один /update.
+ *
  * Список проверок:
- * [x] /upload/…, /delete/…, /rename/…, /update → маска «только AP»
+ * [x] /update → маска «только AP»
  * [x] AP-only сервис: AP — да, STA/ETH/неизвестный — нет
+ * [x] Убранных файловых HTTP-методов в таблице нет: они попадают под общее правило
  * [x] Страницы, карты, терминал, файлы и /ws → «любой интерфейс»
  * [x] «Любой интерфейс» включает и неизвестный (GW_IFACE_NONE)
  * [x] query-строка на решение не влияет
- * [x] Шаблон правила и шаблон httpd совпадают: "/uploads/..." — не файловый менеджер
+ * [x] Шаблон правила и шаблон httpd совпадают: "/uploads/..." — не отдельный сервис
  * [x] Пустой URI — сервиса нет ни у кого (отказ)
  */
 
@@ -28,19 +35,12 @@
 TEST_GROUP(WebIfacePolicy) {
 };
 
-/* Файловый менеджер и прошивка — единственное, что сегодня только для точки
- * доступа. Шаблон и реальные пути: правило должно покрывать и то, и другое. */
-TEST(WebIfacePolicy, ApOnlyMaskForFileManagerAndFirmware) {
+/* Прошивка — единственное, что сегодня только для точки доступа. Шаблон и
+ * реальные пути: правило должно покрывать и то, и другое. */
+TEST(WebIfacePolicy, ApOnlyMaskForFirmware) {
     const char *uris[] = {
-        "/upload/*",                 /* как зарегистрировано */
-        "/upload/index.html",        /* как приходит запрос */
-        "/upload/regmaps/a.jsonc",
-        "/delete/*",
-        "/delete/index.html",
-        "/rename/*",
-        "/rename/terminal/script.js",
-        "/update",
-        "/update?clients=1",
+        "/update",                   /* как зарегистрировано */
+        "/update?clients=1",         /* как приходит запрос с query-строкой */
     };
 
     for (size_t i = 0; i < sizeof(uris) / sizeof(uris[0]); i++)
@@ -48,7 +48,7 @@ TEST(WebIfacePolicy, ApOnlyMaskForFileManagerAndFirmware) {
 }
 
 TEST(WebIfacePolicy, ApOnlyServiceIsDeniedToEveryOtherIface) {
-    const char *uris[] = { "/upload/a", "/delete/a", "/rename/a", "/update" };
+    const char *uris[] = { "/update" };
 
     for (size_t i = 0; i < sizeof(uris) / sizeof(uris[0]); i++) {
         CHECK_TRUE(web_iface_service_allowed(GW_IFACE_AP,   uris[i]));
@@ -57,6 +57,24 @@ TEST(WebIfacePolicy, ApOnlyServiceIsDeniedToEveryOtherIface) {
         /* Интерфейс неизвестен — считаем как «не AP» (иначе сервис утёк бы
          * всякому, чей интерфейс транспорт не смог определить). */
         CHECK_FALSE(web_iface_service_allowed(GW_IFACE_NONE, uris[i]));
+    }
+}
+
+/* Файловый менеджер по HTTP убран целиком: этих путей нет ни в таблице, ни среди
+ * зарегистрированных обработчиков (POST на них httpd отвечает 404), поэтому
+ * политика о них ничего особенного не говорит — они попадают под общее правило,
+ * как и любой незнакомый путь. Проверка держит на месте сам факт «правила
+ * файлового менеджера в таблице нет»: если кто-то вернёт сюда строку
+ * правило загрузки с маской AP, тест упадёт. */
+TEST(WebIfacePolicy, RemovedFileManagerPathsAreNotSpecialAnyMore) {
+    const char *uris[] = {
+        "/upload/*", "/upload/index.html", "/upload/regmaps/a.jsonc",
+        "/delete/*", "/delete/index.html", "/rename/*", "/rename/terminal/script.js",
+    };
+
+    for (size_t i = 0; i < sizeof(uris) / sizeof(uris[0]); i++) {
+        UNSIGNED_LONGS_EQUAL(GW_IFACE_MASK_ANY, web_iface_service_mask(uris[i]));
+        CHECK_TRUE(web_iface_service_allowed(GW_IFACE_STA, uris[i]));
     }
 }
 
@@ -100,14 +118,14 @@ TEST(WebIfacePolicy, MaskSemantics) {
  * интерфейса не должна зависеть от query-строки. */
 TEST(WebIfacePolicy, QueryStringDoesNotChangeTheDecision) {
     UNSIGNED_LONGS_EQUAL(AP_MASK, web_iface_service_mask("/update?x=1&y=2"));
-    CHECK_FALSE(web_iface_service_allowed(GW_IFACE_STA, "/delete/a?x=1"));
+    CHECK_FALSE(web_iface_service_allowed(GW_IFACE_STA, "/update?clients=1"));
     UNSIGNED_LONGS_EQUAL(GW_IFACE_MASK_ANY, web_iface_service_mask("/config?tab=net"));
 }
 
-/* Правило с '*' покрывает ровно те пути, что и шаблон httpd: шаблон загрузки —
- * это "/upload/" со звёздочкой, поэтому "/uploads/…" файловым менеджером не
- * считается (и до его обработчика не доходит). Политика не должна быть строже
- * httpd — иначе открытый сервис мог бы остаться без ответа. */
+/* Правило с '*' покрывает ровно те пути, что и шаблон httpd: правило — это шаблон
+ * со звёздочкой в конце, поэтому "/uploads/…" под правило загрузки файла не
+ * попало бы (и до обработчика не дошло бы). Политика не должна быть строже httpd
+ * — иначе открытый сервис мог бы остаться без ответа. */
 TEST(WebIfacePolicy, WildcardRuleBoundaryMatchesHttpdTemplate) {
     UNSIGNED_LONGS_EQUAL(GW_IFACE_MASK_ANY, web_iface_service_mask("/uploads/index.html"));
     UNSIGNED_LONGS_EQUAL(GW_IFACE_MASK_ANY, web_iface_service_mask("/upload"));

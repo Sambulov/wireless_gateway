@@ -83,10 +83,10 @@ httpd_handle_t start_ws_server(void);
  * соединению с неподходящего интерфейса. */
 uint8_t webserver_register_handler(httpd_handle_t server, httpd_uri_t *uri_handler);
 
+/* Файлы читаются по HTTP GET — общим обработчиком-ловушкой, а меняются только через
+ * WebSocket-сервисы sys.file.* — HTTP-методов /upload/…, /delete/… и /rename/…
+ * больше нет. */
 extern httpd_uri_t file_server;
-extern httpd_uri_t file_upload;
-extern httpd_uri_t file_delete;
-extern httpd_uri_t file_rename;
 extern httpd_uri_t ota_update;
 extern httpd_uri_t modbus_alias;
 extern httpd_uri_t config_page;
@@ -150,13 +150,24 @@ void net_format_ip4(uint32_t ip, char *out, size_t out_size);
  *   sys.info   GET device status: MACs, IPs, AP client count, heap, filesystem
  *   sys.reboot reboot the gateway after the response has been delivered
  *   sys.files  GET LittleFS file listing
+ *   sys.file.write  PUT a file in chunks: PATH, OFFSET, DATA (base64), LAST —
+ *              written to a temporary file and renamed over the target on LAST
+ *   sys.file.delete DELETE a file: PATH
+ *   sys.file.rename RENAME a file: FROM, TO (refused when TO already exists)
  *   sys.net    GET/SET IPv4 settings of the station and access point interfaces
- *              (DHCP or static address, mask, gateway, DNS) */
+ *              (DHCP or static address, mask, gateway, DNS)
+ *
+ * Файловый менеджер (sys.files и sys.file.*) оказывается только точке доступа:
+ * раньше это была та же граница у HTTP-методов /upload/…, /delete/…, /rename/…,
+ * которые эти сервисы заменили. */
 #define ESP_WS_API_SYS_WIFI_STA      "wifi.sta"
 #define ESP_WS_API_SYS_WIFI_AP       "wifi.ap"
 #define ESP_WS_API_SYS_INFO          "sys.info"
 #define ESP_WS_API_SYS_REBOOT        "sys.reboot"
 #define ESP_WS_API_SYS_FILES         "sys.files"
+#define ESP_WS_API_SYS_FILE_WRITE    "sys.file.write"
+#define ESP_WS_API_SYS_FILE_DELETE   "sys.file.delete"
+#define ESP_WS_API_SYS_FILE_RENAME   "sys.file.rename"
 #define ESP_WS_API_SYS_NET           "sys.net"
 /* Registers the system FID queue and starts the task serving it */
 esp_err_t api_sys_run(app_context_t *app);

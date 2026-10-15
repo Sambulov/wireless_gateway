@@ -54,9 +54,6 @@ void app_main(void)
     ESP_LOGI(TAG, "Registering URI handlers");
     ws_server_init();
     webserver_register_handler(app_context.ws_server, ws_transport_httpd_init("/ws"));
-    webserver_register_handler(app_context.web_server, &file_upload);
-    webserver_register_handler(app_context.web_server, &file_delete);
-    webserver_register_handler(app_context.web_server, &file_rename);
     webserver_register_handler(app_context.web_server, &ota_update);
     /* Короткий адрес интерпретатора и вшитая страница — до catch-all file_server */
     webserver_register_handler(app_context.web_server, &modbus_alias);

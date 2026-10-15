@@ -248,9 +248,11 @@
             <thead><tr><th>Файл</th><th>Размер</th><th>Действия</th></tr></thead>
             <tbody id="files-body"><tr><td colspan="3" class="empty">список пуст</td></tr></tbody>
         </table>
-        <div class="hint">Существующий файл загрузкой не перезаписывается: сначала удалите или
-            переименуйте его. Это защищает работающие страницы от частичной замены.
-            Ограничение размера одного файла — 500 КБ.</div>
+        <div class="hint">Файлы меняются только по WebSocket: загрузка идёт порциями (6 КБ на порцию) и
+            складывается во временный файл, который встаёт на место цели лишь после последней порции —
+            оборванная передача рабочий файл не портит. Существующий файл загрузкой заменяется целиком.
+            Ссылка на имени файла открывает его по HTTP — так же, как по HTTP отдаются страницы и карты
+            регистров. Ограничение размера одного файла — 500 КБ.</div>
     </div>
 
 </div>
@@ -259,8 +261,13 @@
 const WS_PORT = 81;                         // CONFIG_WEB_SOCKET_SERVER_PORT
 /* Имена FID вместо кодов: подсистема.действие. */
 const FID = { STA:'wifi.sta', AP:'wifi.ap', INFO:'sys.info', REBOOT:'sys.reboot',
-              FILES:'sys.files', NET:'sys.net' };
+              FILES:'sys.files', NET:'sys.net',
+              FILE_WRITE:'sys.file.write', FILE_DELETE:'sys.file.delete',
+              FILE_RENAME:'sys.file.rename' };
 const MAX_UPLOAD = 500 * 1024;
+/* Сколько данных уходит в одной порции: 6 КБ — это 8 КБ base64, и запрос вместе
+ * с путём и обёрткой влезает в предел сообщения транспорта (16 КБ). */
+const FILE_CHUNK = 6 * 1024;
 
 const STATUS_TEXT = {
     0x00000000: 'Готово',
@@ -280,6 +287,14 @@ const ERROR_TEXT = {
     WIFI: 'Wi-Fi отклонил настройки',
     FS: 'Файловая система недоступна',
     NOWS: 'Нет связи с устройством',
+    ARG: 'Устройство не поняло запрос',
+    PATH: 'Недопустимый путь к файлу',
+    FROM: 'Исходный файл не найден',
+    TO: 'Недопустимое новое имя',
+    OFFSET: 'Порядок порций нарушен — загрузка не завершена',
+    DATA: 'Порция файла повреждена при передаче',
+    SIZE: 'Файл больше 500 КБ',
+    EXIST: 'Такое имя уже занято',
 };
 
 let ws = null, sid = 1, apClients = null, fromAp = false, canConfigure = false;
@@ -335,6 +350,24 @@ function send(fid, arg, cb) {
     const id = sid++ & 0xffff;
     if (cb) pending.set('0x' + id.toString(16).padStart(8, '0'), cb);
     ws.send(JSON.stringify({ FID: fid, FLAGS: 0, SID: id, ARG: arg || {} }));
+}
+
+/* Ответ на свой вызов как обещание: файл передаётся порциями по очереди, и
+ * каждую следующую порцию можно слать только после ответа на предыдущую —
+ * устройство сверяет OFFSET с числом принятых байт. Ошибка связи приходит тем же
+ * путём (STA: null, ERR: 'NOWS'), поэтому ждать «вечного» обещания не придётся;
+ * на случай потерянного ответа (вызов мог не дойти) есть свой предел ожидания. */
+function request(fid, arg, timeout_ms = 15000) {
+    return new Promise(resolve => {
+        let finished = false;
+        const finish = (resp, sta) => {
+            if (finished) return;
+            finished = true;
+            resolve({ resp, sta });
+        };
+        send(fid, arg, finish);
+        setTimeout(() => finish({ ERR: 'NOWS', MSG: 'устройство не ответило' }, null), timeout_ms);
+    });
 }
 
 function refreshAll() {
@@ -734,7 +767,28 @@ $('up-file').onchange = () => {
     if (f && !$('up-name').value) $('up-name').value = f.name;
 };
 
-$('up-btn').onclick = () => {
+/* ── передача файла порциями ────────────────────────────────────────────── */
+
+function readSlice(file, start, end) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = () => reject(reader.error || new Error('файл не прочитан'));
+        reader.readAsArrayBuffer(file.slice(start, end));
+    });
+}
+
+/* Двоичные данные → base64: btoa принимает «строку байт», поэтому переводим
+ * кусками (у String.fromCharCode ограничение на число аргументов). */
+function toBase64(buffer) {
+    const bytes = new Uint8Array(buffer);
+    let bin = '';
+    for (let i = 0; i < bytes.length; i += 0x8000)
+        bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    return btoa(bin);
+}
+
+$('up-btn').onclick = async () => {
     const file = $('up-file').files[0];
     const name = $('up-name').value.trim();
     if (!file) { msg('files-msg', 'Выберите файл', 'err'); return; }
@@ -743,52 +797,76 @@ $('up-btn').onclick = () => {
     if (file.size > MAX_UPLOAD) { msg('files-msg', 'Файл больше 500 КБ', 'err'); return; }
 
     const target = fsJoin(curPath, name);
-    const xhr = new XMLHttpRequest();
-    xhr.open('POST', '/upload' + target.split('/').map(encodeURIComponent).join('/'), true);
-    xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
     const bar = $('up-progress');
+    const btn = $('up-btn');
     bar.style.display = 'block';
     bar.value = 0;
-    xhr.upload.onprogress = e => { if (e.lengthComputable) bar.value = e.loaded / e.total * 100; };
-    xhr.onload = () => {
+    btn.disabled = true;
+    msg('files-msg', `Передаём ${name} порциями по ${fmtBytes(FILE_CHUNK)}…`, 'warn');
+
+    /* Файл идёт порциями: 0 — начало (устройство пишет заново), LAST — конец.
+     * Устройство складывает порции во временный файл и заменяет им цель только
+     * на последней, поэтому оборванная передача рабочий файл не портит. */
+    let offset = 0;
+    try {
+        do {
+            const end = Math.min(offset + FILE_CHUNK, file.size);
+            const chunk = await readSlice(file, offset, end);
+            const { resp, sta } = await request(FID.FILE_WRITE, {
+                PATH: target, OFFSET: offset, DATA: toBase64(chunk),
+                LAST: (end >= file.size) ? 1 : 0,
+            });
+            if (sta !== 0) {
+                msg('files-msg', `Загрузка прервана: ${describe(resp, sta)}. `
+                    + `Файл на устройстве не изменён.`, 'err');
+                return;
+            }
+            offset = end;
+            bar.value = file.size ? offset / file.size * 100 : 100;
+        } while (offset < file.size);
+    } catch (e) {
+        msg('files-msg', `Загрузка прервана: ${e}. Файл на устройстве не изменён.`, 'err');
+        return;
+    } finally {
         bar.style.display = 'none';
-        if (xhr.status === 200) {
-            msg('files-msg', `Файл ${target} загружен`, 'ok');
-            $('up-file').value = '';
-            $('up-name').value = '';
-            refreshFiles();
-        } else {
-            msg('files-msg', `Ошибка ${xhr.status}: ${xhr.responseText}`, 'err');
-        }
-    };
-    xhr.onerror = () => { bar.style.display = 'none'; msg('files-msg', 'Сбой передачи', 'err'); };
-    xhr.send(file);
+        btn.disabled = false;
+    }
+
+    msg('files-msg', `Файл ${target} загружен (${fmtBytes(file.size)})`, 'ok');
+    $('up-file').value = '';
+    $('up-name').value = '';
+    refreshFiles();
 };
 
-function deleteFile(full, name) {
+async function deleteFile(full, name) {
     if (!confirm(`Удалить ${name}?`)) return;
-    fetch('/delete' + full.split('/').map(encodeURIComponent).join('/'), {
-        method: 'POST', headers: { 'X-Requested-With': 'XMLHttpRequest' }
-    }).then(async r => {
-        if (r.ok) { msg('files-msg', `Файл ${name} удалён`, 'ok'); refreshFiles(); }
-        else msg('files-msg', `Ошибка ${r.status}: ${await r.text()}`, 'err');
-    }).catch(e => msg('files-msg', 'Сбой запроса: ' + e, 'err'));
+    msg('files-msg', `Удаляем ${name}…`, 'warn');
+    const { resp, sta } = await request(FID.FILE_DELETE, { PATH: full });
+    if (sta === 0) {
+        msg('files-msg', `Файл ${name} удалён`, 'ok');
+        refreshFiles();
+    } else {
+        msg('files-msg', `Файл ${name} не удалён: ${describe(resp, sta)}`, 'err');
+    }
 }
 
-function renameItem(full, name) {
+async function renameItem(full, name) {
     const target = prompt(`Новое имя для ${name}:`, name);
     if (target === null) return;
     const clean = target.trim();
     if (!clean || clean === name) return;
     if (/[\/\\ ]/.test(clean)) { msg('files-msg', 'Имя не должно содержать пробелов и «/»', 'err'); return; }
-    fetch('/rename' + full.split('/').map(encodeURIComponent).join('/'), {
-        method: 'POST',
-        headers: { 'X-Requested-With': 'XMLHttpRequest' },
-        body: clean
-    }).then(async r => {
-        if (r.ok) { msg('files-msg', `${name} → ${clean}`, 'ok'); refreshFiles(); }
-        else msg('files-msg', `Ошибка ${r.status}: ${await r.text()}`, 'err');
-    }).catch(e => msg('files-msg', 'Сбой запроса: ' + e, 'err'));
+    /* Новое имя остаётся в том же каталоге, что и файл: путь собирает страница,
+     * устройство принимает полный путь (или короткое имя в каталоге FROM). */
+    const to = fsJoin(curPath, clean);
+    msg('files-msg', `Переименовываем ${name}…`, 'warn');
+    const { resp, sta } = await request(FID.FILE_RENAME, { FROM: full, TO: to });
+    if (sta === 0) {
+        msg('files-msg', `${name} → ${clean}`, 'ok');
+        refreshFiles();
+    } else {
+        msg('files-msg', `Не переименовано: ${describe(resp, sta)}`, 'err');
+    }
 }
 
 $('files-refresh').onclick = refreshFiles;
