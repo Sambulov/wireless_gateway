@@ -25,6 +25,12 @@
     .hdr-icon.err  { background:rgba(220,38,38,.38); }
     .hdr-icon.wait { background:rgba(217,119,6,.35); }
     .hdr-icon.dim  { background:#334155; filter:grayscale(1); opacity:.55; }
+    /* Интерфейс, через который открыта страница: словом AP или STA */
+    .hdr-text { display:inline-flex; align-items:center; justify-content:center; min-width:44px;
+                height:24px; padding:0 8px; border-radius:12px; font-size:12px; font-weight:600;
+                letter-spacing:.5px; background:#334155; color:#e2e8f0; cursor:help; }
+    .hdr-text.ok  { background:rgba(22,163,74,.35); }
+    .hdr-text.dim { opacity:.55; }
     .wrap { max-width:1000px; margin:0 auto; padding:14px; display:flex;
             flex-direction:column; gap:14px; }
     .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:14px; }
@@ -129,11 +135,11 @@
     <h1>⚙ Wireless Gateway</h1>
     <!-- Состояние шапки — три значка без слов: связь, MAC рабочего интерфейса,
          разрешена ли настройка. Текст каждой — в подсказке. -->
-    <span class="hdr-icon wait" id="ws-status" role="img" tabindex="0"
-          title="Подключаемся к устройству…" aria-label="Подключаемся к устройству…">⏳</span>
-    <span class="hdr-icon dim" id="mac-badge" role="img" tabindex="0"
-          title="MAC интерфейса, через который открыта страница: данных пока нет"
-          aria-label="MAC интерфейса, через который открыта страница: данных пока нет">🏷</span>
+    <span class="hdr-icon dim" id="ws-status" role="img" tabindex="0"
+          title="Связи с устройством нет" aria-label="Связи с устройством нет">⇄</span>
+    <span class="hdr-text dim" id="mac-badge" tabindex="0"
+          title="Интерфейс, через который открыта страница: данных пока нет"
+          aria-label="Интерфейс, через который открыта страница: данных пока нет">—</span>
     <span class="hdr-icon dim" id="access-icon" role="img" tabindex="0"
           title="Проверяем, разрешена ли настройка…"
           aria-label="Проверяем, разрешена ли настройка…">🔧</span>
@@ -284,15 +290,13 @@
             </div>
         </div>
 
-        <div class="crumbs"><span class="hint">Каталог:</span> <span id="files-path">корень</span></div>
+        <div class="crumbs"><span class="hint">Каталог:</span> <span id="files-path">/</span></div>
 
         <!-- Панель инструментов: только значки, слова — в подсказках -->
         <div class="toolbar">
             <button class="btn-icon" id="dl-btn" title="Скачать отмеченные файлы"
                     aria-label="Скачать отмеченные файлы">⬇️</button>
-            <button class="btn-icon" id="pick-btn" title="Выбрать файл на компьютере"
-                    aria-label="Выбрать файл на компьютере">💻</button>
-            <button class="btn-icon primary" id="up-btn" title="Загрузить выбранный файл в текущий каталог"
+            <button class="btn-icon primary" id="up-btn" title="Загрузить файл: выбрать на компьютере и передать в текущий каталог"
                     aria-label="Загрузить выбранный файл в текущий каталог">⬆️</button>
             <button class="btn-icon" id="mkdir-btn" title="Создать каталог в текущем каталоге"
                     aria-label="Создать каталог в текущем каталоге">📁</button>
@@ -302,7 +306,6 @@
                     aria-label="Удалить отмеченное">🗑️</button>
             <button class="btn-icon" id="files-refresh" title="Обновить список каталога"
                     aria-label="Обновить список каталога">🔄</button>
-            <span class="pick">выбрано: <b id="pick-name">ничего</b></span>
             <input type="file" id="up-file" class="hidden-file">
         </div>
         <progress id="up-progress" value="0" max="100" style="display:none; margin-top:8px"></progress>
@@ -408,15 +411,14 @@ function setIcon(id, glyph, cls, text) {
     el.setAttribute('aria-label', text);
 }
 
+/* Связь — две оппозитные стрелки (⇄), состояний ровно два: есть и нет. */
 function setWsStatus(state) {
     if (state === 'ok') {
-        setIcon('ws-status', '✅', 'ok',
+        setIcon('ws-status', '⇄', 'ok',
                 'Связь с устройством есть: страница получает данные по WebSocket');
-    } else if (state === 'err') {
-        setIcon('ws-status', '❌', 'err',
-                'Нет связи с устройством: WebSocket закрыт, подключение повторяется раз в секунду');
     } else {
-        setIcon('ws-status', '⏳', 'wait', 'Подключаемся к устройству…');
+        setIcon('ws-status', '⇄', 'dim',
+                'Связи с устройством нет: WebSocket закрыт, подключение повторяется раз в секунду');
     }
 }
 
@@ -425,14 +427,24 @@ function setWsStatus(state) {
  * в своих группах. */
 function updateHeaderMac() {
     const mac = (fromAp ? macAp : macSta) || '';
+    /* Показываем СЛОВОМ, через какой интерфейс мы работаем: AP или STA. */
+    const badge = $('mac-badge');
     if (!mac) {
-        setIcon('mac-badge', '🏷', 'dim',
-                'MAC интерфейса, через который открыта страница: данных пока нет');
+        badge.textContent = fromAp ? 'AP' : 'STA';
+        badge.className = 'hdr-text dim';
+        badge.title = fromAp
+            ? 'Страница открыта через точку доступа (AP): данных о MAC пока нет'
+            : 'Страница открыта через сеть, режим станции (STA): данных о MAC пока нет';
+        badge.setAttribute('aria-label', badge.title);
         return;
     }
-    setIcon('mac-badge', '🏷', '',
-            fromAp ? `Страница открыта через точку доступа — MAC точки доступа: ${mac}`
-                   : `Страница открыта через сеть, режим станции — MAC станции: ${mac}`);
+    /* Слово AP/STA остаётся, а MAC уходит в подсказку. */
+    badge.textContent = fromAp ? 'AP' : 'STA';
+    badge.className = 'hdr-text ok';
+    badge.title = fromAp
+        ? `Страница открыта через точку доступа (AP). MAC точки доступа: ${mac}`
+        : `Страница открыта через сеть, режим станции (STA). MAC станции: ${mac}`;
+    badge.setAttribute('aria-label', badge.title);
 }
 
 function connect() {
@@ -652,7 +664,11 @@ function renderAp(a) {
  * приглушён — запрещена, а причина написана в его подсказке. */
 function applyAccess() {
     $('i-ap-clients').textContent = (apClients === null) ? '—' : apClients;
-    $('ap-clients-hint').textContent = (apClients === null) ? '—' : apClients;
+    /* Раньше здесь писался и второй элемент (ap-clients-hint) — после переверстки
+     * его нет, обращение к null роняло всю функцию, и значок настройки так и
+     * оставался в состоянии «проверяем». Пишем только в существующие элементы. */
+    const hint = $('ap-clients-hint');
+    if (hint) hint.textContent = (apClients === null) ? '—' : apClients;
     for (const id of ['sta-save', 'ap-save', 'net-sta-save', 'net-ap-save', 'fw-upload']) {
         const b = $(id);
         b.disabled = !canConfigure;
@@ -947,7 +963,7 @@ function renderCrumb(f) {
     crumb.innerHTML = '';
     const root = document.createElement('a');
     root.href = '#';
-    root.textContent = 'корень';
+    root.textContent = '/';
     root.onclick = e => { e.preventDefault(); openDir('/'); };
     crumb.appendChild(root);
 
@@ -1183,12 +1199,13 @@ function toBase64(buffer) {
     return btoa(bin);
 }
 
-/* Выбор файла на компьютере: имя для устройства — это имя самого файла, поля
- * «имя файла в устройстве» больше нет. */
-$('pick-btn').onclick = () => $('up-file').click();
-$('up-file').onchange = () => {
+/* Одна кнопка «Загрузить»: она же открывает выбор файла на компьютере, и как
+ * только файл выбран — передача начинается сама. Имя для устройства — это имя
+ * выбранного файла как есть; поля «имя в устройстве» нет. */
+$('up-btn').onclick = () => $('up-file').click();
+$('up-file').onchange = async () => {
     const f = $('up-file').files[0];
-    $('pick-name').textContent = f ? `${f.name} (${fmtBytes(f.size)})` : 'ничего';
+    if (f) await uploadSelected();
 };
 
 /* Занято ли имя в каталоге. Список спрашиваем у устройства заново: тот, что на
@@ -1201,9 +1218,9 @@ async function nameTaken(dir, name) {
     return currentRows.some(row => row.name === name);
 }
 
-$('up-btn').onclick = async () => {
+async function uploadSelected() {
     const file = $('up-file').files[0];
-    if (!file) { msg('files-msg', 'Сначала выберите файл на компьютере (значок «💻»)', 'err'); return; }
+    if (!file) { msg('files-msg', 'Файл не выбран', 'err'); return; }
     const name = file.name;
     const bad = nameProblem(name);
     if (bad) { msg('files-msg', bad, 'err'); return; }
@@ -1269,9 +1286,8 @@ $('up-btn').onclick = async () => {
     msg('files-msg', `Файл ${target} ${replacing ? 'заменён' : 'загружен'} `
         + `(${fmtBytes(file.size)})` + httpNameWarning(name), 'ok');
     $('up-file').value = '';
-    $('pick-name').textContent = 'ничего';
     refreshFiles();
-};
+}
 
 /* ── создание каталога, переименование и удаление ───────────────────────── */
 
