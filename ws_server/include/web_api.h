@@ -4,6 +4,8 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#include "ws_transport.h"
+
 /* FID — текстовое имя вида "<подсистема>.<действие>": "wifi.sta", "uart2.modbus".
  * Клиент присылает его строкой, сервер возвращает то же имя в ответе. Самое
  * длинное имя сейчас — "uart2.config" (12 символов), 24 хватает с запасом.
@@ -85,6 +87,13 @@ typedef api_handler_t ApiHandler_t;
 uint8_t bApiCallRegister(api_handler_t fHandler, const char *name, void *pxContext);
 uint8_t ws_server_register_fid_queue(const char *name, void *xQueue);
 uint8_t bApiCallUnregister(const char *name);
+
+/* Подключить транспорт к ядру. Ядро работает только через этот интерфейс:
+ * обращений к платформе в нём нет. module — дескриптор модуля транспорта (self
+ * для init/open/subscribe); здесь же ядро подписывается на его события.
+ * Соединение ядру непрозрачно: оно приходит в событиях как self и служит ключом
+ * сессии. */
+ws_transport_result_t ws_server_transport_attach(const ws_transport_iface_t *iface, void *module);
 
 uint8_t bApiCallGetId(void *pxApiCall, uint32_t *ulOutId);
 void vApiCallComplete(void *pxApiCall);

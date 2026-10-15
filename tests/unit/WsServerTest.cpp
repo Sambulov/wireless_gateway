@@ -8,12 +8,16 @@
  * [x] Unregister — registered FID → succeeds
  * [x] Unregister — unknown FID → fails
  *
- * [x] Connect — ws_server_on_connect sets user_data on conn
- * [x] Disconnect — without prior connect: no crash
- * [x] Disconnect — after connect: no crash, user_data still held by stub
+ * Транспорт (стаб — реализация ws_transport_iface_t):
+ * [x] Attach — NULL iface / iface без обязательных операций → BAD_CALL
+ * [x] Connect — ESTABLISHED заводит сессию, привязанную к дескриптору соединения
+ * [x] Disconnect — CLOSED освобождает сессию и её вызовы
+ * [x] Disconnect — повторный CLOSED не ломает ядро (нет двойного освобождения)
+ * [x] CLOSED неизвестного соединения — не падаем
+ * [x] PING/PONG/CLOSE обрабатывает транспорт: ядро их не видит и не отвечает
+ * [x] PONG ядру не доходит (транспорт отвечает только на PING)
+ * [x] Ядро не пингует: за долгий простой ни одной отправки
  *
- * [x] Frame PING  → replies with PONG (1 send call)
- * [x] Frame CLOSE → replies with CLOSE (1 send call)
  * [x] Frame TEXT malformed JSON       → no send
  * [x] Frame TEXT missing FLAGS        → sends BAD_REQ (1 send call)
  * [x] Frame TEXT without SID         → accepted (SID назначает клиент)
@@ -21,21 +25,32 @@
  * [x] Frame TEXT имя ищется точно    → регистр и лишние символы не совпадают
  * [x] Frame — вложенный JSON отбрасывается без падения и без утечки
  * [x] Frame — в ответе то же имя FID, что прислал клиент
- * [x] Frame — фрагментированное сообщение собирается из частей
- * [x] Frame — продолжение без начала отбрасывается
- * [x] Frame — незавершённый сбор бросается при начале нового сообщения
+ * [x] Frame — собранное сообщение разбирается ядром как обычное
+ * [x] Frame TEXT unregistered FID     → sends NO_HANDLER (1 send call)
+ * [x] Frame TEXT registered handler   → call enqueued, no immediate send
+ *
+ * Склейка фрагментов в транспорте:
+ * [x] Сообщение из трёх фрагментов доходит до ядра целиком
+ * [x] Продолжение без начала отбрасывается
+ * [x] Незавершённый сбор бросается при начале нового сообщения
+ * [x] Одиночный кадр больше 16 КБ → соединение закрывается
+ * [x] Собранное сообщение больше 16 КБ → соединение закрывается
+ *
+ * Отправка:
+ * [x] TRANSFER_COMPLETE освобождает буфер ответа (и при рассылке — по счётчику)
+ * [x] TRANSFER_ERR закрывает соединение и снимает его вызовы
+ * [x] Отказ begin_send: буфер освобождает ядро, сессия не тронута
+ *
  * [x] Снятие вызова — ждём FALSE обработчика, раньше не освобождаем
  * [x] Work cycle — обработчик получает такт без данных
  * [x] Work cycle — завершённый вызов снимается и больше тактов не получает
- * [x] Frame TEXT unregistered FID     → sends NO_HANDLER (1 send call)
- * [x] Frame TEXT registered handler   → call enqueued, no immediate send
  *
  * [x] bApiCallGetId — NULL call → fails
  * [x] bApiCallGetId — NULL out_id → fails
  *
  * Regression (built with ASan/UBSan, see Makefile):
- * [x] Ping send fails on last pending call → no write through NULL session
- * [x] TO_DELETE followed by same fd/FID/SID call → both freed, no UAF
+ * [x] Отправка не прошла у снятого вызова → нет записи через NULL-сессию
+ * [x] TO_DELETE followed by same fid/SID call → both freed, no UAF
  */
 
 extern "C" {
@@ -44,7 +59,7 @@ extern "C" {
 #include "ws_hal.h"
 }
 #include "ws_hal_stub.h"
-#include "ws_conn_stub.h"
+#include "ws_transport_stub.h"
 #include "CppUTest/TestHarness.h"
 
 #include <stdlib.h>
@@ -53,10 +68,6 @@ extern "C" {
 /* Forward declarations — these callbacks are not in any public header */
 extern "C" {
     void ws_server_init(void);
-    void ws_server_on_connect(ws_conn_t *conn);
-    void ws_server_on_frame(ws_conn_t *conn, ws_frame_type_t type,
-                            uint8_t *data, size_t len, uint8_t bFinal);
-    void ws_server_on_disconnect(ws_conn_t *conn);
     void ws_server_test_reset(void);
     void ws_server_test_worker_step(void);
     void ws_server_test_work_step(void);
@@ -74,7 +85,6 @@ static uint8_t dummy_handler(void *call, void **ctx, uint8_t *data, uint32_t len
 /* Обработчик, который считает такты работы и держит вызов живым, пока не
  * получит запрос и ни одного такта после него. */
 static int long_handler_pulses;
-/* Живёт, пока такты идут: проверяем именно доставку тактов. */
 static uint8_t long_handler(void *call, void **ctx, uint8_t *data, uint32_t len) {
     (void)call; (void)ctx; (void)data; (void)len;
     if (!data) long_handler_pulses++;
@@ -89,18 +99,36 @@ static uint8_t short_handler(void *call, void **ctx, uint8_t *data, uint32_t len
     return short_handler_pulses < 3;
 }
 
-/* ws_server_on_text takes ownership of data — always pass malloc'd copy */
-static uint8_t *heap_str(const char *s) {
-    size_t n = strlen(s);
-    uint8_t *buf = (uint8_t *)malloc(n + 1);
-    memcpy(buf, s, n + 1);
-    return buf;
+/* Сообщение «из сети»: транспорт принимает кадр, сам склеивает фрагменты и
+ * отдаёт ядру готовое сообщение. */
+static void send_text(ws_transport_stub_conn_t *conn, const char *json) {
+    ws_transport_stub_frame(conn, WS_STUB_FRAME_TEXT, json, strlen(json), 1);
 }
 
-static void send_text(ws_conn_t *conn, const char *json) {
-    size_t n = strlen(json);
-    ws_server_on_frame(conn, WS_FRAME_TEXT, heap_str(json), n, 1);
+static void send_part(ws_transport_stub_conn_t *conn, const char *json, int final) {
+    ws_transport_stub_frame(conn, WS_STUB_FRAME_TEXT, json, strlen(json), final);
 }
+
+static void send_cont(ws_transport_stub_conn_t *conn, const char *json, int final) {
+    ws_transport_stub_frame(conn, WS_STUB_FRAME_CONT, json, strlen(json), final);
+}
+
+/* Установка для тестов, которым нужны ядро, подключённый транспорт и одно
+ * соединение. teardown снимает состояние ядра, а дескрипторы соединений
+ * освобождает ws_transport_stub_reset(). */
+#define TRANSPORT_SETUP()                                    \
+    do {                                                     \
+        ws_hal_stub_reset();                                 \
+        ws_server_init();                                    \
+        ws_transport_stub_reset();                           \
+        ws_transport_stub_attach();                          \
+    } while (0)
+
+#define TRANSPORT_TEARDOWN()                                 \
+    do {                                                     \
+        ws_server_test_reset();                              \
+        ws_transport_stub_reset();                           \
+    } while (0)
 
 /* ── TEST_GROUP: Init ─────────────────────────────────────────────────── */
 
@@ -163,87 +191,155 @@ TEST(WsServerRegister, UnregisterUnknownNameFails) {
     LONGS_EQUAL(0, bApiCallUnregister("reg.unknown"));
 }
 
-/* ── TEST_GROUP: Connect ──────────────────────────────────────────────── */
+TEST(WsServerRegister, ReregisterAfterUnregisterSucceeds) {
+    bApiCallRegister(dummy_handler, "reg.four", NULL);
+    bApiCallUnregister("reg.four");
+    LONGS_EQUAL(1, bApiCallRegister(dummy_handler, "reg.four", NULL));
+}
 
-TEST_GROUP(WsServerConnect) {
-    ws_conn_t *conn;
+/* ── TEST_GROUP: Подключение транспорта ───────────────────────────────── */
+
+TEST_GROUP(WsServerTransportAttach) {
     void setup() {
         ws_hal_stub_reset();
         ws_server_init();
-        conn = ws_conn_stub_make(42);
+        ws_transport_stub_reset();
     }
     void teardown() {
-        ws_server_on_disconnect(conn);  /* no-op if not connected */
         ws_server_test_reset();
-        free(conn);
+        ws_transport_stub_reset();
     }
 };
 
-TEST(WsServerConnect, ConnectSetsUserDataOnConn) {
-    ws_server_on_connect(conn);
-    CHECK(ws_conn_get_user_data(conn) != NULL);
+TEST(WsServerTransportAttach, NullIfaceIsRejected) {
+    LONGS_EQUAL(WS_TRANSPORT_BAD_CALL, ws_server_transport_attach(NULL, NULL));
 }
 
-TEST(WsServerConnect, DisconnectWithoutConnectNoCrash) {
-    ws_server_on_disconnect(conn);
-    LONGS_EQUAL(0, ws_conn_stub_send_calls(conn));
+TEST(WsServerTransportAttach, IfaceWithoutRequiredOpsIsRejected) {
+    /* Без begin_send/close/subscribe ядру работать нечем: половина интерфейса
+     * означала бы отказ уже в момент запроса клиента. */
+    ws_transport_iface_t broken = *ws_transport_stub_iface();
+    broken.begin_send = NULL;
+    LONGS_EQUAL(WS_TRANSPORT_BAD_CALL, ws_server_transport_attach(&broken, ws_transport_stub_module()));
 }
 
-TEST(WsServerConnect, DisconnectAfterConnectNoCrash) {
-    ws_server_on_connect(conn);
-    ws_server_on_disconnect(conn);  /* frees ApiSession_t — no crash */
+TEST(WsServerTransportAttach, StubAttachSucceeds) {
+    LONGS_EQUAL(WS_TRANSPORT_OK, ws_transport_stub_attach());
+}
+
+/* ── TEST_GROUP: Соединения ───────────────────────────────────────────── */
+
+TEST_GROUP(WsServerConnect) {
+    ws_transport_stub_conn_t *conn;
+    void setup() {
+        TRANSPORT_SETUP();
+        conn = ws_transport_stub_connect(42);
+    }
+    void teardown() {
+        TRANSPORT_TEARDOWN();
+    }
+};
+
+TEST(WsServerConnect, EstablishedBindsSessionToDescriptor) {
+    /* Соединение установлено — сессия ядра есть, и ядро отвечает на сообщение
+     * из него (незарегистрированный FID → NO_HANDLER). */
+    send_text(conn, "{\"FID\":\"conn.unknown\",\"FLAGS\":0,\"SID\":1}");
+    LONGS_EQUAL(1, ws_transport_stub_send_attempts(conn));
+}
+
+TEST(WsServerConnect, ClosedReleasesSessionAndItsCalls) {
+    bApiCallRegister(dummy_handler, "conn.calls", NULL);
+    send_text(conn, "{\"FID\":\"conn.calls\",\"FLAGS\":0,\"SID\":1}");
+
+    ws_transport_stub_disconnect(conn);
+
+    /* Вызовов у соединения больше нет: рассылка по FID не находит получателей */
+    uint8_t buf[] = "{}";
+    LONGS_EQUAL(0, bApiCallSendJsonFidGroup("conn.calls", buf, 2));
+}
+
+TEST(WsServerConnect, RepeatedClosedIsSurvived) {
+    /* Транспорт вправе сообщить о разрыве дважды: второй CLOSED приходит для
+     * соединения, сессии которого у ядра уже нет. */
+    ws_transport_stub_disconnect(conn);
+    ws_transport_stub_emit_closed(conn);
+    /* Ни падения, ни двойного освобождения (проверяют ASan/UBSan/LeakSanitizer) */
+}
+
+TEST(WsServerConnect, MessageFromUnknownConnectionIsDropped) {
+    /* Сообщение из соединения, о котором ядро не знает (ESTABLISHED до него не
+     * дошёл): адресовать его некуда, но и падать нельзя. */
+    ws_transport_stub_conn_t *ghost = ws_transport_stub_connect_silent(7);
+    send_text(ghost, "{\"FID\":\"conn.ghost\",\"FLAGS\":0,\"SID\":1}");
+    LONGS_EQUAL(0, ws_transport_stub_send_attempts(ghost));
+    ws_transport_stub_emit_closed(ghost);   /* и CLOSED для ядра незнаком */
+}
+
+TEST(WsServerConnect, PingIsAnsweredByTransportOnly) {
+    /* Управляющие кадры — уровень транспорта: ядро PING не видит и PONG не шлёт */
+    ws_transport_stub_frame(conn, WS_STUB_FRAME_PING, "ping", 4, 1);
+    LONGS_EQUAL(1, ws_transport_stub_reply_calls(conn));
+    LONGS_EQUAL(0, ws_transport_stub_send_attempts(conn));
+}
+
+TEST(WsServerConnect, PongIsIgnoredByTransport) {
+    ws_transport_stub_frame(conn, WS_STUB_FRAME_PONG, "pong", 4, 1);
+    LONGS_EQUAL(0, ws_transport_stub_reply_calls(conn));
+    LONGS_EQUAL(0, ws_transport_stub_send_attempts(conn));
+}
+
+TEST(WsServerConnect, CloseFrameIsAnsweredByTransportOnly) {
+    /* CLOSE подтверждает транспорт; ядру кадр не отдаётся и ответа от него нет */
+    ws_transport_stub_frame(conn, WS_STUB_FRAME_CLOSE, NULL, 0, 1);
+    LONGS_EQUAL(1, ws_transport_stub_reply_calls(conn));
+    LONGS_EQUAL(0, ws_transport_stub_send_attempts(conn));
+}
+
+TEST(WsServerConnect, CoreDoesNotPingIdleConnection) {
+    /* Пингование — не дело ядра: за долгий простой оно не отправляет ничего.
+     * Живость соединения видит транспорт (TRANSFER_ERR, CLOSED). */
+    for (int i = 0; i < 5; i++) {
+        ws_hal_stub_advance_tick(10000);
+        ws_server_test_worker_step();
+    }
+    LONGS_EQUAL(0, ws_transport_stub_send_attempts(conn));
 }
 
 /* ── TEST_GROUP: Frame ────────────────────────────────────────────────── */
 
 TEST_GROUP(WsServerFrame) {
-    ws_conn_t *conn;
+    ws_transport_stub_conn_t *conn;
     void setup() {
-        ws_hal_stub_reset();
-        ws_server_init();
-        conn = ws_conn_stub_make(1);
-        ws_server_on_connect(conn);
+        TRANSPORT_SETUP();
+        conn = ws_transport_stub_connect(1);
     }
     void teardown() {
-        ws_server_on_disconnect(conn);
-        ws_server_test_reset();
-        free(conn);
+        TRANSPORT_TEARDOWN();
     }
 };
 
-TEST(WsServerFrame, PingRepliesWithPong) {
-    uint8_t *data = heap_str("ping");
-    ws_server_on_frame(conn, WS_FRAME_PING, data, 4, 1);
-    LONGS_EQUAL(1, ws_conn_stub_send_calls(conn));
-}
-
-TEST(WsServerFrame, CloseRepliesWithClose) {
-    ws_server_on_frame(conn, WS_FRAME_CLOSE, NULL, 0, 1);
-    LONGS_EQUAL(1, ws_conn_stub_send_calls(conn));
-}
-
 TEST(WsServerFrame, TextMalformedJsonNoReply) {
     send_text(conn, "{bad json}");
-    LONGS_EQUAL(0, ws_conn_stub_send_calls(conn));
+    LONGS_EQUAL(0, ws_transport_stub_send_attempts(conn));
 }
 
 TEST(WsServerFrame, TextMissingFlagsSendsBadReq) {
     /* No FLAGS field — mandatory */
     send_text(conn, "{\"FID\":\"frm.flags\",\"SID\":1}");
-    LONGS_EQUAL(1, ws_conn_stub_send_calls(conn));
+    LONGS_EQUAL(1, ws_transport_stub_send_attempts(conn));
 }
 
 TEST(WsServerFrame, TextWithoutSidIsAccepted) {
     /* SID назначает клиент и он необязателен: сервер лишь повторяет его в
-     * ответе, если тот был. Кадр без SID — полноценный запрос. */
+     * ответе, если тот был. Сообщение без SID — полноценный запрос. */
     bApiCallRegister(dummy_handler, "frm.sid", NULL);
     send_text(conn, "{\"FID\":\"frm.sid\",\"FLAGS\":0}");
-    LONGS_EQUAL(0, ws_conn_stub_send_calls(conn));
+    LONGS_EQUAL(0, ws_transport_stub_send_attempts(conn));
 }
 
 TEST(WsServerFrame, TextUnregisteredFidSendsNoHandler) {
     send_text(conn, "{\"FID\":\"frm.unknown\",\"FLAGS\":0,\"SID\":1}");
-    LONGS_EQUAL(1, ws_conn_stub_send_calls(conn));
+    LONGS_EQUAL(1, ws_transport_stub_send_attempts(conn));
 }
 
 TEST(WsServerFrame, TextRegisteredHandlerEnqueuesCallNoImmediateSend) {
@@ -251,27 +347,21 @@ TEST(WsServerFrame, TextRegisteredHandlerEnqueuesCallNoImmediateSend) {
      * The worker task is stubbed out — no DELIVERED status yet. */
     bApiCallRegister(dummy_handler, "frm.one", NULL);
     send_text(conn, "{\"FID\":\"frm.one\",\"FLAGS\":0,\"SID\":5}");
-    LONGS_EQUAL(0, ws_conn_stub_send_calls(conn));
-}
-
-TEST(WsServerFrame, PongFrameNoReply) {
-    /* PONG is handled silently — only alive-ts updated, no send */
-    ws_server_on_frame(conn, WS_FRAME_PONG, NULL, 0, 1);
-    LONGS_EQUAL(0, ws_conn_stub_send_calls(conn));
+    LONGS_EQUAL(0, ws_transport_stub_send_attempts(conn));
 }
 
 TEST(WsServerFrame, NumericFidIsRejected) {
-    /* Протокол работает только с именами: число в FID — не имя, кадр
-     * отклоняется молча, как и любой другой кадр без корректного FID. */
+    /* Протокол работает только с именами: число в FID — не имя, сообщение
+     * отклоняется молча, как и любое другое без корректного FID. */
     bApiCallRegister(dummy_handler, "frm.numeric", NULL);
     send_text(conn, "{\"FID\":0,\"FLAGS\":0,\"SID\":1}");
-    LONGS_EQUAL(0, ws_conn_stub_send_calls(conn));
+    LONGS_EQUAL(0, ws_transport_stub_send_attempts(conn));
     send_text(conn, "{\"FID\":8194,\"FLAGS\":0,\"SID\":1}");
-    LONGS_EQUAL(0, ws_conn_stub_send_calls(conn));
+    LONGS_EQUAL(0, ws_transport_stub_send_attempts(conn));
     /* Строка "0x2002" — уже имя, просто незарегистрированное: клиент получает
      * внятный NO_HANDLER, а не тишину. */
     send_text(conn, "{\"FID\":\"0x2002\",\"FLAGS\":0,\"SID\":1}");
-    LONGS_EQUAL(1, ws_conn_stub_send_calls(conn));
+    LONGS_EQUAL(1, ws_transport_stub_send_attempts(conn));
 }
 
 /* Обработчик, который сразу отвечает и завершает вызов. */
@@ -287,8 +377,8 @@ TEST(WsServerFrame, ReplyCarriesSameFidName) {
     bApiCallRegister(answer_handler, "uart2.modbus", NULL);
     send_text(conn, "{\"FID\":\"uart2.modbus\",\"FLAGS\":0,\"SID\":9}");
     ws_server_test_worker_step();
-    STRCMP_CONTAINS("\"FID\":\"uart2.modbus\"", ws_conn_stub_last_payload(conn));
-    STRCMP_CONTAINS("\"SID\":\"0x00000009\"", ws_conn_stub_last_payload(conn));
+    STRCMP_CONTAINS("\"FID\":\"uart2.modbus\"", ws_transport_stub_last_sent(conn));
+    STRCMP_CONTAINS("\"SID\":\"0x00000009\"", ws_transport_stub_last_sent(conn));
 }
 
 TEST(WsServerFrame, TooLongFidNameInFrameIsRejected) {
@@ -296,7 +386,7 @@ TEST(WsServerFrame, TooLongFidNameInFrameIsRejected) {
      * бы уйти обработчику с похожим именем. */
     std::string long_name(API_FID_NAME_MAX + 5, 'x');
     send_text(conn, ("{\"FID\":\"" + long_name + "\",\"FLAGS\":0,\"SID\":1}").c_str());
-    LONGS_EQUAL(0, ws_conn_stub_send_calls(conn));
+    LONGS_EQUAL(0, ws_transport_stub_send_attempts(conn));
 }
 
 TEST(WsServerFrame, NameMatchesExactly) {
@@ -304,28 +394,28 @@ TEST(WsServerFrame, NameMatchesExactly) {
      * и сервер обязан ответить NO_HANDLER, а не отдать его этому обработчику. */
     bApiCallRegister(dummy_handler, "uart2.modbus", NULL);
     send_text(conn, "{\"FID\":\"UART2.MODBUS\",\"FLAGS\":0,\"SID\":1}");
-    LONGS_EQUAL(1, ws_conn_stub_send_calls(conn));       /* NO_HANDLER */
+    LONGS_EQUAL(1, ws_transport_stub_send_attempts(conn));       /* NO_HANDLER */
     send_text(conn, "{\"FID\":\"uart2.modbus2\",\"FLAGS\":0,\"SID\":1}");
-    LONGS_EQUAL(2, ws_conn_stub_send_calls(conn));       /* NO_HANDLER */
+    LONGS_EQUAL(2, ws_transport_stub_send_attempts(conn));       /* NO_HANDLER */
     send_text(conn, "{\"FID\":\"uart2.modbu\",\"FLAGS\":0,\"SID\":1}");
-    LONGS_EQUAL(3, ws_conn_stub_send_calls(conn));       /* NO_HANDLER */
+    LONGS_EQUAL(3, ws_transport_stub_send_attempts(conn));       /* NO_HANDLER */
     send_text(conn, "{\"FID\":\"uart2.modbus\",\"FLAGS\":0,\"SID\":1}");
-    LONGS_EQUAL(3, ws_conn_stub_send_calls(conn));       /* обработан, ответа нет */
+    LONGS_EQUAL(3, ws_transport_stub_send_attempts(conn));       /* обработан, ответа нет */
 }
 
 TEST(WsServerFrame, TextNoArgFieldStillEnqueues) {
     /* ARG is optional — missing ARG should not block enqueueing */
     bApiCallRegister(dummy_handler, "frm.noarg", NULL);
     send_text(conn, "{\"FID\":\"frm.noarg\",\"FLAGS\":0,\"SID\":1}");
-    LONGS_EQUAL(0, ws_conn_stub_send_calls(conn));
+    LONGS_EQUAL(0, ws_transport_stub_send_attempts(conn));
 }
 
 TEST(WsServerFrame, DisconnectedCallNoLongerReceivesBroadcast) {
-    /* After disconnect, ws_server_test_reset clears enqueued call.
+    /* After disconnect, the session is released and the call is unbound.
      * Verify bCallFidMatch skips nulled sessions: targets == 0. */
     bApiCallRegister(dummy_handler, "frm.bcast", NULL);
     send_text(conn, "{\"FID\":\"frm.bcast\",\"FLAGS\":0,\"SID\":1}");
-    ws_server_on_disconnect(conn);
+    ws_transport_stub_disconnect(conn);
     uint8_t buf[] = "{}";
     LONGS_EQUAL(0, bApiCallSendJsonFidGroup("frm.bcast", buf, 2));
 }
@@ -333,68 +423,171 @@ TEST(WsServerFrame, DisconnectedCallNoLongerReceivesBroadcast) {
 TEST(WsServerFrame, DeeplyNestedJsonIsDroppedSafely) {
     /* Ровно то, что роняло устройство: прежний разбор шёл рекурсивно и на
      * глубине ~400 заканчивал стек задачи httpd. Разбор на jsmn итеративный,
-     * токенов на такую вложенность не хватает — кадр отбрасывается, память под
-     * него освобождается (проверяет LeakSanitizer). */
+     * токенов на такую вложенность не хватает — сообщение отбрасывается, память
+     * под него освобождает транспорт (проверяет LeakSanitizer). */
     std::string deep = "{\"FID\":\"frm.deep\",\"FLAGS\":0,\"SID\":1,\"ARG\":";
     deep.append(500, '[');
     deep.append(500, ']');
     deep += "}";
     send_text(conn, deep.c_str());
-    LONGS_EQUAL(0, ws_conn_stub_send_calls(conn));
+    LONGS_EQUAL(0, ws_transport_stub_send_attempts(conn));
 }
 
-/* ── TEST_GROUP: WsServerFragments ────────────────────────────────────── */
+/* ── TEST_GROUP: Склейка фрагментов (делает транспорт) ────────────────── */
 
 TEST_GROUP(WsServerFragments) {
-    ws_conn_t *conn;
+    ws_transport_stub_conn_t *conn;
     void setup() {
-        ws_hal_stub_reset();
-        ws_server_init();
-        conn = ws_conn_stub_make(1);
-        ws_server_on_connect(conn);
+        TRANSPORT_SETUP();
+        conn = ws_transport_stub_connect(1);
         bApiCallRegister(dummy_handler, "frag.one", NULL);
     }
     void teardown() {
-        ws_server_on_disconnect(conn);
-        ws_server_test_reset();
-        free(conn);
+        TRANSPORT_TEARDOWN();
     }
 };
 
 TEST(WsServerFragments, MessageIsAssembledFromParts) {
-    /* Сообщение, разрезанное на три кадра, должно дойти до обработчика целиком:
-     * первый фрагмент идёт с FIN=0, дальше — продолжения (WS_FRAME_CONT). */
-    const char *p1 = "{\"FID\":\"frag.one\",\"FLAGS\":0,";
-    const char *p2 = "\"SID\":1,";
-    const char *p3 = "\"ARG\":{}}";
-    ws_server_on_frame(conn, WS_FRAME_TEXT, heap_str(p1), strlen(p1), 0);
-    ws_server_on_frame(conn, WS_FRAME_CONT, heap_str(p2), strlen(p2), 0);
-    ws_server_on_frame(conn, WS_FRAME_CONT, heap_str(p3), strlen(p3), 1);
-    /* Вызов ушёл в очередь — немедленного ответа нет (как и у целого кадра) */
-    LONGS_EQUAL(0, ws_conn_stub_send_calls(conn));
+    /* Сообщение, разрезанное на три кадра, доходит до ядра целиком: первый
+     * фрагмент идёт с FIN=0, дальше — продолжения. Ядро видит одно событие
+     * RECEIVED и разбирает готовый JSON. */
+    send_part(conn, "{\"FID\":\"frag.unknown\",\"FLAGS\":0,", 0);
+    send_cont(conn, "\"SID\":1,", 0);
+    send_cont(conn, "\"ARG\":{}}", 1);
+    /* Разбор дошёл до имени: незарегистрированный FID → один NO_HANDLER */
+    LONGS_EQUAL(1, ws_transport_stub_send_attempts(conn));
+}
+
+TEST(WsServerFragments, AssembledMessageEnqueuesCallOnce) {
+    send_part(conn, "{\"FID\":\"frag.one\",\"FLAGS\":0,", 0);
+    send_cont(conn, "\"SID\":1,\"ARG\":{}}", 1);
+    LONGS_EQUAL(0, ws_transport_stub_send_attempts(conn));   /* вызов ушёл в очередь */
 }
 
 TEST(WsServerFragments, ContinuationWithoutStartIsDropped) {
-    ws_server_on_frame(conn, WS_FRAME_CONT, heap_str("{}"), 2, 1);
-    LONGS_EQUAL(0, ws_conn_stub_send_calls(conn));
+    send_cont(conn, "{}", 1);
+    LONGS_EQUAL(0, ws_transport_stub_send_attempts(conn));
 }
 
 TEST(WsServerFragments, UnfinishedAssemblyIsDroppedOnNewMessage) {
     /* Начали собирать, но пришло новое сообщение: недособранное выбрасываем
      * (иначе оно склеилось бы с чужими данными), а новое обрабатываем. */
-    const char *part = "{\"FID\":\"frag.one\",";
-    ws_server_on_frame(conn, WS_FRAME_TEXT, heap_str(part), strlen(part), 0);
+    send_part(conn, "{\"FID\":\"frag.one\",", 0);
     send_text(conn, "{\"FID\":\"frm.unknown\",\"FLAGS\":0,\"SID\":1}");
-    LONGS_EQUAL(1, ws_conn_stub_send_calls(conn));   /* ответ NO_HANDLER */
+    LONGS_EQUAL(1, ws_transport_stub_send_attempts(conn));   /* ответ NO_HANDLER */
 }
 
-TEST(WsServerFragments, DisconnectReleasesPartialAssembly) {
-    /* Незавершённый сбор не должен утечь при обрыве соединения (LeakSanitizer). */
-    const char *part = "{\"FID\":\"frag.one\",";
-    ws_server_on_frame(conn, WS_FRAME_TEXT, heap_str(part), strlen(part), 0);
-    ws_server_on_disconnect(conn);
-    ws_conn_set_user_data(conn, NULL);
+TEST(WsServerFragments, OversizedSingleFrameClosesConnection) {
+    /* Одиночный кадр больше 16 КБ не читаем и не разбираем: сессию закрываем. */
+    std::string big(WS_TRANSPORT_STUB_FRAME_MAX_LEN + 1, 'a');
+    ws_transport_stub_frame(conn, WS_STUB_FRAME_TEXT, big.data(), big.size(), 1);
+    LONGS_EQUAL(1, ws_transport_stub_close_calls(conn));
+    LONGS_EQUAL(1, ws_transport_stub_closed(conn));
+    LONGS_EQUAL(0, ws_transport_stub_send_attempts(conn));
 }
+
+TEST(WsServerFragments, OversizedAssembledMessageClosesConnection) {
+    /* Предел собранного сообщения тот же, что у одиночного кадра: как только
+     * суммарная длина его превышает, соединение закрывается. */
+    std::string big(WS_TRANSPORT_STUB_MESSAGE_MAX_LEN, 'a');
+    send_part(conn, big.c_str(), 0);                     /* ровно предел — ещё можно */
+    ws_transport_stub_frame(conn, WS_STUB_FRAME_CONT, "b", 1, 1);   /* +1 → предел превышен */
+    LONGS_EQUAL(1, ws_transport_stub_close_calls(conn));
+    LONGS_EQUAL(1, ws_transport_stub_closed(conn));
+    LONGS_EQUAL(0, ws_transport_stub_send_attempts(conn));
+}
+
+/* Обработчик подписки, считающий вопросы о завершении: ядро снимает вызов
+ * только после того, как он вернёт FALSE. */
+static int teardown_ask;
+static uint8_t teardown_ask_handler(void *call, void **ctx, uint8_t *data, uint32_t len) {
+    (void)ctx; (void)data; (void)len;
+    if (!call) { teardown_ask++; return 0; }   /* завершение: контекст освобождён */
+    return 1;                                  /* запрос принят, работаем */
+}
+
+/* ── TEST_GROUP: Отправка ─────────────────────────────────────────────── */
+
+TEST_GROUP(WsServerSend) {
+    ws_transport_stub_conn_t *conn;
+    void setup() {
+        TRANSPORT_SETUP();
+        conn = ws_transport_stub_connect(1);
+    }
+    void teardown() {
+        TRANSPORT_TEARDOWN();
+    }
+};
+
+TEST(WsServerSend, TransferCompleteReleasesBufferForEverySubscriber) {
+    /* Рассылка: один буфер на всех получателей. Освобождается по счётчику, когда
+     * завершились все отправки (иначе — утечка или двойное освобождение). */
+    ws_transport_stub_conn_t *conn2 = ws_transport_stub_connect(2);
+    bApiCallRegister(dummy_handler, "send.bcast", NULL);
+    send_text(conn,  "{\"FID\":\"send.bcast\",\"FLAGS\":4,\"SID\":1}");
+    send_text(conn2, "{\"FID\":\"send.bcast\",\"FLAGS\":4,\"SID\":2}");
+    ws_transport_stub_set_deferred(conn, 1);
+    ws_transport_stub_set_deferred(conn2, 1);
+
+    ws_server_test_worker_step();
+    LONGS_EQUAL(1, ws_transport_stub_pending_count(conn));
+    LONGS_EQUAL(1, ws_transport_stub_pending_count(conn2));
+    STRCMP_CONTAINS("\"FID\":\"send.bcast\"", ws_transport_stub_last_sent(conn));
+    STRCMP_CONTAINS("\"FID\":\"send.bcast\"", ws_transport_stub_last_sent(conn2));
+
+    ws_transport_stub_complete_pending(conn, WS_TRANSPORT_OK);
+    LONGS_EQUAL(0, ws_transport_stub_pending_count(conn));
+    /* Второй получатель ещё не завершил отправку — буфер жив */
+    ws_transport_stub_complete_pending(conn2, WS_TRANSPORT_OK);
+    LONGS_EQUAL(0, ws_transport_stub_pending_count(conn2));
+}
+
+TEST(WsServerSend, TransferErrClosesConnectionAndReleasesCalls) {
+    /* Отправка не прошла — соединение считаем мёртвым: ядро просит транспорт его
+     * закрыть, а вызовы этого соединения снимает. */
+    teardown_ask = 0;
+    bApiCallRegister(teardown_ask_handler, "send.err", NULL);
+    send_text(conn, "{\"FID\":\"send.err\",\"FLAGS\":4,\"SID\":1}");
+
+    ws_transport_stub_set_deferred(conn, 1);
+    ws_server_test_worker_step();                   /* DELIVERED отложен транспортом */
+    LONGS_EQUAL(1, ws_transport_stub_pending_count(conn));
+
+    ws_transport_stub_complete_pending(conn, WS_TRANSPORT_FAULT);   /* TRANSFER_ERR */
+    LONGS_EQUAL(1, ws_transport_stub_close_calls(conn));
+
+    /* Вызовы мёртвого соединения сняты: рассылать по этому FID больше некому */
+    uint8_t buf[] = "{}";
+    LONGS_EQUAL(0, bApiCallSendJsonFidGroup("send.err", buf, 2));
+
+    /* Транспорт доводит закрытие до конца (у httpd — освобождение сессии) */
+    ws_transport_stub_disconnect(conn);
+
+    /* Вызов снимается тактом работы, и только после FALSE обработчика: первый
+     * такт помечает вызов к снятию, второй — спрашивает обработчика. */
+    ws_hal_stub_advance_tick(20);
+    ws_server_test_worker_step();
+    LONGS_EQUAL(0, teardown_ask);
+    ws_hal_stub_advance_tick(20);
+    ws_server_test_worker_step();
+    LONGS_EQUAL(1, teardown_ask);
+}
+
+TEST(WsServerSend, SendRefusedByTransportReleasesBuffer) {
+    /* Транспорт отказался принять отправку: события о завершении не будет,
+     * буфер освобождает само ядро. */
+    bApiCallRegister(dummy_handler, "send.refuse", NULL);
+    ws_transport_stub_set_send_result(conn, WS_TRANSPORT_FAULT);
+    send_text(conn, "{\"FID\":\"send.refuse\",\"FLAGS\":0,\"SID\":1}");
+    ws_server_test_worker_step();                    /* DELIVERED не ушёл */
+
+    LONGS_EQUAL(1, ws_transport_stub_send_attempts(conn));
+    /* Вызов снят обработчиком (dummy_handler вернул FALSE) — и ничего не утекло */
+    uint8_t buf[] = "{}";
+    LONGS_EQUAL(0, bApiCallSendJsonFidGroup("send.refuse", buf, 2));
+}
+
+/* ── TEST_GROUP: WsServerFinishRule ───────────────────────────────────── */
 
 /* Обработчик, который завершается не сразу: на call == NULL отвечает TRUE
  * дважды и только потом FALSE. Ядро обязано спрашивать до результата. */
@@ -409,19 +602,15 @@ static uint8_t slow_finish_handler(void *call, void **ctx, uint8_t *data, uint32
 }
 
 TEST_GROUP(WsServerFinishRule) {
-    ws_conn_t *conn;
+    ws_transport_stub_conn_t *conn;
     void setup() {
-        ws_hal_stub_reset();
-        ws_server_init();
-        conn = ws_conn_stub_make(1);
-        ws_server_on_connect(conn);
+        TRANSPORT_SETUP();
+        conn = ws_transport_stub_connect(1);
         slow_finish_steps = 0;
         bApiCallRegister(slow_finish_handler, "regx.slow", NULL);
     }
     void teardown() {
-        ws_server_on_disconnect(conn);
-        ws_server_test_reset();
-        free(conn);
+        TRANSPORT_TEARDOWN();
     }
 };
 
@@ -429,7 +618,7 @@ TEST(WsServerFinishRule, CallSurvivesUntilHandlerReportsFinished) {
     send_text(conn, "{\"FID\":\"regx.slow\",\"FLAGS\":0,\"SID\":1}");
     ws_server_test_worker_step();          /* первичная выдача: обработчик жив */
 
-    ws_server_on_disconnect(conn);         /* клиент ушёл — вызов просят снять */
+    ws_transport_stub_disconnect(conn);    /* клиент ушёл — вызов просят снять */
     slow_finish_steps = 0;
 
     /* Шаг 1 выставляет флаг снятия (GC идёт после такта), дальше каждый шаг —
@@ -454,18 +643,14 @@ TEST(WsServerFinishRule, CallSurvivesUntilHandlerReportsFinished) {
 /* ── TEST_GROUP: WsServerWorkCycle ────────────────────────────────────── */
 
 TEST_GROUP(WsServerWorkCycle) {
-    ws_conn_t *conn;
+    ws_transport_stub_conn_t *conn;
     void setup() {
-        ws_hal_stub_reset();
-        ws_server_init();
-        conn = ws_conn_stub_make(1);
-        ws_server_on_connect(conn);
+        TRANSPORT_SETUP();
+        conn = ws_transport_stub_connect(1);
         long_handler_pulses = 0;
     }
     void teardown() {
-        ws_server_on_disconnect(conn);
-        ws_server_test_reset();
-        free(conn);
+        TRANSPORT_TEARDOWN();
     }
 };
 
@@ -506,20 +691,16 @@ TEST(WsServerWorkCycle, FinishedCallGetsNoMorePulses) {
     LONGS_EQUAL(3, short_handler_pulses);   /* вызов завершён — тактов больше нет */
 }
 
-/* ── TEST_GROUP: WsServerFidQueue ─────────────────────────────────────── */
+/* ── TEST_GROUP: FID → очередь периферии ─────────────────────────────── */
 
 TEST_GROUP(WsServerFidQueue) {
-    ws_conn_t *conn;
+    ws_transport_stub_conn_t *conn;
     void setup() {
-        ws_hal_stub_reset();
-        ws_server_init();
-        conn = ws_conn_stub_make(1);
-        ws_server_on_connect(conn);
+        TRANSPORT_SETUP();
+        conn = ws_transport_stub_connect(1);
     }
     void teardown() {
-        ws_server_on_disconnect(conn);
-        ws_server_test_reset();
-        free(conn);
+        TRANSPORT_TEARDOWN();
     }
 };
 
@@ -543,57 +724,61 @@ TEST(WsServerFidQueue, TextWithQueuedFidEnqueuesNoImmediateSend) {
     void *q = ws_hal_queue_create(4, sizeof(void *));
     ws_server_register_fid_queue("q.three", q);
     send_text(conn, "{\"FID\":\"q.three\",\"FLAGS\":0,\"SID\":1}");
-    LONGS_EQUAL(0, ws_conn_stub_send_calls(conn));
+    LONGS_EQUAL(0, ws_transport_stub_send_attempts(conn));
+}
+
+TEST(WsServerFidQueue, PeerIdReachesPeripheralMessage) {
+    /* Обработчик периферии отличает запрос из softAP по webapi_msg_t.fd: ядро
+     * берёт этот номер у транспорта (peer_id), а не из своего состояния. */
+    void *q = ws_hal_queue_create(4, sizeof(webapi_msg_t *));
+    ws_server_register_fid_queue("q.fd", q);
+    send_text(conn, "{\"FID\":\"q.fd\",\"FLAGS\":0,\"SID\":1}");
+    ws_server_test_worker_step();
+
+    webapi_msg_t *msg = NULL;
+    LONGS_EQUAL(1, ws_hal_queue_receive(q, &msg, WS_HAL_WAIT_NONE));
+    CHECK(msg != NULL);
+    LONGS_EQUAL(1, msg->fd);
+    free(msg->data);
+    free(msg);
 }
 
 /* ── TEST_GROUP: WsServerMultiClient ─────────────────────────────────── */
 
 TEST_GROUP(WsServerMultiClient) {
-    ws_conn_t *conn1;
-    ws_conn_t *conn2;
+    ws_transport_stub_conn_t *conn1;
+    ws_transport_stub_conn_t *conn2;
     void setup() {
-        ws_hal_stub_reset();
-        ws_server_init();
-        conn1 = ws_conn_stub_make(1);
-        conn2 = ws_conn_stub_make(2);
-        ws_server_on_connect(conn1);
-        ws_server_on_connect(conn2);
+        TRANSPORT_SETUP();
+        conn1 = ws_transport_stub_connect(1);
+        conn2 = ws_transport_stub_connect(2);
     }
     void teardown() {
-        ws_server_on_disconnect(conn1);
-        ws_server_on_disconnect(conn2);
-        ws_server_test_reset();
-        free(conn1);
-        free(conn2);
+        TRANSPORT_TEARDOWN();
     }
 };
 
 TEST(WsServerMultiClient, ErrorReplyGoesOnlyToSender) {
     /* Unregistered FID → NO_HANDLER sent only to conn1, not conn2 */
     send_text(conn1, "{\"FID\":\"multi.unknown\",\"FLAGS\":0,\"SID\":1}");
-    LONGS_EQUAL(1, ws_conn_stub_send_calls(conn1));
-    LONGS_EQUAL(0, ws_conn_stub_send_calls(conn2));
+    LONGS_EQUAL(1, ws_transport_stub_send_attempts(conn1));
+    LONGS_EQUAL(0, ws_transport_stub_send_attempts(conn2));
 }
 
-TEST(WsServerMultiClient, PingReplyGoesOnlyToSender) {
-    ws_server_on_frame(conn1, WS_FRAME_PING, heap_str("p"), 1, 1);
-    LONGS_EQUAL(1, ws_conn_stub_send_calls(conn1));
-    LONGS_EQUAL(0, ws_conn_stub_send_calls(conn2));
+TEST(WsServerMultiClient, ControlFramesGoToTheSendersTransportOnly) {
+    ws_transport_stub_frame(conn1, WS_STUB_FRAME_PING, "p", 1, 1);
+    LONGS_EQUAL(1, ws_transport_stub_reply_calls(conn1));
+    LONGS_EQUAL(0, ws_transport_stub_reply_calls(conn2));
+    LONGS_EQUAL(0, ws_transport_stub_send_attempts(conn1));
+    LONGS_EQUAL(0, ws_transport_stub_send_attempts(conn2));
 }
 
 TEST(WsServerMultiClient, DisconnectOneClientDoesNotBreakOther) {
-    ws_server_on_disconnect(conn1);
-    /* conn2 can still receive frames normally */
-    ws_server_on_frame(conn2, WS_FRAME_PING, heap_str("p"), 1, 1);
-    LONGS_EQUAL(1, ws_conn_stub_send_calls(conn2));
-}
-
-/* ── Additional WsServerRegister tests ───────────────────────────────── */
-
-TEST(WsServerRegister, ReregisterAfterUnregisterSucceeds) {
-    bApiCallRegister(dummy_handler, "reg.four", NULL);
-    bApiCallUnregister("reg.four");
-    LONGS_EQUAL(1, bApiCallRegister(dummy_handler, "reg.four", NULL));
+    ws_transport_stub_disconnect(conn1);
+    /* conn2 продолжает работать: сообщение разбирается и получает ответ */
+    send_text(conn2, "{\"FID\":\"multi.unknown\",\"FLAGS\":0,\"SID\":1}");
+    LONGS_EQUAL(1, ws_transport_stub_send_attempts(conn2));
+    LONGS_EQUAL(0, ws_transport_stub_send_attempts(conn1));
 }
 
 /* ── TEST_GROUP: WsServerApiCalls ────────────────────────────────────── */
@@ -653,13 +838,11 @@ TEST(WsServerApiCallGetId, NullOutIdReturnsFail) {
 #define REG_FID_QUEUE    "regx.queue"     /* routed to periph_q                */
 
 TEST_GROUP(WsServerRegression) {
-    ws_conn_t *conn;
+    ws_transport_stub_conn_t *conn;
     void *periph_q;
     void setup() {
-        ws_hal_stub_reset();
-        ws_server_init();
-        conn = ws_conn_stub_make(1);
-        ws_server_on_connect(conn);
+        TRANSPORT_SETUP();
+        conn = ws_transport_stub_connect(1);
         periph_q = ws_hal_queue_create(4, sizeof(webapi_msg_t *));
         bApiCallRegister(dummy_handler, REG_FID_HANDLER, NULL);
         ws_server_register_fid_queue(REG_FID_QUEUE, periph_q);
@@ -670,33 +853,31 @@ TEST_GROUP(WsServerRegression) {
             free(msg->data);
             free(msg);
         }
-        ws_server_on_disconnect(conn);
-        ws_server_test_reset();
-        free(conn);
+        TRANSPORT_TEARDOWN();
     }
 };
 
-TEST(WsServerRegression, PingFailOnLastPendingCallDoesNotTouchNullSession) {
-    /* vServeApiCall: a failed ping calls vApiCallComplete(), which drops
-     * ulCallPending 1 -> 0 and clears call->session. The code used to fall
-     * through and store ulPingTs into NULL->ulPingTs (crash on target:
-     * StoreProhibited, EXCVADDR=0x0000000c; on the 64-bit host ASan reports
-     * the address as 0x10). */
+TEST(WsServerRegression, RefusedSendReleasesBufferWithoutKillingSession) {
+    /* Раньше неудачная отправка снимала у вызова соединение, а следующий такт
+     * лез в уже освобождённую сессию — на устройстве это давало StoreProhibited
+     * (EXCVADDR=0x0000000c; на 64-битном хосте адрес 0x10). Теперь об отказе
+     * сообщает транспорт (begin_send != WS_TRANSPORT_OK): ядро освобождает свой
+     * буфер ответа, а судьбу соединения решают события TRANSFER_ERR и CLOSED. */
+    ws_transport_stub_set_send_result(conn, WS_TRANSPORT_FAULT);
     send_text(conn, "{\"FID\":\"regx.handler\",\"FLAGS\":2,\"SID\":1}");
-    ws_conn_stub_set_send_result(conn, -1);
-    ws_hal_stub_advance_tick(1000);   /* >= CONFIG_WEB_SOCKET_PING_DELAY */
+    ws_server_test_worker_step();          /* DELIVERED не ушёл, вызов обработан */
 
-    ws_server_test_worker_step();
+    LONGS_EQUAL(1, ws_transport_stub_send_attempts(conn));
 
-    /* Only the failed ping was attempted. The call is dropped later in the
-     * same step (FID has no queue -> INVALID), and that status is not sent
-     * because the session is already gone. */
-    LONGS_EQUAL(1, ws_conn_stub_send_calls(conn));
+    /* Соединение живо: следующий запрос обслуживается как обычно */
+    ws_transport_stub_set_send_result(conn, WS_TRANSPORT_OK);
+    send_text(conn, "{\"FID\":\"regx.unknown\",\"FLAGS\":0,\"SID\":2}");
+    LONGS_EQUAL(2, ws_transport_stub_send_attempts(conn));
 }
 
 TEST(WsServerRegression, ToDeleteFreesSameCallQueuedRightAfterIt) {
     /* The worker cached `next` before handling TO_DELETE, then freed every
-     * call with the same fd/FID/SID — including `next` when the client sent
+     * call with the same fid/SID — including `next` when the client sent
      * the target call right after the delete. `item = next` then walked
      * freed memory. */
     send_text(conn, "{\"FID\":\"regx.queue\",\"FLAGS\":8,\"SID\":7}");
@@ -705,14 +886,14 @@ TEST(WsServerRegression, ToDeleteFreesSameCallQueuedRightAfterIt) {
     ws_server_test_worker_step();
 
     /* Снимается ТОЛЬКО вызов с флагом удаления; второй (подписка) живёт и уходит
-     * в очередь периферии — раньше по совпадению fd/FID/SID сносило оба. */
+     * в очередь периферии — раньше по совпадению fid/SID сносило оба. */
     LONGS_EQUAL(1, ws_hal_stub_queue_count(periph_q));
-    LONGS_EQUAL(1, ws_conn_stub_send_calls(conn));   /* DELIVERED отданному запросу */
+    LONGS_EQUAL(1, ws_transport_stub_send_attempts(conn));   /* DELIVERED отданному запросу */
 
     /* Снятие подтверждается клиенту следующим тактом (такт работы идёт в начале
      * шага, а на первом шаге тик ещё нулевой). */
     ws_hal_stub_advance_tick(20);
     ws_server_test_worker_step();
-    LONGS_EQUAL(2, ws_conn_stub_send_calls(conn));   /* DELIVERED о снятии */
+    LONGS_EQUAL(2, ws_transport_stub_send_attempts(conn));   /* DELIVERED о снятии */
     LONGS_EQUAL(1, ws_hal_stub_queue_count(periph_q));
 }

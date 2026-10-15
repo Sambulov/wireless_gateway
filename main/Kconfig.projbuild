@@ -24,11 +24,6 @@ menu "Project Configuration"
         default 20
         help
             Maximum queue length of incoming API requests.
-    config WEB_SOCKET_PING_DELAY
-        int "Web-socket ping delay"
-        default 1000
-        help
-            Web socket clients ping delay
     config WIFI_AP_ENABLE
         bool "Enable Wi-Fi AP"
         default y

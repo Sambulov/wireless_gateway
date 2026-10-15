@@ -2,16 +2,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
+#include <stddef.h>
 
 #include "GwJson.h"
 #include "CodeLib.h"
 #include "ws_hal.h"
 #include "web_api.h"
 #include "ws_transport.h"
-
-#ifndef CONFIG_WEB_SOCKET_PING_DELAY
-#define CONFIG_WEB_SOCKET_PING_DELAY 1000
-#endif
 
 static const char *TAG = "ws_server";
 
@@ -22,22 +19,17 @@ typedef struct {
     void *xHandlerContext;
 } ApiHandlerItem_t;
 
+/* Сессия ядра — соединение транспорта, к которому привязаны вызовы. Дескриптор
+ * соединения (self) для ядра непрозрачен: это ключ, который транспорт вернёт в
+ * событиях, и больше ничего — тип соединения транспорта ядру неизвестен. */
 typedef struct {
-    ws_conn_t *conn;
-    int fd;
-    uint32_t ulAliveTs;
-    uint32_t ulPingTs;
-    /* Сборка фрагментированного сообщения: WebSocket разрешает резать одно
-     * сообщение на несколько кадров (первый с FIN=0, дальше продолжения). */
-    uint8_t *pucFrag;
-    uint32_t ulFragLen;
+    __LinkedListObject__
+    const void *self;
+    /* Числовой идентификатор соединения, который даёт транспорт (для сокетного
+     * транспорта — номер сокета). Ядро кладёт его в webapi_msg_t.fd: обработчики
+     * по нему отличают запрос из softAP (request_from_softap). */
+    int nPeerId;
 } ApiSession_t;
-
-/* Предел длины собранного сообщения — тот же, что у одного кадра: 16 КБ.
- * Столько влезает и в кучу (свободно ~150 КБ), и в разбор: токенов на такой
- * объём хватает, потому что ограничение по токенам отсекает «многоэлементные»
- * пакеты раньше, чем они что-то сломают. */
-#define WS_FRAG_MAX_LEN 16384
 
 typedef enum
 {
@@ -73,19 +65,68 @@ typedef struct {
     uint32_t ulNextPollTick;
 } ApiCall_t;
 
+/* Блок ответа. Счётчик получателей лежит ПЕРЕД полезной нагрузкой не случайно:
+ * транспорт в событии завершения возвращает ровно тот указатель, который получил
+ * в begin_send (то есть payload), — по нему и находится счётчик. Кадр ответа
+ * собирает транспорт, ядру о кадрах знать нечего. */
 typedef struct {
     uint32_t counter;
-    ws_frame_t frame;
-    uint8_t payload[];
+    uint32_t ulLen;
+    uint8_t  payload[1];
 } ApiData_t;
+
+/* Из указателя, вернувшегося в событии завершения, — к своему блоку ответа. */
+static ApiData_t *pxApiDataFromPayload(const void *payload) {
+    return (ApiData_t *)(uintptr_t)((const uint8_t *)payload - offsetof(ApiData_t, payload));
+}
+
+/* Транспорт, к которому подключено ядро. Получаем его один раз
+ * (ws_server_transport_attach) и дальше работаем только через него: обращений к
+ * платформе в ядре нет — всё платформенное живёт в транспорте. */
+typedef struct {
+    const ws_transport_iface_t *iface;
+    void *module;   /* self для операций транспорта как модуля */
+} ws_server_transport_t;
+
+static ws_server_transport_t xTransport = { NULL, NULL };
 
 static ws_mutex_t xWsApiMutex = NULL;
 static LinkedList_t pxWsApiHandlers = NULL;
 static LinkedList_t pxWsApiCall = NULL;
 static LinkedList_t pxWsApiWaitingForResponse = NULL;
+static LinkedList_t pxWsSessions = NULL;
 static ws_queue_t xWsWorkerQueue = NULL;
 
 static ws_queue_t ws_get_fid_queue(const char *name);
+
+/* --- Соединения ---------------------------------------------------------- */
+
+/* Поиск сессии по дескриптору соединения. Дескриптор сравнивается как ключ:
+ * ядро в него не заглядывает, тип соединения транспорта ему неизвестен. */
+static ApiSession_t *pxSessionFind(const void *self) {
+    LinkedListItem_t *item = pxLinkedListFindFirst(pxWsSessions, NULL, NULL);
+    while(item != NULL) {
+        ApiSession_t *sess = LinkedListGetObject(ApiSession_t, item);
+        if(sess->self == self) return sess;
+        item = pxLinkedListFindNextNoOverlap(item, NULL, NULL);
+    }
+    return NULL;
+}
+
+static void vBreakApiCallBySession(LinkedListItem_t *item, void *arg) {
+    ApiCall_t *call = LinkedListGetObject(ApiCall_t, item);
+    if(call->session == (ApiSession_t *)arg) {
+        ws_hal_log_i(TAG, "Break call id:%lu", call->ulId);
+        call->session = NULL;
+    }
+}
+
+/* Вызовы снятого соединения: клиент ушёл — отвечать некому. Сами вызовы
+ * освободит такт работы, и лишь после FALSE обработчика. */
+static void vBreakApiCallsBySession(ApiSession_t *sess) {
+    ulLinkedListDoForeach(pxWsApiCall, vBreakApiCallBySession, (void *)sess);
+    ulLinkedListDoForeach(pxWsApiWaitingForResponse, vBreakApiCallBySession, (void *)sess);
+}
 
 void *get_ws_worker_queue(void) {
     return xWsWorkerQueue;
@@ -94,15 +135,6 @@ void *get_ws_worker_queue(void) {
 static uint8_t bHandlerFidMatch(LinkedListItem_t *item, void *arg) {
     const char *name = (const char *)arg;
     return (name != NULL) && (strcmp(LinkedListGetObject(ApiHandlerItem_t, item)->fid, name) == 0);
-}
-
-static uint8_t bCallClientIdMatch(LinkedListItem_t *item, void *arg) {
-    uint32_t fd  = cl_tuple_get(arg, 0, uint32_t);
-    const char *name = cl_tuple_get(arg, 1, const char *);
-    uint32_t id  = cl_tuple_get(arg, 2, uint32_t);
-    ApiCall_t *call = LinkedListGetObject(ApiCall_t, item);
-    return call->session && (call->session->fd == (int)fd)
-           && (strcmp(call->fid, name) == 0) && (call->ulId == id);
 }
 
 static uint8_t bCallIdMatch(LinkedListItem_t *item, void *arg) {
@@ -116,28 +148,12 @@ static uint8_t bCallFidMatch(LinkedListItem_t *item, void *arg) {
     return (name != NULL) && (strcmp(call->fid, name) == 0) && call->session;
 }
 
-static void vBreakApiCallByFd(LinkedListItem_t *item, void *arg) {
-    ApiCall_t *call = LinkedListGetObject(ApiCall_t, item);
-    if(call->session && (call->session->fd == (uint32_t)arg)) {
-        ws_hal_log_i(TAG, "Break call id:%lu", call->ulId);
-        call->session = NULL;
-    }
-}
-
 static void vBreakApiCallByFid(LinkedListItem_t *item, void *arg) {
     const char *name = (const char *)arg;
     ApiCall_t *call = LinkedListGetObject(ApiCall_t, item);
     if((name != NULL) && (strcmp(call->fid, name) == 0)) {
         ws_hal_log_i(TAG, "Break call id:%lu", call->ulId);
         call->session = NULL;
-    }
-}
-
-static void vBreakApiCallsByFd(uint32_t timeout_ms, uint32_t fd) {
-    if(ws_hal_mutex_take(xWsApiMutex, timeout_ms)) {
-        ulLinkedListDoForeach(pxWsApiCall, vBreakApiCallByFd, (void *)fd);
-        ulLinkedListDoForeach(pxWsApiWaitingForResponse, vBreakApiCallByFd, (void *)fd);
-        ws_hal_mutex_give(xWsApiMutex);
     }
 }
 
@@ -152,33 +168,19 @@ static void vBreakApiCallsByFid(uint32_t timeout_ms, const char *name) {
 /* Объявлено заранее: завершение вызова зовётся из обслуживания, описано ниже. */
 static uint8_t _bCallTeardown(ApiCall_t *call);
 
+/* Такт обслуживания вызова. Ядро больше не пингует клиента: управляющие кадры —
+ * дело транспорта, а живость соединения видна по событиям TRANSFER_ERR
+ * (отправка не прошла) и CLOSED (соединение разорвано). */
 static void vServeApiCall(LinkedListItem_t *item, void *arg) {
+    (void)arg;
     ApiCall_t *call = LinkedListGetObject(ApiCall_t, item);
-    if(call->session) {
-        static ws_frame_t ping_frame = {
-            .type       = WS_FRAME_PING,
-            .final      = true,
-            .fragmented = false,
-            .payload    = NULL,
-            .len        = 0,
-        };
-        uint32_t now = ws_hal_tick();
-        if(((now - call->session->ulAliveTs) >= CONFIG_WEB_SOCKET_PING_DELAY) &&
-           ((now - call->session->ulPingTs) >= CONFIG_WEB_SOCKET_PING_DELAY)) {
-            if(ws_conn_send_async(call->session->conn, &ping_frame, NULL, NULL) != 0) {
-                ws_hal_log_w(TAG, "Send ping error");
-                vApiCallComplete(call);
-                return;
-            }
-            call->session->ulPingTs = ws_hal_tick();
-        }
-    } else {
-        /* Клиента нет (отключился или ответ уже отправлен): просим снять вызов.
-         * Сам вызов освободит такт работы — и только после того, как обработчик
-         * вернёт FALSE. Раньше его снимали здесь, не дожидаясь обработчика. */
-        ws_hal_log_d(TAG, "Api call complete, id: %lu", call->ulId);
-        call->flags |= CALL_FLAG_TO_DELETE;
-    }
+    if(call->session) return;   /* соединение живо — делать нечего */
+
+    /* Клиента нет (отключился или ответ уже отправлен): просим снять вызов.
+     * Сам вызов освободит такт работы — и только после того, как обработчик
+     * вернёт FALSE. Раньше его снимали здесь, не дожидаясь обработчика. */
+    ws_hal_log_d(TAG, "Api call complete, id: %lu", call->ulId);
+    call->flags |= CALL_FLAG_TO_DELETE;
 }
 
 /* Принудительное завершение вызова: по контракту обработчик получает call == NULL
@@ -195,15 +197,6 @@ static uint8_t _bCallTeardown(ApiCall_t *call) {
      * Для подписки (FLAGS:4) вызов после тел-дауна живёт дальше и при
      * следующем переопросе должен снова получить свой контекст регистрации —
      * иначе он не знает, какой периферией управляет. */
-}
-
-static void vWsTransferComplete_cb(int err, int fd, void *arg) {
-    ApiData_t *apiData = (ApiData_t *)arg;
-    ws_hal_log_d(TAG, "Transfer Complete, err: %d, fd: %x", err, fd);
-    if(err)
-        vBreakApiCallsByFd(100, fd);
-    if((!apiData->counter) || !(--apiData->counter))
-        free(arg);
 }
 
 uint8_t bApiCallRegister(ApiHandler_t fHandler, const char *name, void *pxContext) {
@@ -275,10 +268,14 @@ uint8_t bApiCallGetId(void *pxApiCall, uint32_t *pulOutId) {
     return 0;
 }
 
-static void _send_to_session(ApiCall_t *sub, ApiData_t *resp, int *res) {
-    *res = ws_conn_send_async(sub->session->conn, &resp->frame, vWsTransferComplete_cb, resp);
+/* Отправка через транспорт: ядро отдаёт СООБЩЕНИЕ, кадры строит транспорт.
+ * Результат отправки приходит событием TRANSFER_COMPLETE/TRANSFER_ERR, поэтому
+ * блок ответа живёт до него (в событии транспорт вернёт тот же указатель). */
+static void _send_to_session(ApiCall_t *sub, ApiData_t *resp, ws_transport_result_t *res) {
+    *res = xTransport.iface->begin_send(sub->session->self, resp->payload, resp->ulLen);
     ws_hal_log_d(TAG, "Api call %lu json sending with result: %d", sub->ulId, *res);
-    if(*res != 0) {
+    if(*res != WS_TRANSPORT_OK) {
+        /* Транспорт отправку не принял — события не будет, освобождаем сами. */
         if((!resp->counter) || !(--resp->counter))
             free(resp);
     }
@@ -291,7 +288,7 @@ static uint8_t _bApiCallSendJson(void *pxApiCall, const char *group_name, const 
     if(((pxApiCall == NULL) && ((group_name == NULL) || !group_name[0])) ||
        ((pxApiCall != NULL) && (group_name != NULL))) return 0;
 
-    int res = 0;
+    ws_transport_result_t res = WS_TRANSPORT_INVALID;
     ApiCall_t *call = pxApiCall;
     const char *fid_out = (call != NULL) ? call->fid : group_name;
     uint32_t sid = (call != NULL) ? call->ulId : 0;
@@ -330,13 +327,9 @@ static uint8_t _bApiCallSendJson(void *pxApiCall, const char *group_name, const 
         offset += ulLen;
         resp->payload[offset] = '}';
         resp->counter        = targets;
-        resp->frame.final      = true;
-        resp->frame.fragmented = false;
-        resp->frame.type       = WS_FRAME_TEXT;
-        resp->frame.payload    = resp->payload;
-        /* Длину берём по факту: шаблон без SID короче, и объявлять кадр по
+        /* Длину берём по факту: шаблон без SID короче, и объявлять сообщение по
          * длинному шаблону нельзя — клиент получит мусор в хвосте. */
-        resp->frame.len        = (uint32_t)offset + 1;
+        resp->ulLen          = (uint32_t)offset + 1;
 
         if(call != NULL) {
             _send_to_session(call, resp, &res);
@@ -355,11 +348,11 @@ static uint8_t _bApiCallSendJson(void *pxApiCall, const char *group_name, const 
             }
         }
     } else {
-        res = -1;
+        res = WS_TRANSPORT_FAULT;
     }
 
     ws_hal_mutex_give(xWsApiMutex);
-    return (res == 0);
+    return (res == WS_TRANSPORT_OK);
 }
 
 uint8_t bApiCallSendJson(void *pxApiCall, const uint8_t *ucJson, uint32_t ulLen) {
@@ -421,151 +414,162 @@ static ws_queue_t ws_get_fid_queue(const char *name) {
     return fq ? fq->xQueue : NULL;
 }
 
-static void ws_server_on_text(ws_conn_t *conn, uint8_t *data, size_t len);
+/* --- События транспорта --------------------------------------------------- */
 
-/* --- Transport callbacks (called from ws_transport_httpd.c) -------------- */
-
-/* Добавить кусок фрагментированного сообщения. Возвращает 0, если сообщение
- * длиннее предела (тогда сессию закрываем: принимать его целиком негде). */
-static uint8_t _bFragAppend(ApiSession_t *sess, const uint8_t *data, size_t len)
-{
-    if (!sess->pucFrag) {
-        sess->pucFrag = malloc(WS_FRAG_MAX_LEN + 1);
-        if (!sess->pucFrag)
-            return 0;
-        sess->ulFragLen = 0;
-    }
-    if (sess->ulFragLen + len > WS_FRAG_MAX_LEN)
-        return 0;
-
-    mem_cpy(sess->pucFrag + sess->ulFragLen, data, len);
-    sess->ulFragLen += (uint32_t)len;
-    return 1;
-}
-
-void ws_server_on_frame(ws_conn_t *conn, ws_frame_type_t type, uint8_t *data, size_t len,
-                        uint8_t bFinal) {
-    ApiSession_t *sess = ws_conn_get_user_data(conn);
-
-    /* Фрагментированное сообщение: копим части, а разбираем собранное целиком.
-     * Раньше продолжения не обрабатывались вовсе — сообщение молча терялось
-     * вместе с ответом, и клиент ждал его до таймаута. */
-    if (sess && (type == WS_FRAME_TEXT || type == WS_FRAME_CONT) && !bFinal) {
-        if (!_bFragAppend(sess, data, len)) {
-            ws_hal_log_w(TAG, "Фрагментированное сообщение больше %d байт, закрываю fd=%d",
-                         WS_FRAG_MAX_LEN, sess->fd);
-            free(sess->pucFrag);
-            sess->pucFrag = NULL;
-            sess->ulFragLen = 0;
-            free(data);
-            ws_frame_t close_f = {.type = WS_FRAME_CLOSE, .final = true};
-            ws_conn_send_async(conn, &close_f, NULL, NULL);
-            return;
-        }
-        sess->ulAliveTs = ws_hal_tick();
-        free(data);
-        return;
-    }
-
-    if (sess && type == WS_FRAME_CONT) {
-        /* Последний фрагмент: собираем и отдаём как обычное сообщение. Буфер
-         * переходит во владение ws_server_on_text, поэтому не копируем. */
-        if (sess->pucFrag && _bFragAppend(sess, data, len)) {
-            uint8_t *msg = sess->pucFrag;
-            size_t   n   = sess->ulFragLen;
-            sess->pucFrag = NULL;
-            sess->ulFragLen = 0;
-            free(data);
-            msg[n] = '\0';
-            sess->ulAliveTs = ws_hal_tick();
-            ws_server_on_text(conn, msg, n);
-            return;
-        }
-        ws_hal_log_w(TAG, "Продолжение без начала сообщения, отброшено fd=%d",
-                     sess ? sess->fd : -1);
-        free(sess->pucFrag);
-        if (sess) { sess->pucFrag = NULL; sess->ulFragLen = 0; }
-        free(data);
-        return;
-    }
-
-    if (sess && type == WS_FRAME_TEXT && sess->pucFrag) {
-        /* Новое сообщение началось, не дождавшись конца предыдущего: старое
-         * незавершённое выбрасываем, оно уже не станет целым. */
-        ws_hal_log_w(TAG, "Незавершённое сообщение отброшено, fd=%d", sess->fd);
-        free(sess->pucFrag);
-        sess->pucFrag = NULL;
-        sess->ulFragLen = 0;
-    }
-
-    if (sess)
-        sess->ulAliveTs = ws_hal_tick();
-
-    switch (type) {
-    case WS_FRAME_TEXT:
-        ws_server_on_text(conn, data, len);
-        return; /* ws_server_on_text takes ownership */
-    case WS_FRAME_PING: {
-        ws_frame_t pong = {
-            .type = WS_FRAME_PONG, .final = true, .fragmented = false,
-            .payload = data, .len = len,
-        };
-        ws_conn_send_async(conn, &pong, NULL, NULL);
-        break;
-    }
-    case WS_FRAME_PONG:
-        /* alive timestamp already updated above */
-        break;
-    case WS_FRAME_CLOSE: {
-        ws_frame_t close_f = {.type = WS_FRAME_CLOSE, .final = true};
-        ws_conn_send_async(conn, &close_f, NULL, NULL);
-        break;
-    }
-    default:
-        break;
-    }
-    free(data);
-}
-
-void ws_server_on_connect(ws_conn_t *conn) {
-    ApiSession_t *sess = malloc(sizeof(ApiSession_t));
-    if(!sess) return;
-    sess->conn      = conn;
-    sess->fd        = ws_conn_get_fd(conn);
-    sess->ulAliveTs = sess->ulPingTs = ws_hal_tick();
-    sess->pucFrag   = NULL;
-    sess->ulFragLen = 0;
-    ws_conn_set_user_data(conn, sess);
-    ws_hal_log_i(TAG, "New connection fd=%d sess=%p", sess->fd, (void *)sess);
-}
-
-/* Сколько токенов отдаём разбору входящего кадра и разбору ARG. Токен — это
+/* Сколько токенов отдаём разбору входящего сообщения и разбору ARG. Токен — это
  * ключ, значение или скобка структуры; конверт протокола укладывается в
  * единицы, ARG запроса регистров — в десятки. Выход за предел означает отказ
  * разбора, а не рост памяти: токены лежат на стеке задачи, jsmn не рекурсивен. */
 #define WS_FRAME_MAX_TOKENS 48
 #define WS_ARG_MAX_TOKENS   48
 
-static void ws_server_on_text(ws_conn_t *conn, uint8_t *data, size_t len) {
-    ApiSession_t *sess = ws_conn_get_user_data(conn);
-    if(!sess) {
-        /* Кадр уже наш (транспорт передал владение): без сессии его некуда
-         * адресовать, но и терять память нельзя. */
-        free(data);
+static void vSessionOnMessage(ApiSession_t *sess, const void *data, uint32_t len);
+
+/* Принято новое соединение: заводим сессию ядра, привязанную к дескриптору
+ * транспорта. Больше про соединение ядро ничего не знает. */
+static ws_transport_result_t bSessionOpen(const void *self) {
+    ApiSession_t *sess = malloc(sizeof(ApiSession_t));
+    if(sess == NULL) {
+        ws_hal_log_w(TAG, "No memory for a session, connection %p", self);
+        return WS_TRANSPORT_FAULT;   /* транспорту нечем это соединение обслужить */
+    }
+    sess->self    = self;
+    sess->nPeerId = ((xTransport.iface != NULL) && (xTransport.iface->peer_id != NULL))
+                  ? (int)xTransport.iface->peer_id(self) : -1;
+
+    ws_hal_mutex_take(xWsApiMutex, WS_HAL_WAIT_FOREVER);
+    vLinkedListInsertLast(&pxWsSessions, LinkedListItem(sess));
+    ws_hal_mutex_give(xWsApiMutex);
+
+    ws_hal_log_i(TAG, "Connection established (id=%d), session=%p", sess->nPeerId, (void *)sess);
+    return WS_TRANSPORT_OK;
+}
+
+/* Соединение разорвано: сессию освобождаем, вызовы этого соединения снимаем —
+ * отвечать некому. Сами вызовы освободит такт работы, и лишь после того, как
+ * обработчик вернёт FALSE. */
+static void vSessionClose(const void *self) {
+    ws_hal_mutex_take(xWsApiMutex, WS_HAL_WAIT_FOREVER);
+    ApiSession_t *sess = pxSessionFind(self);
+    if(sess != NULL) {
+        vLinkedListUnlink(LinkedListItem(sess));
+        vBreakApiCallsBySession(sess);
+    }
+    ws_hal_mutex_give(xWsApiMutex);
+
+    if(sess == NULL) {
+        /* Транспорт вправе сообщить о закрытии соединения, которого ядро не
+         * принимало (например, закрытие после неудачной отправки). */
+        ws_hal_log_d(TAG, "Closed unknown connection %p", self);
         return;
+    }
+    ws_hal_log_i(TAG, "Connection closed (id=%d), session=%p released", sess->nPeerId, (void *)sess);
+    free(sess);
+}
+
+/* Отправка завершилась — успешно или нет. Транспорт вернул ровно тот указатель,
+ * который получил в begin_send, поэтому по нему находим блок ответа и
+ * освобождаем его, когда последний получатель рассылки закончил отправку. */
+static ws_transport_result_t vTransferDone(const void *self, const ws_transport_event_trigger_t *ev) {
+    if(ev->data.ptr == NULL) {
+        ws_hal_log_w(TAG, "Transfer event without data, connection %p", self);
+        return WS_TRANSPORT_BAD_CALL;
     }
 
+    if(ev->event == WS_TRANSPORT_TRANSFER_ERR) {
+        /* Отправка не прошла — соединение считаем мёртвым: вызовы снимаем, а
+         * соединение закрываем. Живость соединения определяется именно так:
+         * ядро больше не пингует клиента (это дело транспорта). */
+        ws_hal_log_w(TAG, "Send failed, closing connection %p", self);
+        ws_hal_mutex_take(xWsApiMutex, WS_HAL_WAIT_FOREVER);
+        ApiSession_t *sess = pxSessionFind(self);
+        if(sess != NULL) vBreakApiCallsBySession(sess);
+        ws_hal_mutex_give(xWsApiMutex);
+        if((xTransport.iface != NULL) && (xTransport.iface->close != NULL))
+            xTransport.iface->close(self);
+        /* self транспорту больше не принадлежит: дальше им не пользуемся */
+    } else {
+        ws_hal_log_d(TAG, "Transfer complete, connection %p", self);
+    }
+
+    ApiData_t *resp = pxApiDataFromPayload(ev->data.ptr);
+    if((resp->counter == 0) || (--resp->counter == 0))
+        free(resp);
+    return WS_TRANSPORT_OK;
+}
+
+/* Единственная точка входа транспорта в ядро: ядро не знает ни платформы, ни
+ * WebSocket — только этот интерфейс. */
+static ws_transport_result_t wsServerTransportEvent(const void *self,
+                                                    const ws_transport_event_trigger_t *ev) {
+    if((self == NULL) || (ev == NULL)) return WS_TRANSPORT_BAD_CALL;
+
+    switch(ev->event) {
+    case WS_TRANSPORT_ESTABLISHED:
+        return bSessionOpen(self);
+
+    case WS_TRANSPORT_CLOSED:
+        vSessionClose(self);
+        return WS_TRANSPORT_OK;
+
+    case WS_TRANSPORT_RECEIVED: {
+        /* Транспорт отдаёт УРОВЕНЬ СООБЩЕНИЙ: фрагменты он уже склеил сам, и
+         * буфер принадлежит ему — ядро только читает его до возврата отсюда. */
+        ws_hal_mutex_take(xWsApiMutex, WS_HAL_WAIT_FOREVER);
+        ApiSession_t *sess = pxSessionFind(self);
+        ws_hal_mutex_give(xWsApiMutex);
+        if(sess == NULL) {
+            ws_hal_log_w(TAG, "Message for unknown connection %p, dropped", self);
+            return WS_TRANSPORT_BAD_CALL;
+        }
+        vSessionOnMessage(sess, ev->data.ptr, ev->data.length);
+        return WS_TRANSPORT_OK;
+    }
+
+    case WS_TRANSPORT_TRANSFER_COMPLETE:
+    case WS_TRANSPORT_TRANSFER_ERR:
+        return vTransferDone(self, ev);
+
+    default:
+        /* OPEN и TRANSFER_BUFFER ядру не нужны: слушает транспорт, буферов он
+         * ядру не выдаёт. */
+        ws_hal_log_d(TAG, "Unhandled transport event 0x%x", (unsigned)ev->event);
+        return WS_TRANSPORT_BAD_CALL;
+    }
+}
+
+/* Подключение транспорта — единственное место, где ядро о нём узнаёт. */
+ws_transport_result_t ws_server_transport_attach(const ws_transport_iface_t *iface, void *module) {
+    if((iface == NULL) || (iface->begin_send == NULL) ||
+       (iface->close == NULL) || (iface->subscribe == NULL)) return WS_TRANSPORT_BAD_CALL;
+
+    xTransport.iface  = iface;
+    xTransport.module = module;
+
+    ws_transport_result_t res = iface->subscribe(module, wsServerTransportEvent, NULL);
+    if(res != WS_TRANSPORT_OK) {
+        xTransport.iface  = NULL;
+        xTransport.module = NULL;
+        ws_hal_log_w(TAG, "Transport subscribe failed: %d", (int)res);
+        return res;
+    }
+    ws_hal_log_i(TAG, "Transport attached, module=%p", module);
+    return WS_TRANSPORT_OK;
+}
+
+/* Разбор принятого СООБЩЕНИЯ (JSON). Транспорт уже склеил фрагменты, так что
+ * здесь всегда целое сообщение; буфер принадлежит транспорту и живёт до возврата
+ * отсюда — токены jsmn указывают внутрь него, поэтому ядро его не освобождает. */
+static void vSessionOnMessage(ApiSession_t *sess, const void *data, uint32_t len) {
     if(!data || !len) {
         ws_hal_log_i(TAG, "Got packet with empty message");
-        free(data);
         return;
     }
-    ws_hal_log_d(TAG, "Got packet with message: %s", data);
+    ws_hal_log_d(TAG, "Got message (%lu bytes): %.*s", len, (int)len, (const char *)data);
 
     ApiCall_t *wscd = malloc(sizeof(ApiCall_t));
     if(!wscd) {
         ws_hal_log_w(TAG, "Failed to malloc memory for ws api call");
-        free(data);
         return;
     }
     memset(wscd, 0, sizeof(ApiCall_t));
@@ -577,9 +581,8 @@ static void ws_server_on_text(ws_conn_t *conn, uint8_t *data, size_t len) {
     GW_JSON_TOKENS(toks, WS_FRAME_MAX_TOKENS);
     gw_json_t json;
     if (!gw_json_parse(&json, (const char *)data, len, toks, WS_FRAME_MAX_TOKENS)) {
-        ws_hal_log_w(TAG, "Кадр не разобран как JSON или слишком сложен (%u токенов)",
+        ws_hal_log_w(TAG, "Сообщение не разобрано как JSON или слишком сложно (%u токенов)",
                      (unsigned)WS_FRAME_MAX_TOKENS);
-        free(data);
         free(wscd);
         return;
     }
@@ -589,12 +592,11 @@ static void ws_server_on_text(ws_conn_t *conn, uint8_t *data, size_t len) {
      * значило бы держать два протокола в одном месте. */
     if (!gw_json_str(&json, "FID", wscd->fid, sizeof(wscd->fid))) {
         ws_hal_log_w(TAG, "Api call bad FID property (нужно имя строкой, например \"uart2.modbus\")");
-        free(data);
         free(wscd);
         return;
     }
 
-    /* ARG отдаём обработчику как есть — срезом исходного кадра, без дерева и
+    /* ARG отдаём обработчику как есть — срезом исходного сообщения, без дерева и
      * без печати в строку (у прежнего сборщика JSON это была вторая
      * аллокация на запрос). */
     const char *arg_s = NULL;
@@ -602,7 +604,6 @@ static void ws_server_on_text(ws_conn_t *conn, uint8_t *data, size_t len) {
     if (gw_json_raw(&json, "ARG", &arg_s, &arg_n)) {
         wscd->pucReqData = (uint8_t *)malloc(arg_n + 1);
         if (!wscd->pucReqData) {
-            free(data);
             free(wscd);
             return;
         }
@@ -632,7 +633,6 @@ static void ws_server_on_text(ws_conn_t *conn, uint8_t *data, size_t len) {
         bApiCallSendStatus(wscd, API_CALL_ERROR_STATUS_BAD_REQ);
         free(wscd->pucReqData);
         free(wscd);
-        free(data);
         return;
     }
     wscd->flags |= (uint32_t)flags;
@@ -646,10 +646,9 @@ static void ws_server_on_text(ws_conn_t *conn, uint8_t *data, size_t len) {
         wscd->ulId    = (uint32_t)sid;
     }
 
-    /* Токены указывают внутрь кадра, поэтому буфер живёт до последнего чтения
-     * из них (у прежнего сборщика JSON дерево владело своими копиями строк, и
-     * это было неважно). */
-    free(data);
+    /* Токены jsmn указывают внутрь принятого сообщения, и оно живёт до конца
+     * этого вызова: буфер принадлежит транспорту и освобождается им после
+     * возврата из обработчика события. */
 
     ws_hal_mutex_take(xWsApiMutex, WS_HAL_WAIT_FOREVER);
 
@@ -676,16 +675,6 @@ static void ws_server_on_text(ws_conn_t *conn, uint8_t *data, size_t len) {
     ws_hal_mutex_give(xWsApiMutex);
 }
 
-void ws_server_on_disconnect(ws_conn_t *conn) {
-    ApiSession_t *sess = ws_conn_get_user_data(conn);
-    if(!sess) return;
-    ws_conn_set_user_data(conn, NULL);
-    ws_hal_log_i(TAG, "Disconnect fd=%d sess=%p", sess->fd, (void *)sess);
-    vBreakApiCallsByFd(WS_HAL_WAIT_FOREVER, sess->fd);
-    free(sess->pucFrag);
-    free(sess);
-}
-
 /* --- Peripheral forwarding ----------------------------------------------- */
 
 static void vForwardCallToPeripheral(ApiCall_t *call, ws_queue_t queue) {
@@ -697,9 +686,10 @@ static void vForwardCallToPeripheral(ApiCall_t *call, ws_queue_t queue) {
     bApiFidSet(msg->fid, call->fid);
     msg->id  = call->ulId;
     msg->len = call->ulReqDataLen;
-    /* Socket the request came in on, so handlers can tell AP clients from
-     * station-side ones; the session may already be gone for parked calls. */
-    msg->fd  = (call->session != NULL) ? call->session->fd : -1;
+    /* Числовой идентификатор соединения, на котором пришёл запрос: обработчики
+     * по нему отличают клиентов AP от станционных. У снятого вызова соединения
+     * уже нет — тогда -1. */
+    msg->fd  = (call->session != NULL) ? call->session->nPeerId : -1;
 
     if(call->flags & CALL_FLAG_LONG_TERM) {
         /* Long-term calls retain ownership of pucReqData so they can be re-polled.
@@ -757,12 +747,6 @@ static uint32_t ulLastWorkTick;
  * может лишь эта же задача, так что собранные указатели остаются валидными. */
 #define WS_API_WORK_BATCH 16
 
-/* Сколько токенов отдаём разбору входящего кадра и разбору ARG. Токен — это
- * ключ, значение или скобка структуры; конверт протокола укладывается в
- * единицы, ARG запроса регистров — в десятки. Выход за предел означает отказ
- * разбора (BAD_JSON), а не рост памяти: токены лежат на стеке задачи. */
-#define WS_FRAME_MAX_TOKENS 48
-#define WS_ARG_MAX_TOKENS   48
 static ApiCall_t *apxWorkBatch[WS_API_WORK_BATCH];
 
 static int vWsApiCollectHandled(LinkedList_t list, int from) {
@@ -870,7 +854,8 @@ static void vWsApiCallWorkerStep(void) {
          * периодическое дело, не блокируя ядро */
         vWsApiWorkCycle();
 
-        /* 1. Keep connections alive and garbage-collect completed/dead calls */
+        /* 1. У вызовов без соединения просим завершения (клиент ушёл или ответ
+         * уже отправлен): живость соединения видит транспорт, а не ядро. */
         ws_hal_mutex_take(xWsApiMutex, WS_HAL_WAIT_FOREVER);
         ulLinkedListDoForeach(pxWsApiCall, vServeApiCall, NULL);
         ulLinkedListDoForeach(pxWsApiWaitingForResponse, vServeApiCall, NULL);
@@ -934,11 +919,13 @@ static void vWsApiCallWorkerStep(void) {
                 if(!alive) {
                     /* false от обработчика — вызов завершён (его результат) */
                     if(call->flags & CALL_FLAG_LONG_TERM) {
-                        /* Подписка живёт дальше: возвращаем её в работу, ядро
-                         * повторит запрос по таймеру переопроса. */
+                        /* Подписка живёт дальше: вызов и так лежит в списке
+                         * работы, ядро повторит запрос по таймеру переопроса.
+                         * Переставлять его в конец списка нельзя: проход шёл бы
+                         * по одному и тому же вызову бесконечно (клиент вправе
+                         * подписаться на любой FID, в том числе на обработчик,
+                         * который отвечает сразу и возвращает FALSE). */
                         call->ulNextPollTick = ws_hal_tick() + call->ulPollIntervalTicks;
-                        vLinkedListUnlink(item);
-                        vLinkedListInsertLast(&pxWsApiCall, item);
                     } else {
                         vLinkedListUnlink(item);
                         free(call->pucReqData);
@@ -1027,14 +1014,14 @@ static void vWsApiCallWorker(void *pvParameters) {
 void ws_server_init(void) {
     xWsApiMutex    = ws_hal_mutex_create();
     xWsWorkerQueue = ws_hal_queue_create(10, sizeof(webapi_msg_t));
-    /* Same priority as ws_mb (5) and the HTTP server's default task priority.
-     * Used to run one level above (6) "so responses are forwarded
-     * immediately", but under sustained CALL_FLAG_LONG_TERM load this task
-     * rarely blocks (its queue-receive keeps finding work), and being
-     * strictly higher priority than httpd starved it of CPU entirely rather
-     * than just delaying it. Matching priority lets FreeRTOS's time-slicing
-     * round-robin give httpd (and ws_mb) a fair share even while this task
-     * is continuously busy. */
+    /* Same priority as the peripheral tasks (5) and the web server's default
+     * task priority. Used to run one level above (6) "so responses are
+     * forwarded immediately", but under sustained CALL_FLAG_LONG_TERM load
+     * this task rarely blocks (its queue-receive keeps finding work), and
+     * being strictly higher priority than the web server starved it of CPU
+     * entirely rather than just delaying it. Matching priority lets the
+     * scheduler's time-slicing give the web server (and the peripheral tasks)
+     * a fair share even while this task is continuously busy. */
     ws_hal_task_create(vWsApiCallWorker, "ApiCallWork", 8192, NULL, 5);
 }
 
@@ -1074,6 +1061,15 @@ void ws_server_test_reset(void) {
         vLinkedListUnlink(item);
         free(h);
     }
+    /* Соединения освобождаем после вызовов: вызовы уже сняты вместе со своими
+     * ссылками на сессии. */
+    while ((item = pxLinkedListFindFirst(pxWsSessions, NULL, NULL)) != NULL) {
+        ApiSession_t *s = LinkedListGetObject(ApiSession_t, item);
+        vLinkedListUnlink(item);
+        free(s);
+    }
+    xTransport.iface  = NULL;
+    xTransport.module = NULL;
     while ((item = pxLinkedListFindFirst(pxWsFidQueues, NULL, NULL)) != NULL) {
         FidQueueItem_t *fq = LinkedListGetObject(FidQueueItem_t, item);
         vLinkedListUnlink(item);

@@ -42,7 +42,7 @@ C_SRCS := \
     Str.c \
     Base64Encoding.c \
     ws_hal_stub.c \
-    ws_conn_stub.c \
+    ws_transport_stub.c \
     gw_uart_stub.c
 
 CPP_SRCS := \
