@@ -150,7 +150,7 @@ static void vBreakApiCallsByFid(uint32_t timeout_ms, const char *name) {
 }
 
 /* Объявлено заранее: завершение вызова зовётся из обслуживания, описано ниже. */
-static void _vCallTeardown(ApiCall_t *call);
+static uint8_t _bCallTeardown(ApiCall_t *call);
 
 static void vServeApiCall(LinkedListItem_t *item, void *arg) {
     ApiCall_t *call = LinkedListGetObject(ApiCall_t, item);
@@ -173,26 +173,24 @@ static void vServeApiCall(LinkedListItem_t *item, void *arg) {
             call->session->ulPingTs = ws_hal_tick();
         }
     } else {
+        /* Клиента нет (отключился или ответ уже отправлен): просим снять вызов.
+         * Сам вызов освободит такт работы — и только после того, как обработчик
+         * вернёт FALSE. Раньше его снимали здесь, не дожидаясь обработчика. */
         ws_hal_log_d(TAG, "Api call complete, id: %lu", call->ulId);
-        _vCallTeardown(call);
-        vLinkedListUnlink(item);
-        free(call->pucReqData);
-        free(call);
+        call->flags |= CALL_FLAG_TO_DELETE;
     }
 }
 
 /* Принудительное завершение вызова: по контракту обработчик получает call == NULL
- * и обязан освободить свой контекст, возвращая FALSE. Пошаговое завершение
- * допускается, поэтому зовём до FALSE, но с ограничением — иначе обработчик,
- * который не понял завершение, повесит задачу. */
-#define WS_API_TEARDOWN_STEPS 8
-
-static void _vCallTeardown(ApiCall_t *call) {
-    if(!call || !call->fHandler) return;
-    for (int i = 0; i < WS_API_TEARDOWN_STEPS; i++) {
-        if(call->fHandler(NULL, &call->pxHandlerContext, NULL, 0)) continue;
-        break;
-    }
+ * и обязан освободить свой контекст, возвращая FALSE.
+ *
+ * ЯДРО НЕ СНИМАЕТ ВЫЗОВ, ПОКА ОБРАБОТЧИК НЕ ВЕРНУЛ РЕЗУЛЬТАТ. Одна попытка за
+ * такт: если обработчик завершается пошагово (вернул TRUE), вызов остаётся в
+ * списках и его спросят снова следующим тактом — освобождать память вызова,
+ * пока обработчик ещё держит своё состояние, нельзя. */
+static uint8_t _bCallTeardown(ApiCall_t *call) {
+    if(!call || !call->fHandler || !call->bHandlerStarted) return 1;  /* завершать нечего */
+    return call->fHandler(NULL, &call->pxHandlerContext, NULL, 0) ? 0 : 1;
     /* pxHandlerContext НЕ обнуляем: обработчик сам решает, что там оставить.
      * Для подписки (FLAGS:4) вызов после тел-дауна живёт дальше и при
      * следующем переопросе должен снова получить свой контекст регистрации —
@@ -780,10 +778,57 @@ static int vWsApiCollectHandled(LinkedList_t list, int from) {
     return n;
 }
 
+/* Вызовы, которые просят снять (клиент ушёл, пришёл FLAGS с флагом удаления):
+ * их надо довести до конца — спросить обработчика, и только после FALSE
+ * освобождать память вызова. */
+static ApiCall_t *apxFinishBatch[WS_API_WORK_BATCH];
+
+static int vWsApiCollectFinish(LinkedList_t list, int from) {
+    int n = from;
+    LinkedListItem_t *item = pxLinkedListFindFirst(list, NULL, NULL);
+    while(item != NULL && n < WS_API_WORK_BATCH) {
+        LinkedListItem_t *next = pxLinkedListFindNextNoOverlap(item, NULL, NULL);
+        ApiCall_t *call = LinkedListGetObject(ApiCall_t, item);
+        if(call->flags & CALL_FLAG_TO_DELETE)
+            apxFinishBatch[n++] = call;
+        item = next;
+    }
+    return n;
+}
+
+static void vWsApiFinishCalls(void) {
+    ws_hal_mutex_take(xWsApiMutex, WS_HAL_WAIT_FOREVER);
+    int n = vWsApiCollectFinish(pxWsApiCall, 0);
+    n = vWsApiCollectFinish(pxWsApiWaitingForResponse, n);
+    ws_hal_mutex_give(xWsApiMutex);
+
+    for(int i = 0; i < n; i++) {
+        ApiCall_t *call = apxFinishBatch[i];
+        /* Флаг мог поставить клиент (FLAGS с битом удаления) — тогда он ждёт
+         * подтверждения. Если клиента уже нет, отправлять некуда. */
+        if(call->session)
+            bApiCallSendStatus(call, API_CALL_STATUS_DELIVERED);
+        if(!_bCallTeardown(call))
+            continue;            /* обработчик ещё не завершился — спросим тактом позже */
+
+        ws_hal_mutex_take(xWsApiMutex, WS_HAL_WAIT_FOREVER);
+        LinkedListItem_t *li = LinkedListItem(call);
+        if(bLinkedListContains(pxWsApiCall, li)) vLinkedListUnlink(li);
+        if(bLinkedListContains(pxWsApiWaitingForResponse, li)) vLinkedListUnlink(li);
+        free(call->pucReqData);
+        free(call);
+        ws_hal_mutex_give(xWsApiMutex);
+    }
+}
+
 static void vWsApiWorkCycle(void) {
     uint32_t now = ws_hal_tick();
     if((now - ulLastWorkTick) < ws_hal_ms_to_ticks(WS_API_WORK_TICK_MS)) return;
     ulLastWorkTick = now;
+
+    /* Сначала те, кого просят снять: пока обработчик не вернул результат,
+     * вызов остаётся жить в списках. */
+    vWsApiFinishCalls();
 
     ws_hal_mutex_take(xWsApiMutex, WS_HAL_WAIT_FOREVER);
     int n = vWsApiCollectHandled(pxWsApiCall, 0);
@@ -795,12 +840,9 @@ static void vWsApiWorkCycle(void) {
         /* data == NULL — такт работы, а не запрос клиента */
         if(call->fHandler(call, &call->pxHandlerContext, NULL, 0)) continue;
 
-        /* Обработчик вернул FALSE — вызов завершён. Завершаем его здесь же.
-         * В очереди периферии это делал приход ответа; у обработчика ответ
-         * отправляет он сам, и без этого вызов с контекстом оставался в списке
-         * навсегда — замерено накопление 215 вызовов и контекстов за минуту. */
+        /* Обработчик вернул FALSE — это и есть результат: вызов завершён
+         * (контекст он освободил сам), можно снимать. */
         ws_hal_mutex_take(xWsApiMutex, WS_HAL_WAIT_FOREVER);
-        _vCallTeardown(call);
         LinkedListItem_t *li = LinkedListItem(call);
         if(bLinkedListContains(pxWsApiCall, li)) vLinkedListUnlink(li);
         if(bLinkedListContains(pxWsApiWaitingForResponse, li)) vLinkedListUnlink(li);
@@ -842,39 +884,9 @@ static void vWsApiCallWorkerStep(void) {
             ApiCall_t *call = LinkedListGetObject(ApiCall_t, item);
 
             if(call->flags & CALL_FLAG_TO_DELETE) {
-                ws_hal_log_i(TAG, "received status DELETE");
-                /* Обработчик завершил вызов (вернул FALSE) — отдаём ему
-                 * завершение, чтобы он освободил свой контекст. Без этого
-                 * контексты копились: вызов уходил из списков, а память нет. */
-                _vCallTeardown(call);
-                bApiCallSendStatus(call, API_CALL_STATUS_DELIVERED);
-                if(call->session) {
-                    void *key = cl_tuple_make((void *)(uintptr_t)call->session->fd,
-                                             (void *)call->fid,
-                                             (void *)(uintptr_t)call->ulId);
-                    call->session = NULL;
-                    LinkedListItem_t *found;
-                    while((found = pxLinkedListFindFirst(pxWsApiWaitingForResponse, bCallClientIdMatch, key)) != NULL) {
-                        ApiCall_t *fc = LinkedListGetObject(ApiCall_t, found);
-                        vLinkedListUnlink(found);
-                        free(fc->pucReqData);
-                        free(fc);
-                    }
-                    while((found = pxLinkedListFindFirst(pxWsApiCall, bCallClientIdMatch, key)) != NULL) {
-                        ApiCall_t *fc = LinkedListGetObject(ApiCall_t, found);
-                        vLinkedListUnlink(found);
-                        free(fc->pucReqData);
-                        free(fc);
-                    }
-                    /* The loop above may have freed the call `next` points to
-                     * (same fd/FID/SID queued right after this TO_DELETE) —
-                     * re-read it; `item` is still linked and never matches
-                     * itself since its session was cleared above. */
-                    next = pxLinkedListFindNextNoOverlap(item, NULL, NULL);
-                }
-                vLinkedListUnlink(item);
-                free(call->pucReqData);
-                free(call);
+                /* Вызов просят снять. Ничего не раздаём и не освобождаем здесь:
+                 * завершением займётся такт работы, и лишь после того, как
+                 * обработчик вернёт FALSE (см. _bCallTeardown). */
                 item = next;
                 continue;
             }
@@ -920,7 +932,7 @@ static void vWsApiCallWorkerStep(void) {
                                                call->pucReqData, call->ulReqDataLen);
                 ws_hal_mutex_take(xWsApiMutex, WS_HAL_WAIT_FOREVER);
                 if(!alive) {
-                    _vCallTeardown(call);
+                    /* false от обработчика — вызов завершён (его результат) */
                     if(call->flags & CALL_FLAG_LONG_TERM) {
                         /* Подписка живёт дальше: возвращаем её в работу, ядро
                          * повторит запрос по таймеру переопроса. */

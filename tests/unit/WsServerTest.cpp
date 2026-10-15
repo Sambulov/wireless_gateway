@@ -24,6 +24,7 @@
  * [x] Frame — фрагментированное сообщение собирается из частей
  * [x] Frame — продолжение без начала отбрасывается
  * [x] Frame — незавершённый сбор бросается при начале нового сообщения
+ * [x] Снятие вызова — ждём FALSE обработчика, раньше не освобождаем
  * [x] Work cycle — обработчик получает такт без данных
  * [x] Work cycle — завершённый вызов снимается и больше тактов не получает
  * [x] Frame TEXT unregistered FID     → sends NO_HANDLER (1 send call)
@@ -73,10 +74,19 @@ static uint8_t dummy_handler(void *call, void **ctx, uint8_t *data, uint32_t len
 /* Обработчик, который считает такты работы и держит вызов живым, пока не
  * получит запрос и ни одного такта после него. */
 static int long_handler_pulses;
+/* Живёт, пока такты идут: проверяем именно доставку тактов. */
 static uint8_t long_handler(void *call, void **ctx, uint8_t *data, uint32_t len) {
     (void)call; (void)ctx; (void)data; (void)len;
     if (!data) long_handler_pulses++;
-    return long_handler_pulses < 3;
+    return 1;
+}
+
+/* Завершается сам на третьем такте: проверяем, что после этого тактов нет. */
+static int short_handler_pulses;
+static uint8_t short_handler(void *call, void **ctx, uint8_t *data, uint32_t len) {
+    (void)call; (void)ctx; (void)data; (void)len;
+    if (!data) short_handler_pulses++;
+    return short_handler_pulses < 3;
 }
 
 /* ws_server_on_text takes ownership of data — always pass malloc'd copy */
@@ -386,6 +396,61 @@ TEST(WsServerFragments, DisconnectReleasesPartialAssembly) {
     ws_conn_set_user_data(conn, NULL);
 }
 
+/* Обработчик, который завершается не сразу: на call == NULL отвечает TRUE
+ * дважды и только потом FALSE. Ядро обязано спрашивать до результата. */
+static int slow_finish_steps;
+static uint8_t slow_finish_handler(void *call, void **ctx, uint8_t *data, uint32_t len) {
+    (void)ctx; (void)data; (void)len;
+    if (!call) {
+        slow_finish_steps++;
+        return slow_finish_steps < 3;      /* TRUE — «ещё не завершился» */
+    }
+    return 1;                              /* запрос принят, работаем */
+}
+
+TEST_GROUP(WsServerFinishRule) {
+    ws_conn_t *conn;
+    void setup() {
+        ws_hal_stub_reset();
+        ws_server_init();
+        conn = ws_conn_stub_make(1);
+        ws_server_on_connect(conn);
+        slow_finish_steps = 0;
+        bApiCallRegister(slow_finish_handler, "regx.slow", NULL);
+    }
+    void teardown() {
+        ws_server_on_disconnect(conn);
+        ws_server_test_reset();
+        free(conn);
+    }
+};
+
+TEST(WsServerFinishRule, CallSurvivesUntilHandlerReportsFinished) {
+    send_text(conn, "{\"FID\":\"regx.slow\",\"FLAGS\":0,\"SID\":1}");
+    ws_server_test_worker_step();          /* первичная выдача: обработчик жив */
+
+    ws_server_on_disconnect(conn);         /* клиент ушёл — вызов просят снять */
+    slow_finish_steps = 0;
+
+    /* Шаг 1 выставляет флаг снятия (GC идёт после такта), дальше каждый шаг —
+     * один вопрос обработчику. */
+    for (int i = 0; i < 3; i++) {
+        ws_hal_stub_advance_tick(20);
+        ws_server_test_worker_step();
+    }
+    LONGS_EQUAL(2, slow_finish_steps);     /* спросили дважды, вызов ещё жив */
+
+    ws_hal_stub_advance_tick(20);
+    ws_server_test_worker_step();          /* третий раз — обработчик вернул FALSE */
+    LONGS_EQUAL(3, slow_finish_steps);
+
+    for (int i = 0; i < 2; i++) {
+        ws_hal_stub_advance_tick(20);
+        ws_server_test_worker_step();      /* вызов снят: больше не спрашивают */
+    }
+    LONGS_EQUAL(3, slow_finish_steps);
+}
+
 /* ── TEST_GROUP: WsServerWorkCycle ────────────────────────────────────── */
 
 TEST_GROUP(WsServerWorkCycle) {
@@ -425,20 +490,20 @@ TEST(WsServerWorkCycle, FinishedCallGetsNoMorePulses) {
     /* Обработчик вернул 0 — вызов завершён и снят со списка: следующий такт
      * работы до него уже не доходит (иначе вызов с контекстом копился бы в
      * списке навсегда — замерено накопление 215 вызовов за минуту). */
-    bApiCallRegister(long_handler, "cycle.done", NULL);
+    short_handler_pulses = 0;
+    bApiCallRegister(short_handler, "cycle.done", NULL);
     send_text(conn, "{\"FID\":\"cycle.done\",\"FLAGS\":0,\"SID\":1}");
     ws_server_test_worker_step();
-    const int base = long_handler_pulses;
     for (int i = 0; i < 3; i++) {
         ws_hal_stub_advance_tick(20);
         ws_server_test_work_step();
     }
-    LONGS_EQUAL(base + 3, long_handler_pulses);
+    LONGS_EQUAL(3, short_handler_pulses);
     for (int i = 0; i < 5; i++) {
         ws_hal_stub_advance_tick(20);
         ws_server_test_work_step();
     }
-    LONGS_EQUAL(base + 3, long_handler_pulses);
+    LONGS_EQUAL(3, short_handler_pulses);   /* вызов завершён — тактов больше нет */
 }
 
 /* ── TEST_GROUP: WsServerFidQueue ─────────────────────────────────────── */
@@ -639,11 +704,15 @@ TEST(WsServerRegression, ToDeleteFreesSameCallQueuedRightAfterIt) {
 
     ws_server_test_worker_step();
 
-    /* Both calls are gone: nothing forwarded, one DELIVERED for the delete */
-    LONGS_EQUAL(0, ws_hal_stub_queue_count(periph_q));
-    LONGS_EQUAL(1, ws_conn_stub_send_calls(conn));
+    /* Снимается ТОЛЬКО вызов с флагом удаления; второй (подписка) живёт и уходит
+     * в очередь периферии — раньше по совпадению fd/FID/SID сносило оба. */
+    LONGS_EQUAL(1, ws_hal_stub_queue_count(periph_q));
+    LONGS_EQUAL(1, ws_conn_stub_send_calls(conn));   /* DELIVERED отданному запросу */
 
+    /* Снятие подтверждается клиенту следующим тактом (такт работы идёт в начале
+     * шага, а на первом шаге тик ещё нулевой). */
+    ws_hal_stub_advance_tick(20);
     ws_server_test_worker_step();
-    LONGS_EQUAL(0, ws_hal_stub_queue_count(periph_q));
-    LONGS_EQUAL(1, ws_conn_stub_send_calls(conn));
+    LONGS_EQUAL(2, ws_conn_stub_send_calls(conn));   /* DELIVERED о снятии */
+    LONGS_EQUAL(1, ws_hal_stub_queue_count(periph_q));
 }
