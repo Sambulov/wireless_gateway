@@ -4,6 +4,10 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# clang может лежать не в системе, а в домашнем каталоге (например, распакованный
+# без root): если так — подставляем его в PATH.
+LLVM_BIN="${LLVM_BIN:-$HOME/.local/llvm/usr/bin}"
+if [[ -d "$LLVM_BIN" ]]; then PATH="$LLVM_BIN:$PATH"; export PATH; fi
 OUT="$ROOT/tests/fuzz/build"
 mkdir -p "$OUT"
 
@@ -41,9 +45,13 @@ for entry in "${CORPORA[@]}"; do
   src="${entry%%:*}"
   corpus="${entry##*:}"
   bin="$OUT/${src}_cov"
-  clang -g -O1 -fprofile-instr-generate -fcoverage-mapping -DWS_SERVER_TEST \
-    "${INCLUDES[@]}" "${SRCS[@]}" "$ROOT/tests/fuzz/$src.c" -o "$bin"
-  LLVM_PROFILE_FILE="$OUT/${src}.profraw" "$bin" -max_total_time=60 "$corpus" ${CORPUS_EXTRA:-}
+  clang -g -O1 -fsanitize=fuzzer -fprofile-instr-generate -fcoverage-mapping \
+    -DWS_SERVER_TEST "${INCLUDES[@]}" "${SRCS[@]}" "$ROOT/tests/fuzz/$src.c" -o "$bin"
+  # Первый каталог — рабочий корпус (фаззер в него дописывает), второй — семена
+  # только для чтения: иначе мутации засоряют seeds/ в репозитории.
+  mkdir -p "$OUT/corpus_$src"
+  LLVM_PROFILE_FILE="$OUT/${src}.profraw" "$bin" -max_total_time=60 \
+    "$OUT/corpus_$src" "$corpus" ${CORPUS_EXTRA:-}
   PROFILES+=("$OUT/${src}.profraw")
 done
 

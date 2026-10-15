@@ -7,6 +7,10 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# clang может лежать не в системе, а в домашнем каталоге (например, распакованный
+# без root): если так — подставляем его в PATH.
+LLVM_BIN="${LLVM_BIN:-$HOME/.local/llvm/usr/bin}"
+if [[ -d "$LLVM_BIN" ]]; then PATH="$LLVM_BIN:$PATH"; export PATH; fi
 OUT="$ROOT/tests/fuzz/build"
 mkdir -p "$OUT"
 
