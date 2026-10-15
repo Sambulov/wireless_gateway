@@ -842,6 +842,91 @@ static void handle_file_rename(const uint8_t *data, uint32_t len) {
     gw_jsonw_str(&sys_w, "TO", to);
 }
 
+/* ── sys.file.mkdir: создание каталога ─────────────────────────────────────── */
+
+static void handle_file_mkdir(const uint8_t *data, uint32_t len) {
+    char path_req[FS_PATH_MAX], path[FS_PATH_MAX];
+    char full[FS_FULL_MAX];
+    struct stat st;
+    GW_JSON_TOKENS(toks, SYS_ARG_MAX_TOKENS);
+    gw_json_t json;
+
+    if (!((data && len) && gw_json_parse(&json, (const char *)data, len, toks, SYS_ARG_MAX_TOKENS))) {
+        resp_error(SYS_BAD_ARG, "ARG", "ARG must be an object: {\"PATH\":\"/maps\"}");
+        return;
+    }
+    if (!gw_json_str(&json, "PATH", path_req, sizeof(path_req))) {
+        resp_error(SYS_BAD_ARG, "PATH", "PATH is required, e.g. /maps");
+        return;
+    }
+    if (!fs_path_check(path_req, "PATH", path, sizeof(path)))
+        return;
+    if (path[0] == '/' && path[1] == '\0') {
+        resp_error(SYS_BAD_ARG, "EXIST", "Root directory already exists");
+        return;
+    }
+    if (!fs_full_path(path, full, sizeof(full))) {
+        resp_error(SYS_BAD_ARG, "PATH", "Path is too long");
+        return;
+    }
+    if (stat(full, &st) == 0) {
+        resp_error(SYS_BAD_ARG, "EXIST", st.st_mode & S_IFDIR ? "Directory already exists"
+                                                              : "A file with this name exists");
+        return;
+    }
+    if (mkdir(full, 0777) != 0) {
+        ESP_LOGE(TAG, "Не удалось создать каталог %s", full);
+        resp_error(SYS_INTERNAL, "FS", "Failed to create the directory");
+        return;
+    }
+    ESP_LOGI(TAG, "Каталог %s создан", path);
+    resp_ok();
+    gw_jsonw_str(&sys_w, "PATH", path);
+}
+
+/* ── sys.file.rmdir: удаление пустого каталога ─────────────────────────────── */
+
+static void handle_file_rmdir(const uint8_t *data, uint32_t len) {
+    char path_req[FS_PATH_MAX], path[FS_PATH_MAX];
+    char full[FS_FULL_MAX];
+    struct stat st;
+    GW_JSON_TOKENS(toks, SYS_ARG_MAX_TOKENS);
+    gw_json_t json;
+
+    if (!((data && len) && gw_json_parse(&json, (const char *)data, len, toks, SYS_ARG_MAX_TOKENS))) {
+        resp_error(SYS_BAD_ARG, "ARG", "ARG must be an object: {\"PATH\":\"/maps\"}");
+        return;
+    }
+    if (!gw_json_str(&json, "PATH", path_req, sizeof(path_req))) {
+        resp_error(SYS_BAD_ARG, "PATH", "PATH is required, e.g. /maps");
+        return;
+    }
+    if (!fs_path_check(path_req, "PATH", path, sizeof(path)))
+        return;
+    if (path[0] == '/' && path[1] == '\0') {
+        resp_error(SYS_BAD_ARG, "PATH", "The root directory cannot be removed");
+        return;
+    }
+    if (!fs_full_path(path, full, sizeof(full))) {
+        resp_error(SYS_BAD_ARG, "PATH", "Path is too long");
+        return;
+    }
+    if (stat(full, &st) != 0 || !(st.st_mode & S_IFDIR)) {
+        resp_error(SYS_BAD_ARG, "PATH", "Directory does not exist");
+        return;
+    }
+    /* rmdir сам откажет, если каталог не пуст: так и не нужно отдельно считать
+     * содержимое — файловая система это уже знает. */
+    if (rmdir(full) != 0) {
+        ESP_LOGW(TAG, "Не удалось удалить каталог %s (возможно, он не пуст)", full);
+        resp_error(SYS_BAD_ARG, "NOTEMPTY", "Directory is not empty");
+        return;
+    }
+    ESP_LOGI(TAG, "Каталог %s удалён", path);
+    resp_ok();
+    gw_jsonw_str(&sys_w, "PATH", path);
+}
+
 /* ── sys.net: interface IPv4 settings ──────────────────────────────────────── */
 
 #define NET_APPLY_DELAY_MS 1000
@@ -1115,6 +1200,24 @@ static uint8_t sys_file_rename_handler(void *call, void **context, uint8_t *data
     return 0;
 }
 
+static uint8_t sys_file_mkdir_handler(void *call, void **context, uint8_t *data, uint32_t data_len) {
+    (void)context;
+    if (!call) return 0;
+    resp_begin();
+    handle_file_mkdir(data, data_len);
+    send_response(call);
+    return 0;
+}
+
+static uint8_t sys_file_rmdir_handler(void *call, void **context, uint8_t *data, uint32_t data_len) {
+    (void)context;
+    if (!call) return 0;
+    resp_begin();
+    handle_file_rmdir(data, data_len);
+    send_response(call);
+    return 0;
+}
+
 static uint8_t sys_net_handler(void *call, void **context, uint8_t *data, uint32_t data_len) {
     if (!call) return 0;
     const sys_service_t *svc = svc_of(context);
@@ -1186,6 +1289,8 @@ esp_err_t api_sys_run(app_context_t *app) {
     ok &= register_service(sys_file_write_handler,  ESP_WS_API_SYS_FILE_WRITE,  ap_mask, NULL);
     ok &= register_service(sys_file_delete_handler, ESP_WS_API_SYS_FILE_DELETE, ap_mask, NULL);
     ok &= register_service(sys_file_rename_handler, ESP_WS_API_SYS_FILE_RENAME, ap_mask, NULL);
+    ok &= register_service(sys_file_mkdir_handler,  ESP_WS_API_SYS_FILE_MKDIR,  ap_mask, NULL);
+    ok &= register_service(sys_file_rmdir_handler,  ESP_WS_API_SYS_FILE_RMDIR,  ap_mask, NULL);
 
     if (!ok) return ESP_FAIL;
 

@@ -73,6 +73,15 @@
     /* Address fields only make sense for a static configuration */
     .row.disabled { display:none; }
     .empty { color:var(--dim); padding:10px 0; }
+    /* Панель действий файлового менеджера: кнопка выбора файла и что выбрано */
+    .toolbar { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+    .pick { color:var(--dim); font-size:12px; }
+    .pick b { color:var(--ink); font-family:ui-monospace, Menlo, Consolas, monospace; }
+    .hidden-file { position:absolute; width:1px; height:1px; opacity:0; pointer-events:none; }
+    .grow { flex:1 1 180px; }
+    /* Системная информация: две колонки и подписи без разрыва строки */
+    .kv-grid { grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); }
+    .kv-grid .kv span:first-child { white-space:nowrap; }
     progress { width:100%; max-width:340px; height:14px; }
 </style>
 </head>
@@ -85,37 +94,53 @@
 
 <div class="wrap">
 
+    <!-- Системная информация: состояние устройства, прошивка и действия -->
     <div class="card">
-        <h2>Устройство</h2>
-        <div class="grid">
-            <div class="kv"><span>MAC (AP)</span><span id="i-mac-ap">—</span></div>
-            <div class="kv"><span>MAC (STA)</span><span id="i-mac-sta">—</span></div>
-            <div class="kv"><span>IP точки доступа</span><span id="i-ip-ap">—</span></div>
-            <div class="kv"><span>IP в сети (STA)</span><span id="i-ip-sta">—</span></div>
+        <h2>Устройство <small>системная информация</small></h2>
+        <div class="msg" id="access-note">проверяем права…</div>
+        <div class="grid kv-grid">
+            <div class="kv"><span>Режим работы</span><span id="i-mode">—</span></div>
             <div class="kv"><span>Подключено к</span><span id="i-sta-ssid">—</span></div>
-            <div class="kv"><span>Клиентов на AP</span><span id="i-ap-clients">—</span></div>
+            <div class="kv"><span>IP: в сети / точки доступа</span><span><span id="i-ip-sta">—</span> / <span id="i-ip-ap">—</span></span></div>
+            <div class="kv"><span>MAC: станции / точки доступа</span><span><span id="i-mac-sta">—</span> / <span id="i-mac-ap">—</span></span></div>
+            <div class="kv"><span>Клиентов на точке доступа</span><span id="i-ap-clients">—</span></div>
             <div class="kv"><span>Время работы</span><span id="i-uptime">—</span></div>
             <div class="kv"><span>Свободная память</span><span id="i-heap">—</span></div>
             <div class="kv"><span>Файловая система</span><span id="i-fs">—</span></div>
         </div>
+
+        <div class="iface">
+            <h3 class="sub">Прошивка <small id="fw-version">—</small></h3>
+            <div class="hint" id="fw-line">образ <b id="fw-name">—</b>, сборка <b id="fw-date">—</b>,
+                ESP-IDF <b id="fw-idf">—</b>; работает раздел <b id="ota-running">—</b>,
+                для обновления доступен <b id="ota-next">—</b></div>
+            <div class="row">
+                <div class="grow">
+                    <label class="field" for="fw-file">Файл прошивки (.bin)</label>
+                    <input type="file" id="fw-file" accept=".bin,application/octet-stream">
+                </div>
+                <button class="primary" id="fw-upload">Обновить</button>
+                <button class="danger" id="reboot">Перезагрузить</button>
+            </div>
+            <progress id="fw-progress" value="0" max="100" style="display:none"></progress>
+            <div class="msg" id="fw-msg"></div>
+            <div class="msg" id="reboot-msg"></div>
+            <div class="hint">Прошивка пишется во второй раздел и включается перезагрузкой; при ошибке
+                проверки образа остаётся рабочей прежняя. Обновление и перезагрузка доступны только с
+                точки доступа при ровно одном клиенте. Файл — <b>ws_echo_server.bin</b> из каталога
+                <code>build/</code>.</div>
+        </div>
     </div>
 
-    <div class="card" id="access-card">
-        <h2>Настройка Wi-Fi</h2>
-        <div class="msg" id="access-note">проверяем права…</div>
-        <div class="hint">Имя и пароль сети (STA) и точки доступа (AP) меняются только с самой точки
-            доступа и только когда к ней подключён <b>ровно один</b> клиент — администратор. Пароли
-            показываются лишь в этом же режиме.</div>
-    </div>
-
+    <!-- Подключение: сеть, к которой подключается сам шлюз -->
     <div class="card">
-        <h2>Wi-Fi — подключение к сети <small>режим станции (STA)</small></h2>
+        <h2>Подключение <small>режим станции (STA)</small></h2>
         <div class="row">
-            <div>
+            <div class="grow">
                 <label class="field" for="sta-ssid">Имя сети (SSID)</label>
                 <input type="text" id="sta-ssid" maxlength="31" autocomplete="off" spellcheck="false">
             </div>
-            <div>
+            <div class="grow">
                 <label class="field" for="sta-pass">Пароль</label>
                 <input type="password" id="sta-pass" maxlength="63" autocomplete="new-password">
             </div>
@@ -123,20 +148,43 @@
             <button id="sta-show" type="button">Показать пароль</button>
         </div>
         <div class="msg" id="sta-msg"></div>
-        <div class="hint">Пароль можно оставить пустым для открытой сети. Допустимо 8–63 символа.
-            Изменения применяются сразу: устройство переподключится и получит новый адрес в вашей
-            сети — он появится в разделе «Устройство». Смена настроек доступна только с точки
-            доступа при ровно одном клиенте.</div>
+
+        <div class="iface">
+            <h3 class="sub">Адрес <small>как шлюз получает IP в вашей сети</small></h3>
+            <div class="row">
+                <label class="inline"><input type="radio" name="sta-mode" value="dhcp" id="sta-mode-dhcp"> Автоматически (DHCP)</label>
+                <label class="inline"><input type="radio" name="sta-mode" value="static" id="sta-mode-static"> Статический адрес</label>
+                <span class="hint">сейчас: <b id="net-sta-addr">—</b></span>
+            </div>
+            <div class="row disabled" id="sta-static-fields">
+                <div><label class="field" for="net-sta-ip">IP-адрес</label>
+                     <input type="text" id="net-sta-ip" placeholder="192.168.1.50" autocomplete="off" spellcheck="false"></div>
+                <div><label class="field" for="net-sta-mask">Маска</label>
+                     <input type="text" id="net-sta-mask" placeholder="255.255.255.0" autocomplete="off" spellcheck="false"></div>
+                <div><label class="field" for="net-sta-gw">Шлюз</label>
+                     <input type="text" id="net-sta-gw" placeholder="192.168.1.1" autocomplete="off" spellcheck="false"></div>
+                <div><label class="field" for="net-sta-dns1">DNS 1</label>
+                     <input type="text" id="net-sta-dns1" placeholder="не задан" autocomplete="off" spellcheck="false"></div>
+                <div><label class="field" for="net-sta-dns2">DNS 2</label>
+                     <input type="text" id="net-sta-dns2" placeholder="не задан" autocomplete="off" spellcheck="false"></div>
+            </div>
+            <button class="primary" id="net-sta-save">Применить настройки станции</button>
+            <div class="msg" id="net-sta-msg"></div>
+        </div>
+        <div class="hint">Пароль можно оставить пустым для открытой сети (иначе 8–63 символа).
+            Изменения применяются сразу: шлюз переподключится и получит новый адрес. Настройки
+            меняются только с точки доступа при ровно одном клиенте.</div>
     </div>
 
+    <!-- Точка доступа самого шлюза -->
     <div class="card">
-        <h2>Wi-Fi — точка доступа <small>режим AP</small></h2>
+        <h2>Точка доступа <small>режим AP</small></h2>
         <div class="row">
-            <div>
+            <div class="grow">
                 <label class="field" for="ap-ssid">Имя точки доступа</label>
                 <input type="text" id="ap-ssid" maxlength="31" autocomplete="off" spellcheck="false">
             </div>
-            <div>
+            <div class="grow">
                 <label class="field" for="ap-pass">Пароль</label>
                 <input type="password" id="ap-pass" maxlength="63" autocomplete="new-password">
             </div>
@@ -144,115 +192,67 @@
             <button id="ap-show" type="button">Показать пароль</button>
         </div>
         <div class="msg" id="ap-msg"></div>
-        <div class="hint">Смена имени и пароля точки доступа разрешена только тогда, когда к ней
-            подключён <b>ровно один</b> клиент — вы. Так никто посторонний не сможет перехватить
-            смену пароля. Сейчас клиентов: <b id="ap-clients-hint">—</b>.
-            После сохранения связь оборвётся — подключитесь заново с новым паролем.
-            Заводское имя и пароль печатаются в консоли устройства при включении.</div>
-    </div>
-
-    <div class="card">
-        <h2>Сеть — адреса интерфейсов</h2>
 
         <div class="iface">
-        <h3 class="sub">Станция (STA) <small>подключение к вашей сети</small></h3>
-        <div class="row">
-            <label class="inline"><input type="radio" name="sta-mode" value="dhcp" id="sta-mode-dhcp"> Автоматически (DHCP)</label>
-            <label class="inline"><input type="radio" name="sta-mode" value="static" id="sta-mode-static"> Статический адрес</label>
-            <span class="hint">сейчас: <b id="net-sta-addr">—</b></span>
-        </div>
-        <div class="row disabled" id="sta-static-fields">
-            <div><label class="field" for="net-sta-ip">IP-адрес</label>
-                 <input type="text" id="net-sta-ip" placeholder="192.168.1.50" autocomplete="off" spellcheck="false"></div>
-            <div><label class="field" for="net-sta-mask">Маска</label>
-                 <input type="text" id="net-sta-mask" placeholder="255.255.255.0" autocomplete="off" spellcheck="false"></div>
-            <div><label class="field" for="net-sta-gw">Шлюз</label>
-                 <input type="text" id="net-sta-gw" placeholder="192.168.1.1" autocomplete="off" spellcheck="false"></div>
-            <div><label class="field" for="net-sta-dns1">DNS 1</label>
-                 <input type="text" id="net-sta-dns1" placeholder="не задан" autocomplete="off" spellcheck="false"></div>
-            <div><label class="field" for="net-sta-dns2">DNS 2</label>
-                 <input type="text" id="net-sta-dns2" placeholder="не задан" autocomplete="off" spellcheck="false"></div>
-        </div>
-        <button class="primary" id="net-sta-save">Применить настройки станции</button>
-        <div class="msg" id="net-sta-msg"></div>
-        </div>
-
-        <div class="iface">
-        <h3 class="sub">Точка доступа (AP) <small>адрес, по которому к ней подключаются</small></h3>
-        <div class="row">
-            <div><label class="field" for="net-ap-ip">IP-адрес</label>
-                 <input type="text" id="net-ap-ip" placeholder="192.168.4.1" autocomplete="off" spellcheck="false"></div>
-            <div><label class="field" for="net-ap-mask">Маска</label>
-                 <input type="text" id="net-ap-mask" placeholder="255.255.255.0" autocomplete="off" spellcheck="false"></div>
-            <span class="hint">сейчас: <b id="net-ap-addr">—</b></span>
-        </div>
-        <button class="primary" id="net-ap-save">Применить настройки точки доступа</button>
-        <div class="msg" id="net-ap-msg"></div>
-        <div class="hint">Адрес точки доступа выдаётся клиентам как шлюз, её DHCP-сервер
-            перезапустится автоматически. Смена адреса разорвёт текущее соединение — переподключитесь
-            по новому адресу, страница откроется по нему же.</div>
-        </div>
-    </div>
-
-    <div class="card">
-        <h2>Обновление прошивки <small>OTA</small></h2>
-        <div class="grid" style="margin-bottom:10px">
-            <div class="kv"><span>Прошивка</span><span id="fw-name">—</span></div>
-            <div class="kv"><span>Версия</span><span id="fw-version">—</span></div>
-            <div class="kv"><span>Сборка</span><span id="fw-date">—</span></div>
-            <div class="kv"><span>ESP-IDF</span><span id="fw-idf">—</span></div>
-            <div class="kv"><span>Текущий раздел</span><span id="ota-running">—</span></div>
-            <div class="kv"><span>Раздел для новой</span><span id="ota-next">—</span></div>
-        </div>
-        <div class="row">
-            <div>
-                <label class="field" for="fw-file">Файл прошивки (.bin)</label>
-                <input type="file" id="fw-file" accept=".bin,application/octet-stream">
+            <h3 class="sub">Адрес точки доступа <small>по нему к ней подключаются</small></h3>
+            <div class="row">
+                <div><label class="field" for="net-ap-ip">IP-адрес</label>
+                     <input type="text" id="net-ap-ip" placeholder="192.168.4.1" autocomplete="off" spellcheck="false"></div>
+                <div><label class="field" for="net-ap-mask">Маска</label>
+                     <input type="text" id="net-ap-mask" placeholder="255.255.255.0" autocomplete="off" spellcheck="false"></div>
+                <span class="hint">сейчас: <b id="net-ap-addr">—</b></span>
             </div>
-            <button class="primary" id="fw-upload">Обновить прошивку</button>
+            <button class="primary" id="net-ap-save">Применить настройки точки доступа</button>
+            <div class="msg" id="net-ap-msg"></div>
         </div>
-        <progress id="fw-progress" value="0" max="100" style="display:none"></progress>
-        <div class="msg" id="fw-msg"></div>
-        <div class="hint">Загружается файл <b>ws_echo_server.bin</b> из каталога <code>build/</code>.
-            Он пишется во второй раздел приложения и устройство перезагружается в него; при ошибке
-            проверки образа старая прошивка остаётся рабочей. Обновление доступно только с точки
-            доступа при ровно одном клиенте — ошибочный образ иначе оставил бы устройство без доступа.</div>
+        <div class="hint">Смена имени и пароля разрешена только тогда, когда к точке доступа подключён
+            <b>ровно один</b> клиент — вы (сейчас: <b id="ap-clients-hint">—</b>), иначе пароль мог бы
+            перехватить посторонний. После сохранения связь оборвётся — подключитесь заново с новым
+            паролем. Заводские имя и пароль печатаются в консоли устройства при включении.</div>
     </div>
 
+    <!-- Файлы -->
     <div class="card">
-        <h2>Перезагрузка</h2>
-        <button class="danger" id="reboot">Перезагрузить устройство</button>
-        <div class="msg" id="reboot-msg"></div>
-        <div class="hint">Устройство перезапустится через секунду. Настройки Wi-Fi сохраняются в
-            энергонезависимой памяти и переживут перезагрузку.</div>
-    </div>
-
-    <div class="card">
-        <h2>Файлы в памяти устройства <small>LittleFS</small></h2>
+        <h2>Файлы <small>LittleFS</small></h2>
         <div class="crumbs"><span class="hint">Каталог:</span> <span id="files-path">корень</span></div>
-        <div class="row" style="margin-bottom:10px">
-            <div>
-                <label class="field" for="up-file">Загрузить новый файл</label>
-                <input type="file" id="up-file">
-            </div>
-            <div>
-                <label class="field" for="up-name">Имя в устройстве</label>
+
+        <div class="toolbar">
+            <button id="pick-btn">Выбрать файл…</button>
+            <button class="primary" id="up-btn">Загрузить</button>
+            <input type="file" id="up-file" class="hidden-file">
+            <span class="pick">выбрано: <b id="pick-name">ничего</b></span>
+        </div>
+
+        <div class="row" style="margin-top:8px">
+            <div class="grow">
+                <label class="field" for="up-name">Имя файла в устройстве</label>
                 <input type="text" id="up-name" placeholder="page.html" autocomplete="off" spellcheck="false">
             </div>
-            <button class="primary" id="up-btn">Загрузить</button>
-            <button id="files-refresh" type="button">Обновить список</button>
         </div>
         <progress id="up-progress" value="0" max="100" style="display:none"></progress>
+
+        <div class="iface">
+            <h3 class="sub">Создать каталог</h3>
+            <div class="row">
+                <div class="grow">
+                    <label class="field" for="mkdir-name">Имя каталога</label>
+                    <input type="text" id="mkdir-name" placeholder="maps" autocomplete="off" spellcheck="false">
+                </div>
+                <button id="mkdir-btn">Создать каталог</button>
+                <button id="files-refresh" type="button">Обновить список</button>
+            </div>
+        </div>
+
         <div class="msg" id="files-msg"></div>
         <table>
-            <thead><tr><th>Файл</th><th>Размер</th><th>Действия</th></tr></thead>
+            <thead><tr><th>Имя</th><th>Размер</th><th>Действия</th></tr></thead>
             <tbody id="files-body"><tr><td colspan="3" class="empty">список пуст</td></tr></tbody>
         </table>
-        <div class="hint">Файлы меняются только по WebSocket: загрузка идёт порциями (6 КБ на порцию) и
-            складывается во временный файл, который встаёт на место цели лишь после последней порции —
-            оборванная передача рабочий файл не портит. Существующий файл загрузкой заменяется целиком.
-            Ссылка на имени файла открывает его по HTTP — так же, как по HTTP отдаются страницы и карты
-            регистров. Ограничение размера одного файла — 500 КБ.</div>
+        <div class="hint">«Загрузить файл» выбирает файл на вашем компьютере, имя подставляется само —
+            его можно поправить в поле выше. Передача идёт порциями по 6 КБ и складывается во временный
+            файл, который встаёт на место цели лишь после последней порции: оборванная передача рабочий
+            файл не портит, а существующий заменяется целиком. Ограничение — 500 КБ на файл.
+            Имя файла в списке открывает его по HTTP (так же отдаются страницы и карты регистров). Каталог можно переименовать и удалить — удаляется только пустой.</div>
     </div>
 
 </div>
@@ -263,7 +263,8 @@ const WS_PORT = 81;                         // CONFIG_WEB_SOCKET_SERVER_PORT
 const FID = { STA:'wifi.sta', AP:'wifi.ap', INFO:'sys.info', REBOOT:'sys.reboot',
               FILES:'sys.files', NET:'sys.net',
               FILE_WRITE:'sys.file.write', FILE_DELETE:'sys.file.delete',
-              FILE_RENAME:'sys.file.rename' };
+              FILE_RENAME:'sys.file.rename', FILE_MKDIR:'sys.file.mkdir',
+              FILE_RMDIR:'sys.file.rmdir' };
 const MAX_UPLOAD = 500 * 1024;
 /* Сколько данных уходит в одной порции: 6 КБ — это 8 КБ base64, и запрос вместе
  * с путём и обёрткой влезает в предел сообщения транспорта (16 КБ). */
@@ -397,6 +398,9 @@ function renderInfo(i) {
     $('i-uptime').textContent = fmtUptime(i.UPTIME);
     $('i-heap').textContent = fmtBytes(i.HEAP);
     $('i-fs').textContent = `${fmtBytes(i.FS_USED)} из ${fmtBytes(i.FS_TOTAL)}`;
+    /* Режим виден по тому, есть ли адрес в чужой сети: точка доступа работает
+     * всегда, станция — только когда подключена. */
+    $('i-mode').textContent = i.STA_IP ? 'станция и точка доступа' : 'только точка доступа';
     $('fw-name').textContent = i.FW_NAME || '—';
     $('fw-version').textContent = i.FW_VERSION || '—';
     $('fw-date').textContent = i.FW_DATE || '—';
@@ -737,10 +741,10 @@ function renderFiles(f) {
         const actions = document.createElement('td');
         actions.className = 'actions';
         actions.appendChild(button('Переименовать', () => renameItem(full, item.NAME)));
-        if (!item.DIR) {
-            actions.appendChild(document.createTextNode(' '));
-            actions.appendChild(button('Удалить', () => deleteFile(full, item.NAME), 'danger'));
-        }
+        actions.appendChild(document.createTextNode(' '));
+        actions.appendChild(item.DIR
+            ? button('Удалить', () => deleteDir(full, item.NAME), 'danger')
+            : button('Удалить', () => deleteFile(full, item.NAME), 'danger'));
         tr.append(nameCell, sizeCell, actions);
         body.appendChild(tr);
     }
@@ -762,9 +766,30 @@ function button(text, onclick, cls) {
     return b;
 }
 
+/* Выбор файла: имя подставляем всегда (раньше — только если поле пустое, из-за
+ * чего после первой загрузки подставлялось старое имя), и показываем, что выбрано. */
+$('pick-btn').onclick = () => $('up-file').click();
 $('up-file').onchange = () => {
     const f = $('up-file').files[0];
-    if (f && !$('up-name').value) $('up-name').value = f.name;
+    $('pick-name').textContent = f ? `${f.name} (${fmtBytes(f.size)})` : 'ничего';
+    if (f) $('up-name').value = f.name;
+};
+
+/* Создание каталога в текущем каталоге (сервис sys.file.mkdir) */
+$('mkdir-btn').onclick = async () => {
+    const name = $('mkdir-name').value.trim();
+    if (!name) { msg('files-msg', 'Укажите имя каталога', 'err'); return; }
+    if (/[\/\\ ]/.test(name)) { msg('files-msg', 'Имя не должно содержать пробелов и «/»', 'err'); return; }
+    const target = fsJoin(curPath, name);
+    msg('files-msg', `Создаём каталог ${target}…`, 'warn');
+    const { resp, sta } = await request(FID.FILE_MKDIR, { PATH: target });
+    if (sta === 0) {
+        msg('files-msg', `Каталог ${target} создан`, 'ok');
+        $('mkdir-name').value = '';
+        refreshFiles();
+    } else {
+        msg('files-msg', `Каталог не создан: ${describe(resp, sta)}`, 'err');
+    }
 };
 
 /* ── передача файла порциями ────────────────────────────────────────────── */
@@ -835,6 +860,7 @@ $('up-btn').onclick = async () => {
     msg('files-msg', `Файл ${target} загружен (${fmtBytes(file.size)})`, 'ok');
     $('up-file').value = '';
     $('up-name').value = '';
+    $('pick-name').textContent = 'ничего';
     refreshFiles();
 };
 
@@ -847,6 +873,19 @@ async function deleteFile(full, name) {
         refreshFiles();
     } else {
         msg('files-msg', `Файл ${name} не удалён: ${describe(resp, sta)}`, 'err');
+    }
+}
+
+/* Удаление каталога: сервис сам откажет, если внутри что-то есть */
+async function deleteDir(full, name) {
+    if (!confirm(`Удалить каталог ${name}? Он должен быть пустым.`)) return;
+    msg('files-msg', `Удаляем каталог ${name}…`, 'warn');
+    const { resp, sta } = await request(FID.FILE_RMDIR, { PATH: full });
+    if (sta === 0) {
+        msg('files-msg', `Каталог ${name} удалён`, 'ok');
+        refreshFiles();
+    } else {
+        msg('files-msg', `Каталог не удалён: ${describe(resp, sta)}`, 'err');
     }
 }
 

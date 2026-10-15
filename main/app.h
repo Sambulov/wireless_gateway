@@ -168,6 +168,8 @@ void net_format_ip4(uint32_t ip, char *out, size_t out_size);
 #define ESP_WS_API_SYS_FILE_WRITE    "sys.file.write"
 #define ESP_WS_API_SYS_FILE_DELETE   "sys.file.delete"
 #define ESP_WS_API_SYS_FILE_RENAME   "sys.file.rename"
+#define ESP_WS_API_SYS_FILE_MKDIR    "sys.file.mkdir"
+#define ESP_WS_API_SYS_FILE_RMDIR    "sys.file.rmdir"
 #define ESP_WS_API_SYS_NET           "sys.net"
 /* Registers the system FID queue and starts the task serving it */
 esp_err_t api_sys_run(app_context_t *app);
