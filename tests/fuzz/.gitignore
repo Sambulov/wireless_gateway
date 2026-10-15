@@ -1,0 +1,15 @@
+build/
+corpus/
+corpus_seq/
+crash-*
+leak-*
+oom-*
+timeout-*
+
+# отчёты и профили покрытия — генерируются, не хранятся
+coverage_html/
+*.profraw
+*.profdata
+
+# журналы прогонов
+*.log
