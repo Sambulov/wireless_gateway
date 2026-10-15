@@ -49,6 +49,11 @@ typedef struct {
     httpd_handle_t hd;
     int fd;
     delegate_t delegate;
+    /* Через какой сетевой интерфейс пришёл клиент (GW_IFACE_*). Определяется
+     * ОДИН раз при установлении соединения: интерфейс соединения не меняется, и
+     * дёргать сеть на каждом событии незачем. Ядру это отдаётся через
+     * peer_iface(). */
+    uint32_t ulIface;
     /* Сборка СООБЩЕНИЯ из фрагментов: WebSocket разрешает резать одно сообщение
      * на кадры (первый с FIN=0, дальше продолжения). Буфер принадлежит
      * транспорту и живёт ровно до возврата из обработчика события RECEIVED. */
@@ -269,6 +274,13 @@ static int32_t wsHttpdPeerId(const void *self) {
     return conn ? conn->fd : -1;
 }
 
+/* Интерфейс соединения — свойство дескриптора, а не сокета: посчитан при
+ * установлении (pxConnOpen). */
+static uint32_t wsHttpdPeerIface(const void *self) {
+    const ws_transport_httpd_conn_t *conn = (const ws_transport_httpd_conn_t *)self;
+    return conn ? conn->ulIface : GW_IFACE_NONE;
+}
+
 static const ws_transport_iface_t xIface = {
     .init          = wsHttpdInit,
     .open          = wsHttpdOpen,
@@ -277,6 +289,7 @@ static const ws_transport_iface_t xIface = {
     .break_sending = wsHttpdBreakSending,
     .subscribe     = wsHttpdSubscribe,
     .peer_id       = wsHttpdPeerId,
+    .peer_iface    = wsHttpdPeerIface,
 };
 
 /* --- Приём ---------------------------------------------------------------- */
@@ -480,6 +493,9 @@ static ws_transport_httpd_conn_t *pxConnOpen(httpd_req_t *req, int fd) {
     if (!conn) return NULL;
     conn->hd = req->handle;
     conn->fd = fd;
+    /* Интерфейс выясняем здесь, один раз на соединение, — до того, как ядро
+     * заведёт по нему сессию (ESTABLISHED ниже). */
+    conn->ulIface = gw_iface_of_socket(fd);
     conn->delegate.handler = link_event_handler;
     conn->delegate.context = conn;
     socket_link_subscribe(fd, &conn->delegate);

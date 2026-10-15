@@ -21,10 +21,17 @@ typedef struct {
 
 static stub_module_t xModule;
 static ws_transport_stub_conn_t *pxConns;
+/* Интерфейс, который стаб выдаёт следующим соединениям (как настоящий
+ * транспорт — по локальному адресу сокета). По умолчанию точка доступа: тестам
+ * без политики нужен конкретный интерфейс, а не «неизвестно». */
+static uint32_t ulNextIface = GW_IFACE_AP;
 
 struct ws_transport_stub_conn {
     struct ws_transport_stub_conn *next;
     int fd;
+    /* Через какой интерфейс «пришло» соединение: ядро спрашивает это один раз
+     * при ESTABLISHED (peer_iface). */
+    uint32_t ulIface;
     /* Что возвращает begin_send (WS_TRANSPORT_OK по умолчанию). */
     ws_transport_result_t send_result;
     int deferred;
@@ -141,6 +148,13 @@ static int32_t stubPeerId(const void *self) {
     return conn ? conn->fd : -1;
 }
 
+/* Интерфейс соединения — свойство дескриптора: настоящий транспорт считает его
+ * при установлении соединения, а не на каждом событии. */
+static uint32_t stubPeerIface(const void *self) {
+    const ws_transport_stub_conn_t *conn = (const ws_transport_stub_conn_t *)self;
+    return conn ? conn->ulIface : GW_IFACE_NONE;
+}
+
 static const ws_transport_iface_t xIface = {
     .init          = stubInit,
     .open          = stubOpen,
@@ -149,6 +163,7 @@ static const ws_transport_iface_t xIface = {
     .break_sending = stubBreakSending,
     .subscribe     = stubSubscribe,
     .peer_id       = stubPeerId,
+    .peer_iface    = stubPeerIface,
 };
 
 const ws_transport_iface_t *ws_transport_stub_iface(void) {
@@ -263,6 +278,9 @@ ws_transport_stub_conn_t *ws_transport_stub_connect_silent(int fd) {
     ws_transport_stub_conn_t *conn = calloc(1, sizeof(*conn));
     if(conn == NULL) return NULL;
     conn->fd = fd;
+    /* Интерфейс фиксируем здесь, как настоящий транспорт при установлении
+     * соединения: смена значения потом на уже принятую сессию не влияет. */
+    conn->ulIface = ulNextIface;
     /* По умолчанию транспорт отправку принимает: WS_TRANSPORT_INVALID — это 0,
      * то есть «по умолчанию» отказ, если поле не заполнить. */
     conn->send_result = WS_TRANSPORT_OK;
@@ -334,6 +352,16 @@ int ws_transport_stub_closed(ws_transport_stub_conn_t *conn) {
     return conn ? conn->closed : 0;
 }
 
+/* Интерфейс, который получат СЛЕДУЮЩИЕ соединения (как настоящий транспорт
+ * определяет его при установлении). Вызывать до ws_transport_stub_connect(). */
+void ws_transport_stub_set_iface(uint32_t iface) {
+    ulNextIface = iface;
+}
+
+uint32_t ws_transport_stub_conn_iface(ws_transport_stub_conn_t *conn) {
+    return conn ? conn->ulIface : GW_IFACE_NONE;
+}
+
 void ws_transport_stub_set_deferred(ws_transport_stub_conn_t *conn, int on) {
     if(conn) conn->deferred = on;
 }
@@ -376,6 +404,7 @@ void ws_transport_stub_reset(void) {
         conn = next;
     }
     pxConns = NULL;
+    ulNextIface = GW_IFACE_AP;
     memset(&xModule, 0, sizeof(xModule));
 }
 

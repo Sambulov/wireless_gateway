@@ -459,9 +459,12 @@ esp_err_t ws_modbus_run(app_context_t *app) {
     }
 
     /* Запросы к прибору идут через ядро API: оно само вызывает обработчик и в
-     * такте работы, поэтому своей задачи и очереди здесь больше нет. */
-    if (!bApiCallRegister(mb_api_handler, ESP_WS_API_UART1_MODBUS_REQ, &mb_workers[0]) ||
-        !bApiCallRegister(mb_api_handler, ESP_WS_API_UART2_MODBUS_REQ, &mb_workers[1])) {
+     * такте работы, поэтому своей задачи и очереди здесь больше нет.
+     * Контекст регистрации — рабочий поток порта: по нему обработчик понимает,
+     * каким портом управляет. Политики по интерфейсам у Modbus нет, поэтому
+     * оба FID зарегистрированы на маску «любой интерфейс». */
+    if (!bApiCallRegister(mb_api_handler, ESP_WS_API_UART1_MODBUS_REQ, GW_IFACE_MASK_ANY, &mb_workers[0]) ||
+        !bApiCallRegister(mb_api_handler, ESP_WS_API_UART2_MODBUS_REQ, GW_IFACE_MASK_ANY, &mb_workers[1])) {
         ESP_LOGE(TAG, "не удалось зарегистрировать обработчики Modbus");
         return ESP_FAIL;
     }

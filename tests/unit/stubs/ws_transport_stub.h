@@ -41,6 +41,14 @@ ws_transport_stub_conn_t *ws_transport_stub_connect(int fd);
 ws_transport_stub_conn_t *ws_transport_stub_connect_silent(int fd);
 void                      ws_transport_stub_disconnect(ws_transport_stub_conn_t *conn);
 
+/* Через какой интерфейс пришло соединение (GW_IFACE_*). Стаб, как и настоящий
+ * транспорт, фиксирует его при установлении: set_iface() задаёт интерфейс
+ * СЛЕДУЮЩИХ соединений (по умолчанию GW_IFACE_AP), iface() — что получилось у
+ * конкретного. Ядро спрашивает интерфейс один раз при ESTABLISHED (peer_iface),
+ * поэтому менять его после connect() бессмысленно. */
+void     ws_transport_stub_set_iface(uint32_t iface);
+uint32_t ws_transport_stub_conn_iface(ws_transport_stub_conn_t *conn);
+
 /* Кадр из сети. final == 0 — сообщение продолжится (транспорт копит фрагменты). */
 void ws_transport_stub_frame(ws_transport_stub_conn_t *conn, ws_transport_stub_frame_t type,
                              const void *data, size_t len, int final);

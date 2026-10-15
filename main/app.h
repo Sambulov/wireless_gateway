@@ -123,9 +123,10 @@ void wifi_ap_credentials_default(char *ssid, size_t ssid_size, char *pass, size_
 uint8_t wifi_password_valid(const char *pass);
 /* Number of stations currently associated with the softAP (0 when AP is off). */
 uint8_t wifi_ap_clients_count(void);
-/* True when the given socket belongs to a client of our own softAP — the only
- * place from which configuration is accepted (together with "exactly one
- * client", see apih_sys.c). */
+/* True when the given socket belongs to a client of our own softAP. Политика
+ * доступа системного API на нём больше не строится: сервисы регистрируются
+ * масками интерфейсов (см. ws_transport.h и apih_sys.c). Осталось у
+ * веб-сервера: так решается, разрешён ли POST /update (web_ota.c). */
 uint8_t request_from_softap(int fd);
 
 /* Applies the IPv4 settings of both interfaces (station and access point).

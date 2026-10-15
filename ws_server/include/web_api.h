@@ -20,9 +20,11 @@ typedef struct webapi_msg {
     int      id;
     uint8_t *data;
     size_t   len;
-    /* Socket the request arrived on, -1 for messages a peripheral originates
-     * on its own. Lets a handler tell which interface a client is connected
-     * through (see request_from_softap() in main/apih_sys.c). */
+    /* Номер сокета, на котором пришёл запрос; -1 — сообщение, которое
+     * периферия породила сама. Политика доступа на нём больше НЕ строится:
+     * какие интерфейсы обслуживает сервис, решает регистрация (iface-маска), а
+     * через какой интерфейс пришёл клиент — транспорт (peer_iface). Поле
+     * оставлено для внешних подсистем, которым нужен именно сокет. */
     int      fd;
 } webapi_msg_t;
 
@@ -84,9 +86,31 @@ typedef uint8_t (*api_handler_t)(void *call, void **context, uint8_t *data, uint
 
 typedef api_handler_t ApiHandler_t;
 
-uint8_t bApiCallRegister(api_handler_t fHandler, const char *name, void *pxContext);
-uint8_t ws_server_register_fid_queue(const char *name, void *xQueue);
-uint8_t bApiCallUnregister(const char *name);
+/* Регистрация сервиса. Сервис оказывается не «вообще всем», а интерфейсам из
+ * маски: ulIfaceMask — сумма GW_IFACE_MASK(GW_IFACE_...) либо GW_IFACE_MASK_ANY.
+ *
+ * Один и тот же FID регистрируется НЕСКОЛЬКО раз — с разными масками и разными
+ * контекстами. Так один метод обслуживает разные интерфейсы по-разному: например
+ * «wifi.sta из точки доступа — можно менять», «wifi.sta из станционной сети —
+ * только читать», и обработчик по своему контексту (pxContext) знает, что ему
+ * можно. Регистрация с уже занятой парой (имя, маска) отвергается: две
+ * одинаковые пары неразличимы.
+ *
+ * Выбор регистрации при вызове:
+ *   1) маска РОВНО равна интерфейсу соединения (GW_IFACE_MASK(iface));
+ *   2) иначе — первая по порядку регистрации, чья маска этот интерфейс содержит;
+ *   3) подходящей нет — вызов получает API_CALL_ERROR_STATUS_NO_HANDLER.
+ * Интерфейс соединения неизвестен (GW_IFACE_NONE) — подходит только регистрация
+ * с маской GW_IFACE_MASK_ANY. Биты маски за пределами известных интерфейсов
+ * (GW_IFACE_LAST) не совпадут ни с чем: такой сервис не достанется никому. */
+uint8_t bApiCallRegister(api_handler_t fHandler, const char *name, uint32_t ulIfaceMask, void *pxContext);
+/* То же для очереди периферии: FID маршрутизируется в очередь того экземпляра
+ * сервиса, чья маска обслуживает интерфейс соединения (правила те же). */
+uint8_t ws_server_register_fid_queue(const char *name, uint32_t ulIfaceMask, void *xQueue);
+/* Снять регистрацию именно этой пары (имя, маска): другие экземпляры того же
+ * FID, зарегистрированные на другие интерфейсы, остаются в работе. Вызовы этого
+ * экземпляра снимаются. */
+uint8_t bApiCallUnregister(const char *name, uint32_t ulIfaceMask);
 
 /* Подключить транспорт к ядру. Ядро работает только через этот интерфейс:
  * обращений к платформе в нём нет. module — дескриптор модуля транспорта (self
@@ -106,8 +130,9 @@ uint8_t bApiCallSendJsonFidGroup(const char *name, const uint8_t *ucData, uint32
 	Snake notation
 */
 
-uint8_t api_call_register(api_handler_t handler, const char *name, void *context);
-uint8_t api_call_unregister(const char *name);
+uint8_t api_call_register(api_handler_t handler, const char *name, uint32_t iface_mask, void *context);
+uint8_t api_call_unregister(const char *name, uint32_t iface_mask);
+uint8_t api_call_register_fid_queue(const char *name, uint32_t iface_mask, void *queue);
 
 uint8_t api_call_get_id(void *call, uint32_t *out_id);
 void api_call_complete(void *call);

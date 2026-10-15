@@ -16,6 +16,9 @@ typedef struct {
     __LinkedListObject__
     ApiHandler_t fHandler;
     char fid[API_FID_NAME_MAX];
+    /* Каким интерфейсам оказан этот экземпляр сервиса. Один FID регистрируется
+     * по разу на интерфейс, поэтому маска — часть ключа регистрации. */
+    uint32_t ulIfaceMask;
     void *xHandlerContext;
 } ApiHandlerItem_t;
 
@@ -29,6 +32,11 @@ typedef struct {
      * транспорта — номер сокета). Ядро кладёт его в webapi_msg_t.fd: обработчики
      * по нему отличают запрос из softAP (request_from_softap). */
     int nPeerId;
+    /* Через какой сетевой интерфейс пришёл клиент (GW_IFACE_*). Спрашиваем
+     * транспорт один раз при установлении соединения — интерфейс соединения не
+     * меняется, и это свойство сессии, а не отдельного сообщения. По нему
+     * выбирается, чей сервис оказать вызову. */
+    uint32_t ulIface;
 } ApiSession_t;
 
 typedef enum
@@ -51,6 +59,12 @@ typedef struct {
     void *pxHandlerContext;
     ApiHandler_t fHandler;
     char fid[API_FID_NAME_MAX];
+    /* Экземпляр сервиса, который взял этот вызов: очередь периферии (NULL, если
+     * маршрут только через обработчик) и маска интерфейсов регистрации, по
+     * которой он выбран. Маска нужна позже — по ней рассылка решает, кому ответ
+     * разрешён, и по ней же снимается именно эта регистрация. */
+    void *xQueue;
+    uint32_t ulIfaceMask;
     uint32_t ulCallPending;
     /* Обработчику уже отдали первичный запрос: только после этого его можно
      * дёргать тактом работы, иначе он получит data == NULL раньше запроса. */
@@ -97,7 +111,32 @@ static LinkedList_t pxWsApiWaitingForResponse = NULL;
 static LinkedList_t pxWsSessions = NULL;
 static ws_queue_t xWsWorkerQueue = NULL;
 
-static ws_queue_t ws_get_fid_queue(const char *name);
+/* --- Интерфейсы и маски --------------------------------------------------- *
+ *
+ * Сервис API оказывается не «вообще всем», а интерфейсам из маски регистрации.
+ * Транспорт говорит, через какой интерфейс пришёл клиент (peer_iface), а
+ * регистрация — каким интерфейсам она этот сервис оказывает. Здесь только
+ * арифметика масок: что значит «маска обслуживает интерфейс» и какая
+ * регистрация точнее.
+ */
+
+/* Идентификатор интерфейса, который транспорт не обязан знать: чужое значение
+ * считаем «интерфейс неизвестен», а не мусором в сдвиге. */
+static uint32_t ulIfaceNormalize(uint32_t ulIface) {
+    return (ulIface <= GW_IFACE_LAST) ? ulIface : GW_IFACE_NONE;
+}
+
+/* Маска ровно этого интерфейса — самая точная регистрация, она выигрывает. */
+static uint8_t bIfaceMaskExact(uint32_t ulMask, uint32_t ulIface) {
+    return (ulIface != GW_IFACE_NONE) && (ulMask == GW_IFACE_MASK(ulIface));
+}
+
+/* Обслуживает ли маска этот интерфейс. Интерфейс неизвестен — неизвестно и то,
+ * что клиенту можно: подходит только регистрация «любой интерфейс». */
+static uint8_t bIfaceMaskServes(uint32_t ulMask, uint32_t ulIface) {
+    if(ulIface == GW_IFACE_NONE) return (ulMask == GW_IFACE_MASK_ANY);
+    return (ulMask & GW_IFACE_MASK(ulIface)) != 0;
+}
 
 /* --- Соединения ---------------------------------------------------------- */
 
@@ -132,9 +171,35 @@ void *get_ws_worker_queue(void) {
     return xWsWorkerQueue;
 }
 
+/* Ключ поиска регистрации: имя FID и маска интерфейсов. Пара (имя, маска) —
+ * ключ регистрации: один FID регистрируется по разу на интерфейс. */
+typedef struct {
+    const char *name;
+    uint32_t ulIfaceMask;
+} registration_key_t;
+
 static uint8_t bHandlerFidMatch(LinkedListItem_t *item, void *arg) {
-    const char *name = (const char *)arg;
-    return (name != NULL) && (strcmp(LinkedListGetObject(ApiHandlerItem_t, item)->fid, name) == 0);
+    const registration_key_t *key = (const registration_key_t *)arg;
+    ApiHandlerItem_t *hd = LinkedListGetObject(ApiHandlerItem_t, item);
+    return (key->name != NULL) && (strcmp(hd->fid, key->name) == 0) &&
+           (hd->ulIfaceMask == key->ulIfaceMask);
+}
+
+/* Регистрация, которой этот вызов будет отдан: сначала точная маска
+ * (ровно интерфейс соединения), затем первая по порядку регистрации, чья маска
+ * интерфейс содержит. NULL — сервис этому соединению не оказан. */
+static ApiHandlerItem_t *pxHandlerFind(const char *name, uint32_t ulIface) {
+    ApiHandlerItem_t *broad = NULL;
+    LinkedListItem_t *item = pxLinkedListFindFirst(pxWsApiHandlers, NULL, NULL);
+    while(item != NULL) {
+        ApiHandlerItem_t *hd = LinkedListGetObject(ApiHandlerItem_t, item);
+        if(strcmp(hd->fid, name) == 0) {
+            if(bIfaceMaskExact(hd->ulIfaceMask, ulIface)) return hd;
+            if((broad == NULL) && bIfaceMaskServes(hd->ulIfaceMask, ulIface)) broad = hd;
+        }
+        item = pxLinkedListFindNextNoOverlap(item, NULL, NULL);
+    }
+    return broad;
 }
 
 static uint8_t bCallIdMatch(LinkedListItem_t *item, void *arg) {
@@ -142,25 +207,38 @@ static uint8_t bCallIdMatch(LinkedListItem_t *item, void *arg) {
     return (call->ulId == (uint32_t)arg) && call->session;
 }
 
+/* Рассылка по имени FID: получатель — вызов этого FID, чьё соединение
+ * обслуживается маской регистрации вызова. Сервис оказан конкретным
+ * интерфейсам, поэтому соединение с чужим интерфейсом ответа не получает.
+ *
+ * Вызов и не может появиться у соединения, которому сервис не оказан (такой
+ * запрос получил бы NO_HANDLER), — проверка держит это свойство явным и не
+ * полагается на то, что вызов уже проверили при создании. */
 static uint8_t bCallFidMatch(LinkedListItem_t *item, void *arg) {
     const char *name = (const char *)arg;
     ApiCall_t *call = LinkedListGetObject(ApiCall_t, item);
-    return (name != NULL) && (strcmp(call->fid, name) == 0) && call->session;
+    if((name == NULL) || (call->session == NULL)) return 0;
+    if(strcmp(call->fid, name) != 0) return 0;
+    return bIfaceMaskServes(call->ulIfaceMask, call->session->ulIface);
 }
 
 static void vBreakApiCallByFid(LinkedListItem_t *item, void *arg) {
-    const char *name = (const char *)arg;
+    const registration_key_t *key = (const registration_key_t *)arg;
     ApiCall_t *call = LinkedListGetObject(ApiCall_t, item);
-    if((name != NULL) && (strcmp(call->fid, name) == 0)) {
+    /* Снимаем вызовы ИМЕННО этой регистрации: тот же FID, зарегистрированный на
+     * другой интерфейс, продолжает работать. */
+    if((key->name != NULL) && (strcmp(call->fid, key->name) == 0) &&
+       (call->ulIfaceMask == key->ulIfaceMask)) {
         ws_hal_log_i(TAG, "Break call id:%lu", call->ulId);
         call->session = NULL;
     }
 }
 
-static void vBreakApiCallsByFid(uint32_t timeout_ms, const char *name) {
+static void vBreakApiCallsByReg(uint32_t timeout_ms, const char *name, uint32_t ulIfaceMask) {
+    registration_key_t key = { name, ulIfaceMask };
     if(ws_hal_mutex_take(xWsApiMutex, timeout_ms)) {
-        ulLinkedListDoForeach(pxWsApiCall, vBreakApiCallByFid, (void *)name);
-        ulLinkedListDoForeach(pxWsApiWaitingForResponse, vBreakApiCallByFid, (void *)name);
+        ulLinkedListDoForeach(pxWsApiCall, vBreakApiCallByFid, (void *)&key);
+        ulLinkedListDoForeach(pxWsApiWaitingForResponse, vBreakApiCallByFid, (void *)&key);
         ws_hal_mutex_give(xWsApiMutex);
     }
 }
@@ -199,14 +277,20 @@ static uint8_t _bCallTeardown(ApiCall_t *call) {
      * иначе он не знает, какой периферией управляет. */
 }
 
-uint8_t bApiCallRegister(ApiHandler_t fHandler, const char *name, void *pxContext) {
+uint8_t bApiCallRegister(ApiHandler_t fHandler, const char *name, uint32_t ulIfaceMask, void *pxContext) {
     char fid[API_FID_NAME_MAX];
     /* Имя обязательно: раньше «нет FID» выражалось нулевым кодом, теперь —
-     * пустой строкой или NULL, и оба случая регистрацией не считаются. */
-    if((fHandler == NULL) || !bApiFidSet(fid, name) ||
-       (!ws_hal_mutex_take(xWsApiMutex, 10))) return 0;
+     * пустой строкой или NULL, и оба случая регистрацией не считаются. Пустая
+     * маска — сервис, который не нужен ни одному интерфейсу: это ошибка
+     * регистрации, а не «сервис для всех» (для всех — GW_IFACE_MASK_ANY). */
+    if((fHandler == NULL) || !bApiFidSet(fid, name) || (ulIfaceMask == GW_IFACE_MASK_NONE)) return 0;
+    if(!ws_hal_mutex_take(xWsApiMutex, 10)) return 0;
 
-    ApiHandlerItem_t *registered = LinkedListGetObject(ApiHandlerItem_t, pxLinkedListFindFirst(pxWsApiHandlers, bHandlerFidMatch, (void *)fid));
+    /* Пара (имя, маска) уже занята — это неразличимая регистрация; тот же FID с
+     * другой маской регистрируется свободно (см. web_api.h). */
+    registration_key_t key = { fid, ulIfaceMask };
+    ApiHandlerItem_t *registered = LinkedListGetObject(ApiHandlerItem_t,
+        pxLinkedListFindFirst(pxWsApiHandlers, bHandlerFidMatch, (void *)&key));
     if(registered != NULL) {
         ws_hal_mutex_give(xWsApiMutex);
         return 0;
@@ -218,22 +302,27 @@ uint8_t bApiCallRegister(ApiHandler_t fHandler, const char *name, void *pxContex
     }
     hd->fHandler = fHandler;
     mem_cpy(hd->fid, fid, sizeof(hd->fid));
+    hd->ulIfaceMask = ulIfaceMask;
     hd->xHandlerContext = pxContext;
     vLinkedListInsertLast(&pxWsApiHandlers, LinkedListItem(hd));
-    ws_hal_log_i(TAG, "Api handler registered %s", hd->fid);
+    ws_hal_log_i(TAG, "Api handler registered %s (iface mask 0x%08lx)", hd->fid,
+                 (unsigned long)hd->ulIfaceMask);
     ws_hal_mutex_give(xWsApiMutex);
     return 1;
 }
 
-uint8_t bApiCallUnregister(const char *name) {
+uint8_t bApiCallUnregister(const char *name, uint32_t ulIfaceMask) {
     char fid[API_FID_NAME_MAX];
     if(!bApiFidSet(fid, name) ||
        (!ws_hal_mutex_take(xWsApiMutex, 10))) return 0;
-    ApiHandlerItem_t *registered = LinkedListGetObject(ApiHandlerItem_t, pxLinkedListFindFirst(pxWsApiHandlers, bHandlerFidMatch, (void *)fid));
+    registration_key_t key = { fid, ulIfaceMask };
+    ApiHandlerItem_t *registered = LinkedListGetObject(ApiHandlerItem_t,
+        pxLinkedListFindFirst(pxWsApiHandlers, bHandlerFidMatch, (void *)&key));
     if(registered != NULL) {
-        vBreakApiCallsByFid(WS_HAL_WAIT_NONE, fid);
+        vBreakApiCallsByReg(WS_HAL_WAIT_NONE, fid, ulIfaceMask);
         vLinkedListUnlink(LinkedListItem(registered));
-        ws_hal_log_i(TAG, "Api handler unregistered %s", registered->fid);
+        ws_hal_log_i(TAG, "Api handler unregistered %s (iface mask 0x%08lx)", registered->fid,
+                     (unsigned long)registered->ulIfaceMask);
         free(registered);
         ws_hal_mutex_give(xWsApiMutex);
         return 1;
@@ -374,22 +463,43 @@ uint8_t bApiCallSendJsonFidGroup(const char *name, const uint8_t *ucJson, uint32
 typedef struct {
     __LinkedListObject__
     char fid[API_FID_NAME_MAX];
+    /* Каким интерфейсам оказан этот экземпляр сервиса (см. bApiCallRegister) */
+    uint32_t ulIfaceMask;
     void *xQueue;
 } FidQueueItem_t;
 
 static LinkedList_t pxWsFidQueues = NULL;
 
 static uint8_t bFidQueueMatch(LinkedListItem_t *item, void *arg) {
-    const char *name = (const char *)arg;
-    return (name != NULL) && (strcmp(LinkedListGetObject(FidQueueItem_t, item)->fid, name) == 0);
+    const registration_key_t *key = (const registration_key_t *)arg;
+    FidQueueItem_t *fq = LinkedListGetObject(FidQueueItem_t, item);
+    return (key->name != NULL) && (strcmp(fq->fid, key->name) == 0) &&
+           (fq->ulIfaceMask == key->ulIfaceMask);
 }
 
-uint8_t ws_server_register_fid_queue(const char *name, void *xQueue) {
+/* Очередь, которой отдаётся вызов: правила те же, что у обработчиков — точная
+ * маска, затем первая подходящая. */
+static FidQueueItem_t *pxFidQueueFind(const char *name, uint32_t ulIface) {
+    FidQueueItem_t *broad = NULL;
+    LinkedListItem_t *item = pxLinkedListFindFirst(pxWsFidQueues, NULL, NULL);
+    while(item != NULL) {
+        FidQueueItem_t *fq = LinkedListGetObject(FidQueueItem_t, item);
+        if(name && strcmp(fq->fid, name) == 0) {
+            if(bIfaceMaskExact(fq->ulIfaceMask, ulIface)) return fq;
+            if((broad == NULL) && bIfaceMaskServes(fq->ulIfaceMask, ulIface)) broad = fq;
+        }
+        item = pxLinkedListFindNextNoOverlap(item, NULL, NULL);
+    }
+    return broad;
+}
+
+uint8_t ws_server_register_fid_queue(const char *name, uint32_t ulIfaceMask, void *xQueue) {
     char fid[API_FID_NAME_MAX];
-    if(!bApiFidSet(fid, name) || !xQueue) return 0;
+    if(!bApiFidSet(fid, name) || !xQueue || (ulIfaceMask == GW_IFACE_MASK_NONE)) return 0;
     if(!ws_hal_mutex_take(xWsApiMutex, 10)) return 0;
+    registration_key_t key = { fid, ulIfaceMask };
     FidQueueItem_t *existing = LinkedListGetObject(FidQueueItem_t,
-        pxLinkedListFindFirst(pxWsFidQueues, bFidQueueMatch, (void *)fid));
+        pxLinkedListFindFirst(pxWsFidQueues, bFidQueueMatch, (void *)&key));
     if(existing) {
         ws_hal_mutex_give(xWsApiMutex);
         return 0;
@@ -400,18 +510,13 @@ uint8_t ws_server_register_fid_queue(const char *name, void *xQueue) {
         return 0;
     }
     mem_cpy(fq->fid, fid, sizeof(fq->fid));
+    fq->ulIfaceMask = ulIfaceMask;
     fq->xQueue = xQueue;
     vLinkedListInsertLast(&pxWsFidQueues, LinkedListItem(fq));
-    ws_hal_log_i(TAG, "FID queue registered %s", fq->fid);
+    ws_hal_log_i(TAG, "FID queue registered %s (iface mask 0x%08lx)", fq->fid,
+                 (unsigned long)fq->ulIfaceMask);
     ws_hal_mutex_give(xWsApiMutex);
     return 1;
-}
-
-static ws_queue_t ws_get_fid_queue(const char *name) {
-    if(!name || !name[0]) return NULL;
-    FidQueueItem_t *fq = LinkedListGetObject(FidQueueItem_t,
-        pxLinkedListFindFirst(pxWsFidQueues, bFidQueueMatch, (void *)name));
-    return fq ? fq->xQueue : NULL;
 }
 
 /* --- События транспорта --------------------------------------------------- */
@@ -436,12 +541,17 @@ static ws_transport_result_t bSessionOpen(const void *self) {
     sess->self    = self;
     sess->nPeerId = ((xTransport.iface != NULL) && (xTransport.iface->peer_id != NULL))
                   ? (int)xTransport.iface->peer_id(self) : -1;
+    /* Интерфейс соединения спрашиваем у транспорта здесь и один раз: дальше это
+     * свойство сессии, по которому выбирается, чей сервис оказать вызову. */
+    sess->ulIface = ((xTransport.iface != NULL) && (xTransport.iface->peer_iface != NULL))
+                  ? ulIfaceNormalize(xTransport.iface->peer_iface(self)) : GW_IFACE_NONE;
 
     ws_hal_mutex_take(xWsApiMutex, WS_HAL_WAIT_FOREVER);
     vLinkedListInsertLast(&pxWsSessions, LinkedListItem(sess));
     ws_hal_mutex_give(xWsApiMutex);
 
-    ws_hal_log_i(TAG, "Connection established (id=%d), session=%p", sess->nPeerId, (void *)sess);
+    ws_hal_log_i(TAG, "Connection established (id=%d, iface=%lu), session=%p", sess->nPeerId,
+                 (unsigned long)sess->ulIface, (void *)sess);
     return WS_TRANSPORT_OK;
 }
 
@@ -652,18 +762,24 @@ static void vSessionOnMessage(ApiSession_t *sess, const void *data, uint32_t len
 
     ws_hal_mutex_take(xWsApiMutex, WS_HAL_WAIT_FOREVER);
 
-    /* Bind handler if registered; queue-routed FIDs may have no handler */
-    ApiHandlerItem_t *hlr = LinkedListGetObject(ApiHandlerItem_t,
-                                                pxLinkedListFindFirst(pxWsApiHandlers,
-                                                                      bHandlerFidMatch,
-                                                                      (void *)wscd->fid));
-    uint8_t has_queue = (ws_get_fid_queue(wscd->fid) != NULL);
-    if(!hlr && !has_queue) {
-        ws_hal_log_w(TAG, "No handler or queue for FID %s, dropping call id:%lu", wscd->fid, wscd->ulId);
+    /* Bind handler if registered; queue-routed FIDs may have no handler.
+     * Сервис выбирается по интерфейсу соединения: у одного FID бывает
+     * несколько регистраций — по одной на интерфейс. Нет подходящей ни среди
+     * обработчиков, ни среди очередей — вызов получает NO_HANDLER (а не
+     * «молча ничего»). */
+    ApiHandlerItem_t *hlr = pxHandlerFind(wscd->fid, sess->ulIface);
+    FidQueueItem_t *fq = pxFidQueueFind(wscd->fid, sess->ulIface);
+    if(!hlr && !fq) {
+        ws_hal_log_w(TAG, "No handler or queue for FID %s (iface %lu), dropping call id:%lu",
+                     wscd->fid, (unsigned long)sess->ulIface, wscd->ulId);
         bApiCallSendStatus(wscd, API_CALL_ERROR_STATUS_NO_HANDLER);
         free(wscd->pucReqData);
         free(wscd);
     } else {
+        /* Экземпляр сервиса, взявший вызов: очередь (если есть) и маска его
+         * регистрации — по ней потом и рассылка, и снятие. */
+        wscd->xQueue      = fq ? fq->xQueue : NULL;
+        wscd->ulIfaceMask = fq ? fq->ulIfaceMask : hlr->ulIfaceMask;
         if(hlr) {
             wscd->fHandler         = hlr->fHandler;
             wscd->pxHandlerContext = hlr->xHandlerContext;
@@ -885,7 +1001,10 @@ static void vWsApiCallWorkerStep(void) {
                 continue;
             }
 
-            ws_queue_t queue = ws_get_fid_queue(call->fid);
+            /* Очередь того экземпляра сервиса, который взял этот вызов при
+             * разборе запроса (см. vSessionOnMessage): маска интерфейсов уже
+             * учтена, повторно искать по имени нельзя — у FID их несколько. */
+            ws_queue_t queue = call->xQueue;
             if(queue) {
                 vForwardCallToPeripheral(call, queue);
                 vLinkedListInsertLast(&pxWsApiWaitingForResponse, item);
@@ -1079,8 +1198,9 @@ void ws_server_test_reset(void) {
 #endif
 
 
-uint8_t api_call_register(api_handler_t, const char *, void *) __attribute__ ((alias ("bApiCallRegister")));
-uint8_t api_call_unregister(const char *) __attribute__ ((alias ("bApiCallUnregister")));
+uint8_t api_call_register(api_handler_t, const char *, uint32_t, void *) __attribute__ ((alias ("bApiCallRegister")));
+uint8_t api_call_unregister(const char *, uint32_t) __attribute__ ((alias ("bApiCallUnregister")));
+uint8_t api_call_register_fid_queue(const char *, uint32_t, void *) __attribute__ ((alias ("ws_server_register_fid_queue")));
 
 uint8_t api_call_get_id(void *, uint32_t *) __attribute__ ((alias ("bApiCallGetId")));
 void api_call_complete(void *) __attribute__ ((alias ("vApiCallComplete")));

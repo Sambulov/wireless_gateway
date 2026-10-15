@@ -324,14 +324,16 @@ void ws_uart_task(void *param) {
 esp_err_t ws_uart_run(app_context_t *app)
 {
         cmd_queue = ws_hal_queue_create(10, sizeof(void *));
-        ws_server_register_fid_queue(ESP_WS_API_UART1_CNF,    cmd_queue);
-        ws_server_register_fid_queue(ESP_WS_API_UART1_RAW_RX, cmd_queue);
-        ws_server_register_fid_queue(ESP_WS_API_UART1_RAW_TX, cmd_queue);
-        ws_server_register_fid_queue(ESP_WS_API_UART1_ECHO,   cmd_queue);
-        ws_server_register_fid_queue(ESP_WS_API_UART2_CNF,    cmd_queue);
-        ws_server_register_fid_queue(ESP_WS_API_UART2_RAW_RX, cmd_queue);
-        ws_server_register_fid_queue(ESP_WS_API_UART2_RAW_TX, cmd_queue);
-        ws_server_register_fid_queue(ESP_WS_API_UART2_ECHO,   cmd_queue);
+        /* Порт и его данные доступны с любого интерфейса: политики у UART нет,
+         * поэтому одна регистрация на маску «любой интерфейс». */
+        ws_server_register_fid_queue(ESP_WS_API_UART1_CNF,    GW_IFACE_MASK_ANY, cmd_queue);
+        ws_server_register_fid_queue(ESP_WS_API_UART1_RAW_RX, GW_IFACE_MASK_ANY, cmd_queue);
+        ws_server_register_fid_queue(ESP_WS_API_UART1_RAW_TX, GW_IFACE_MASK_ANY, cmd_queue);
+        ws_server_register_fid_queue(ESP_WS_API_UART1_ECHO,   GW_IFACE_MASK_ANY, cmd_queue);
+        ws_server_register_fid_queue(ESP_WS_API_UART2_CNF,    GW_IFACE_MASK_ANY, cmd_queue);
+        ws_server_register_fid_queue(ESP_WS_API_UART2_RAW_RX, GW_IFACE_MASK_ANY, cmd_queue);
+        ws_server_register_fid_queue(ESP_WS_API_UART2_RAW_TX, GW_IFACE_MASK_ANY, cmd_queue);
+        ws_server_register_fid_queue(ESP_WS_API_UART2_ECHO,   GW_IFACE_MASK_ANY, cmd_queue);
 
         uart_context[0].buf = uart1_buf;
         uart_context[0].amount = 0;

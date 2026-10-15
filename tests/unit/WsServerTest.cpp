@@ -48,6 +48,19 @@
  * [x] bApiCallGetId — NULL call → fails
  * [x] bApiCallGetId — NULL out_id → fails
  *
+ * Сервисы по сетевым интерфейсам (регистрация с маской):
+ * [x] Один FID на два интерфейса → два разных обработчика по контексту
+ * [x] Точная маска выигрывает у «любой»
+ * [x] Интерфейс без регистрации → NO_HANDLER (обработчик не зовётся)
+ * [x] Интерфейс неизвестен → подходит только регистрация «любой»
+ * [x] Транспорт без peer_iface → интерфейс неизвестен (только «любой»)
+ * [x] Рассылка по FID не уходит сессии с чужим интерфейсом
+ * [x] Очередь периферии подчиняется маске регистрации
+ * [x] Один FID с разными масками разрешён, повтор пары (имя, маска) — нет
+ * [x] Маска 0 отвергается (сервис не нужен никому)
+ * [x] Снятие регистрации снимает только свою пару (имя, маска)
+ * [x] Стаб транспорта задаёт интерфейс соединения
+ *
  * Regression (built with ASan/UBSan, see Makefile):
  * [x] Отправка не прошла у снятого вызова → нет записи через NULL-сессию
  * [x] TO_DELETE followed by same fid/SID call → both freed, no UAF
@@ -155,17 +168,17 @@ TEST_GROUP(WsServerRegister) {
 };
 
 TEST(WsServerRegister, ValidHandlerSucceeds) {
-    LONGS_EQUAL(1, bApiCallRegister(dummy_handler, "reg.one", NULL));
+    LONGS_EQUAL(1, bApiCallRegister(dummy_handler, "reg.one", GW_IFACE_MASK_ANY, NULL));
 }
 
 TEST(WsServerRegister, NullHandlerFails) {
-    LONGS_EQUAL(0, bApiCallRegister(NULL, "reg.one", NULL));
+    LONGS_EQUAL(0, bApiCallRegister(NULL, "reg.one", GW_IFACE_MASK_ANY, NULL));
 }
 
 TEST(WsServerRegister, EmptyNameFails) {
     /* Пустое имя — это «FID не задан»: раньше таким признаком был нулевой код */
-    LONGS_EQUAL(0, bApiCallRegister(dummy_handler, "", NULL));
-    LONGS_EQUAL(0, bApiCallRegister(dummy_handler, NULL, NULL));
+    LONGS_EQUAL(0, bApiCallRegister(dummy_handler, "", GW_IFACE_MASK_ANY, NULL));
+    LONGS_EQUAL(0, bApiCallRegister(dummy_handler, NULL, GW_IFACE_MASK_ANY, NULL));
 }
 
 TEST(WsServerRegister, TooLongNameFails) {
@@ -174,27 +187,27 @@ TEST(WsServerRegister, TooLongNameFails) {
     char long_name[API_FID_NAME_MAX + 8];
     memset(long_name, 'a', sizeof(long_name) - 1);
     long_name[sizeof(long_name) - 1] = '\0';
-    LONGS_EQUAL(0, bApiCallRegister(dummy_handler, long_name, NULL));
+    LONGS_EQUAL(0, bApiCallRegister(dummy_handler, long_name, GW_IFACE_MASK_ANY, NULL));
 }
 
 TEST(WsServerRegister, DuplicateNameFails) {
-    bApiCallRegister(dummy_handler, "reg.two", NULL);
-    LONGS_EQUAL(0, bApiCallRegister(dummy_handler, "reg.two", NULL));
+    bApiCallRegister(dummy_handler, "reg.two", GW_IFACE_MASK_ANY, NULL);
+    LONGS_EQUAL(0, bApiCallRegister(dummy_handler, "reg.two", GW_IFACE_MASK_ANY, NULL));
 }
 
 TEST(WsServerRegister, UnregisterKnownNameSucceeds) {
-    bApiCallRegister(dummy_handler, "reg.three", NULL);
-    LONGS_EQUAL(1, bApiCallUnregister("reg.three"));
+    bApiCallRegister(dummy_handler, "reg.three", GW_IFACE_MASK_ANY, NULL);
+    LONGS_EQUAL(1, bApiCallUnregister("reg.three", GW_IFACE_MASK_ANY));
 }
 
 TEST(WsServerRegister, UnregisterUnknownNameFails) {
-    LONGS_EQUAL(0, bApiCallUnregister("reg.unknown"));
+    LONGS_EQUAL(0, bApiCallUnregister("reg.unknown", GW_IFACE_MASK_ANY));
 }
 
 TEST(WsServerRegister, ReregisterAfterUnregisterSucceeds) {
-    bApiCallRegister(dummy_handler, "reg.four", NULL);
-    bApiCallUnregister("reg.four");
-    LONGS_EQUAL(1, bApiCallRegister(dummy_handler, "reg.four", NULL));
+    bApiCallRegister(dummy_handler, "reg.four", GW_IFACE_MASK_ANY, NULL);
+    bApiCallUnregister("reg.four", GW_IFACE_MASK_ANY);
+    LONGS_EQUAL(1, bApiCallRegister(dummy_handler, "reg.four", GW_IFACE_MASK_ANY, NULL));
 }
 
 /* ── TEST_GROUP: Подключение транспорта ───────────────────────────────── */
@@ -248,7 +261,7 @@ TEST(WsServerConnect, EstablishedBindsSessionToDescriptor) {
 }
 
 TEST(WsServerConnect, ClosedReleasesSessionAndItsCalls) {
-    bApiCallRegister(dummy_handler, "conn.calls", NULL);
+    bApiCallRegister(dummy_handler, "conn.calls", GW_IFACE_MASK_ANY, NULL);
     send_text(conn, "{\"FID\":\"conn.calls\",\"FLAGS\":0,\"SID\":1}");
 
     ws_transport_stub_disconnect(conn);
@@ -332,7 +345,7 @@ TEST(WsServerFrame, TextMissingFlagsSendsBadReq) {
 TEST(WsServerFrame, TextWithoutSidIsAccepted) {
     /* SID назначает клиент и он необязателен: сервер лишь повторяет его в
      * ответе, если тот был. Сообщение без SID — полноценный запрос. */
-    bApiCallRegister(dummy_handler, "frm.sid", NULL);
+    bApiCallRegister(dummy_handler, "frm.sid", GW_IFACE_MASK_ANY, NULL);
     send_text(conn, "{\"FID\":\"frm.sid\",\"FLAGS\":0}");
     LONGS_EQUAL(0, ws_transport_stub_send_attempts(conn));
 }
@@ -345,7 +358,7 @@ TEST(WsServerFrame, TextUnregisteredFidSendsNoHandler) {
 TEST(WsServerFrame, TextRegisteredHandlerEnqueuesCallNoImmediateSend) {
     /* Handler is registered: call goes into the work queue.
      * The worker task is stubbed out — no DELIVERED status yet. */
-    bApiCallRegister(dummy_handler, "frm.one", NULL);
+    bApiCallRegister(dummy_handler, "frm.one", GW_IFACE_MASK_ANY, NULL);
     send_text(conn, "{\"FID\":\"frm.one\",\"FLAGS\":0,\"SID\":5}");
     LONGS_EQUAL(0, ws_transport_stub_send_attempts(conn));
 }
@@ -353,7 +366,7 @@ TEST(WsServerFrame, TextRegisteredHandlerEnqueuesCallNoImmediateSend) {
 TEST(WsServerFrame, NumericFidIsRejected) {
     /* Протокол работает только с именами: число в FID — не имя, сообщение
      * отклоняется молча, как и любое другое без корректного FID. */
-    bApiCallRegister(dummy_handler, "frm.numeric", NULL);
+    bApiCallRegister(dummy_handler, "frm.numeric", GW_IFACE_MASK_ANY, NULL);
     send_text(conn, "{\"FID\":0,\"FLAGS\":0,\"SID\":1}");
     LONGS_EQUAL(0, ws_transport_stub_send_attempts(conn));
     send_text(conn, "{\"FID\":8194,\"FLAGS\":0,\"SID\":1}");
@@ -374,7 +387,7 @@ static uint8_t answer_handler(void *call, void **ctx, uint8_t *data, uint32_t le
 
 TEST(WsServerFrame, ReplyCarriesSameFidName) {
     /* Клиент присылает имя — сервер возвращает ровно его же, а не код. */
-    bApiCallRegister(answer_handler, "uart2.modbus", NULL);
+    bApiCallRegister(answer_handler, "uart2.modbus", GW_IFACE_MASK_ANY, NULL);
     send_text(conn, "{\"FID\":\"uart2.modbus\",\"FLAGS\":0,\"SID\":9}");
     ws_server_test_worker_step();
     STRCMP_CONTAINS("\"FID\":\"uart2.modbus\"", ws_transport_stub_last_sent(conn));
@@ -392,7 +405,7 @@ TEST(WsServerFrame, TooLongFidNameInFrameIsRejected) {
 TEST(WsServerFrame, NameMatchesExactly) {
     /* Имя ищется целиком: другой регистр или лишний символ — это другой вызов,
      * и сервер обязан ответить NO_HANDLER, а не отдать его этому обработчику. */
-    bApiCallRegister(dummy_handler, "uart2.modbus", NULL);
+    bApiCallRegister(dummy_handler, "uart2.modbus", GW_IFACE_MASK_ANY, NULL);
     send_text(conn, "{\"FID\":\"UART2.MODBUS\",\"FLAGS\":0,\"SID\":1}");
     LONGS_EQUAL(1, ws_transport_stub_send_attempts(conn));       /* NO_HANDLER */
     send_text(conn, "{\"FID\":\"uart2.modbus2\",\"FLAGS\":0,\"SID\":1}");
@@ -405,7 +418,7 @@ TEST(WsServerFrame, NameMatchesExactly) {
 
 TEST(WsServerFrame, TextNoArgFieldStillEnqueues) {
     /* ARG is optional — missing ARG should not block enqueueing */
-    bApiCallRegister(dummy_handler, "frm.noarg", NULL);
+    bApiCallRegister(dummy_handler, "frm.noarg", GW_IFACE_MASK_ANY, NULL);
     send_text(conn, "{\"FID\":\"frm.noarg\",\"FLAGS\":0,\"SID\":1}");
     LONGS_EQUAL(0, ws_transport_stub_send_attempts(conn));
 }
@@ -413,7 +426,7 @@ TEST(WsServerFrame, TextNoArgFieldStillEnqueues) {
 TEST(WsServerFrame, DisconnectedCallNoLongerReceivesBroadcast) {
     /* After disconnect, the session is released and the call is unbound.
      * Verify bCallFidMatch skips nulled sessions: targets == 0. */
-    bApiCallRegister(dummy_handler, "frm.bcast", NULL);
+    bApiCallRegister(dummy_handler, "frm.bcast", GW_IFACE_MASK_ANY, NULL);
     send_text(conn, "{\"FID\":\"frm.bcast\",\"FLAGS\":0,\"SID\":1}");
     ws_transport_stub_disconnect(conn);
     uint8_t buf[] = "{}";
@@ -440,7 +453,7 @@ TEST_GROUP(WsServerFragments) {
     void setup() {
         TRANSPORT_SETUP();
         conn = ws_transport_stub_connect(1);
-        bApiCallRegister(dummy_handler, "frag.one", NULL);
+        bApiCallRegister(dummy_handler, "frag.one", GW_IFACE_MASK_ANY, NULL);
     }
     void teardown() {
         TRANSPORT_TEARDOWN();
@@ -523,7 +536,7 @@ TEST(WsServerSend, TransferCompleteReleasesBufferForEverySubscriber) {
     /* Рассылка: один буфер на всех получателей. Освобождается по счётчику, когда
      * завершились все отправки (иначе — утечка или двойное освобождение). */
     ws_transport_stub_conn_t *conn2 = ws_transport_stub_connect(2);
-    bApiCallRegister(dummy_handler, "send.bcast", NULL);
+    bApiCallRegister(dummy_handler, "send.bcast", GW_IFACE_MASK_ANY, NULL);
     send_text(conn,  "{\"FID\":\"send.bcast\",\"FLAGS\":4,\"SID\":1}");
     send_text(conn2, "{\"FID\":\"send.bcast\",\"FLAGS\":4,\"SID\":2}");
     ws_transport_stub_set_deferred(conn, 1);
@@ -546,7 +559,7 @@ TEST(WsServerSend, TransferErrClosesConnectionAndReleasesCalls) {
     /* Отправка не прошла — соединение считаем мёртвым: ядро просит транспорт его
      * закрыть, а вызовы этого соединения снимает. */
     teardown_ask = 0;
-    bApiCallRegister(teardown_ask_handler, "send.err", NULL);
+    bApiCallRegister(teardown_ask_handler, "send.err", GW_IFACE_MASK_ANY, NULL);
     send_text(conn, "{\"FID\":\"send.err\",\"FLAGS\":4,\"SID\":1}");
 
     ws_transport_stub_set_deferred(conn, 1);
@@ -576,7 +589,7 @@ TEST(WsServerSend, TransferErrClosesConnectionAndReleasesCalls) {
 TEST(WsServerSend, SendRefusedByTransportReleasesBuffer) {
     /* Транспорт отказался принять отправку: события о завершении не будет,
      * буфер освобождает само ядро. */
-    bApiCallRegister(dummy_handler, "send.refuse", NULL);
+    bApiCallRegister(dummy_handler, "send.refuse", GW_IFACE_MASK_ANY, NULL);
     ws_transport_stub_set_send_result(conn, WS_TRANSPORT_FAULT);
     send_text(conn, "{\"FID\":\"send.refuse\",\"FLAGS\":0,\"SID\":1}");
     ws_server_test_worker_step();                    /* DELIVERED не ушёл */
@@ -607,7 +620,7 @@ TEST_GROUP(WsServerFinishRule) {
         TRANSPORT_SETUP();
         conn = ws_transport_stub_connect(1);
         slow_finish_steps = 0;
-        bApiCallRegister(slow_finish_handler, "regx.slow", NULL);
+        bApiCallRegister(slow_finish_handler, "regx.slow", GW_IFACE_MASK_ANY, NULL);
     }
     void teardown() {
         TRANSPORT_TEARDOWN();
@@ -657,7 +670,7 @@ TEST_GROUP(WsServerWorkCycle) {
 TEST(WsServerWorkCycle, HandlerGetsPulsesWithoutData) {
     /* Имя вызова и такт работы различаются только данными: такт приходит с
      * data == NULL и не несёт запроса клиента. */
-    bApiCallRegister(long_handler, "cycle.pulse", NULL);
+    bApiCallRegister(long_handler, "cycle.pulse", GW_IFACE_MASK_ANY, NULL);
     send_text(conn, "{\"FID\":\"cycle.pulse\",\"FLAGS\":0,\"SID\":1}");
     ws_server_test_worker_step();          /* первичный вызов — уже с данными */
     /* Шаг задачи сам состоит из такта работы, поэтому считаем прирост, а не
@@ -676,7 +689,7 @@ TEST(WsServerWorkCycle, FinishedCallGetsNoMorePulses) {
      * работы до него уже не доходит (иначе вызов с контекстом копился бы в
      * списке навсегда — замерено накопление 215 вызовов за минуту). */
     short_handler_pulses = 0;
-    bApiCallRegister(short_handler, "cycle.done", NULL);
+    bApiCallRegister(short_handler, "cycle.done", GW_IFACE_MASK_ANY, NULL);
     send_text(conn, "{\"FID\":\"cycle.done\",\"FLAGS\":0,\"SID\":1}");
     ws_server_test_worker_step();
     for (int i = 0; i < 3; i++) {
@@ -705,24 +718,24 @@ TEST_GROUP(WsServerFidQueue) {
 };
 
 TEST(WsServerFidQueue, RegisterNullQueueFails) {
-    LONGS_EQUAL(0, ws_server_register_fid_queue("q.null", NULL));
+    LONGS_EQUAL(0, ws_server_register_fid_queue("q.null", GW_IFACE_MASK_ANY, NULL));
 }
 
 TEST(WsServerFidQueue, RegisterQueueSucceeds) {
     void *q = ws_hal_queue_create(4, sizeof(void *));
-    LONGS_EQUAL(1, ws_server_register_fid_queue("q.one", q));
+    LONGS_EQUAL(1, ws_server_register_fid_queue("q.one", GW_IFACE_MASK_ANY, q));
 }
 
 TEST(WsServerFidQueue, RegisterDuplicateQueueFails) {
     void *q = ws_hal_queue_create(4, sizeof(void *));
-    ws_server_register_fid_queue("q.two", q);
-    LONGS_EQUAL(0, ws_server_register_fid_queue("q.two", q));
+    ws_server_register_fid_queue("q.two", GW_IFACE_MASK_ANY, q);
+    LONGS_EQUAL(0, ws_server_register_fid_queue("q.two", GW_IFACE_MASK_ANY, q));
 }
 
 TEST(WsServerFidQueue, TextWithQueuedFidEnqueuesNoImmediateSend) {
     /* Queue-routed FID: call enqueued for worker forwarding, no immediate reply */
     void *q = ws_hal_queue_create(4, sizeof(void *));
-    ws_server_register_fid_queue("q.three", q);
+    ws_server_register_fid_queue("q.three", GW_IFACE_MASK_ANY, q);
     send_text(conn, "{\"FID\":\"q.three\",\"FLAGS\":0,\"SID\":1}");
     LONGS_EQUAL(0, ws_transport_stub_send_attempts(conn));
 }
@@ -731,7 +744,7 @@ TEST(WsServerFidQueue, PeerIdReachesPeripheralMessage) {
     /* Обработчик периферии отличает запрос из softAP по webapi_msg_t.fd: ядро
      * берёт этот номер у транспорта (peer_id), а не из своего состояния. */
     void *q = ws_hal_queue_create(4, sizeof(webapi_msg_t *));
-    ws_server_register_fid_queue("q.fd", q);
+    ws_server_register_fid_queue("q.fd", GW_IFACE_MASK_ANY, q);
     send_text(conn, "{\"FID\":\"q.fd\",\"FLAGS\":0,\"SID\":1}");
     ws_server_test_worker_step();
 
@@ -741,6 +754,245 @@ TEST(WsServerFidQueue, PeerIdReachesPeripheralMessage) {
     LONGS_EQUAL(1, msg->fd);
     free(msg->data);
     free(msg);
+}
+
+/* ── TEST_GROUP: Сервисы по сетевым интерфейсам ────────────────────────── */
+
+/* Два обработчика одного метода: по одному на интерфейс. В тестах видно, какой
+ * из них вызван и с каким контекстом регистрации (по нему обработчик и понимает,
+ * через какой интерфейс его позвали). */
+static int  iface_ap_calls, iface_other_calls;
+static void *iface_ap_ctx_seen, *iface_other_ctx_seen;
+
+static uint8_t iface_ap_handler(void *call, void **ctx, uint8_t *data, uint32_t len) {
+    (void)call; (void)data; (void)len;
+    iface_ap_calls++;
+    iface_ap_ctx_seen = *ctx;
+    return 0;
+}
+
+static uint8_t iface_other_handler(void *call, void **ctx, uint8_t *data, uint32_t len) {
+    (void)call; (void)data; (void)len;
+    iface_other_calls++;
+    iface_other_ctx_seen = *ctx;
+    return 0;
+}
+
+TEST_GROUP(WsServerIface) {
+    ws_transport_stub_conn_t *ap_conn;
+    ws_transport_stub_conn_t *sta_conn;
+    /* Контексты регистрации: у каждого экземпляра сервиса свой. */
+    int ctx_ap, ctx_other;
+    void setup() {
+        TRANSPORT_SETUP();
+        ws_transport_stub_set_iface(GW_IFACE_AP);
+        ap_conn = ws_transport_stub_connect(1);
+        ws_transport_stub_set_iface(GW_IFACE_STA);
+        sta_conn = ws_transport_stub_connect(2);
+        iface_ap_calls = iface_other_calls = 0;
+        iface_ap_ctx_seen = iface_other_ctx_seen = NULL;
+    }
+    void teardown() {
+        TRANSPORT_TEARDOWN();
+    }
+};
+
+TEST(WsServerIface, SameFidServesEachInterfaceByItsOwnRegistration) {
+    /* Один метод зарегистрирован дважды: для точки доступа и для любого другого
+     * интерфейса. Клиент точки доступа получает свой экземпляр сервиса, клиент
+     * станционной сети — свой, и обработчик узнаёт интерфейс по контексту. */
+    LONGS_EQUAL(1, bApiCallRegister(iface_ap_handler, "iface.fid", GW_IFACE_MASK(GW_IFACE_AP), &ctx_ap));
+    LONGS_EQUAL(1, bApiCallRegister(iface_other_handler, "iface.fid", GW_IFACE_MASK_ANY, &ctx_other));
+
+    send_text(ap_conn, "{\"FID\":\"iface.fid\",\"FLAGS\":0,\"SID\":1}");
+    ws_server_test_worker_step();
+    LONGS_EQUAL(1, iface_ap_calls);
+    LONGS_EQUAL(0, iface_other_calls);
+    CHECK(iface_ap_ctx_seen == &ctx_ap);
+
+    send_text(sta_conn, "{\"FID\":\"iface.fid\",\"FLAGS\":0,\"SID\":2}");
+    ws_server_test_worker_step();
+    LONGS_EQUAL(1, iface_ap_calls);
+    LONGS_EQUAL(1, iface_other_calls);
+    CHECK(iface_other_ctx_seen == &ctx_other);
+}
+
+TEST(WsServerIface, ExactMaskWinsOverAnyMask) {
+    /* Точная маска точнее «любой»: клиент точки доступа получает экземпляр,
+     * зарегистрированный именно на AP, даже если «любой» зарегистрирован
+     * раньше (порядок регистрации решает только между равными по точности). */
+    LONGS_EQUAL(1, bApiCallRegister(iface_other_handler, "iface.exact", GW_IFACE_MASK_ANY, &ctx_other));
+    LONGS_EQUAL(1, bApiCallRegister(iface_ap_handler, "iface.exact", GW_IFACE_MASK(GW_IFACE_AP), &ctx_ap));
+
+    send_text(ap_conn, "{\"FID\":\"iface.exact\",\"FLAGS\":0,\"SID\":1}");
+    ws_server_test_worker_step();
+    LONGS_EQUAL(1, iface_ap_calls);
+    LONGS_EQUAL(0, iface_other_calls);
+
+    /* А клиенту станционной сети точной регистрации нет — подходит «любой». */
+    send_text(sta_conn, "{\"FID\":\"iface.exact\",\"FLAGS\":0,\"SID\":2}");
+    ws_server_test_worker_step();
+    LONGS_EQUAL(1, iface_other_calls);
+}
+
+TEST(WsServerIface, CallFromUnservedInterfaceGetsNoHandler) {
+    /* FID зарегистрирован только для точки доступа: клиенту станционной сети
+     * сервис не оказан, и он получает внятный NO_HANDLER (отправка есть), а
+     * обработчик не вызывается вовсе. */
+    bApiCallRegister(iface_ap_handler, "iface.only.ap", GW_IFACE_MASK(GW_IFACE_AP), &ctx_ap);
+
+    send_text(sta_conn, "{\"FID\":\"iface.only.ap\",\"FLAGS\":0,\"SID\":1}");
+    LONGS_EQUAL(1, ws_transport_stub_send_attempts(sta_conn));
+    ws_server_test_worker_step();
+    LONGS_EQUAL(0, iface_ap_calls);
+    LONGS_EQUAL(0, iface_other_calls);
+}
+
+TEST(WsServerIface, UnknownInterfaceGetsOnlyAnyRegistration) {
+    /* Интерфейс соединения неизвестен: неизвестно и то, что клиенту можно —
+     * подходит только регистрация «любой интерфейс». */
+    ws_transport_stub_set_iface(GW_IFACE_NONE);
+    ws_transport_stub_conn_t *c = ws_transport_stub_connect(3);
+    LONGS_EQUAL(GW_IFACE_NONE, ws_transport_stub_conn_iface(c));
+
+    bApiCallRegister(iface_ap_handler, "iface.unknown", GW_IFACE_MASK(GW_IFACE_AP), &ctx_ap);
+    send_text(c, "{\"FID\":\"iface.unknown\",\"FLAGS\":0,\"SID\":1}");
+    LONGS_EQUAL(1, ws_transport_stub_send_attempts(c));      /* NO_HANDLER */
+
+    bApiCallRegister(iface_other_handler, "iface.unknown", GW_IFACE_MASK_ANY, &ctx_other);
+    send_text(c, "{\"FID\":\"iface.unknown\",\"FLAGS\":0,\"SID\":2}");
+    ws_server_test_worker_step();
+    LONGS_EQUAL(1, iface_other_calls);
+    LONGS_EQUAL(0, iface_ap_calls);
+}
+
+TEST(WsServerIface, TransportWithoutPeerIfaceMeansUnknownInterface) {
+    /* peer_iface может быть NULL: транспорт не умеет отвечать, через какой
+     * интерфейс пришло соединение. Ядро считает интерфейс неизвестным и
+     * обслуживает только регистрации с маской «любой интерфейс». */
+    ws_transport_iface_t plain = *ws_transport_stub_iface();
+    plain.peer_iface = NULL;
+    LONGS_EQUAL(WS_TRANSPORT_OK, ws_server_transport_attach(&plain, ws_transport_stub_module()));
+
+    bApiCallRegister(iface_ap_handler, "iface.plain", GW_IFACE_MASK(GW_IFACE_AP), &ctx_ap);
+    ws_transport_stub_set_iface(GW_IFACE_AP);
+    ws_transport_stub_conn_t *c = ws_transport_stub_connect(4);
+    send_text(c, "{\"FID\":\"iface.plain\",\"FLAGS\":0,\"SID\":1}");
+    LONGS_EQUAL(1, ws_transport_stub_send_attempts(c));      /* NO_HANDLER */
+
+    bApiCallRegister(iface_other_handler, "iface.plain", GW_IFACE_MASK_ANY, &ctx_other);
+    send_text(c, "{\"FID\":\"iface.plain\",\"FLAGS\":0,\"SID\":2}");
+    ws_server_test_worker_step();
+    LONGS_EQUAL(1, iface_other_calls);
+}
+
+TEST(WsServerIface, BroadcastReachesOnlyServicedInterfaces) {
+    /* Рассылка по FID идёт только тем сессиям, чей интерфейс разрешён маской
+     * регистрации: подписка клиента станционной сети на этот FID вообще не
+     * принимается (NO_HANDLER), а ответ получает только точка доступа. */
+    bApiCallRegister(iface_ap_handler, "iface.bcast", GW_IFACE_MASK(GW_IFACE_AP), &ctx_ap);
+
+    send_text(ap_conn, "{\"FID\":\"iface.bcast\",\"FLAGS\":4,\"SID\":1}");
+    send_text(sta_conn, "{\"FID\":\"iface.bcast\",\"FLAGS\":4,\"SID\":2}");
+    LONGS_EQUAL(1, ws_transport_stub_send_attempts(sta_conn));   /* NO_HANDLER */
+
+    const int ap_before  = ws_transport_stub_send_attempts(ap_conn);
+    const int sta_before = ws_transport_stub_send_attempts(sta_conn);
+    uint8_t buf[] = "{\"V\":1}";
+    LONGS_EQUAL(1, bApiCallSendJsonFidGroup("iface.bcast", buf, sizeof(buf) - 1));
+    LONGS_EQUAL(ap_before + 1, ws_transport_stub_send_attempts(ap_conn));
+    LONGS_EQUAL(sta_before, ws_transport_stub_send_attempts(sta_conn));
+    STRCMP_CONTAINS("\"FID\":\"iface.bcast\"", ws_transport_stub_last_sent(ap_conn));
+}
+
+TEST(WsServerIface, BroadcastWithoutServicedSessionHasNoRecipients) {
+    /* На FID, зарегистрированный только для точки доступа, подписан клиент
+     * станционной сети (подписка не принята) — рассылать некому. */
+    bApiCallRegister(iface_ap_handler, "iface.bcast2", GW_IFACE_MASK(GW_IFACE_AP), &ctx_ap);
+    send_text(sta_conn, "{\"FID\":\"iface.bcast2\",\"FLAGS\":4,\"SID\":1}");
+
+    uint8_t buf[] = "{\"V\":1}";
+    LONGS_EQUAL(0, bApiCallSendJsonFidGroup("iface.bcast2", buf, sizeof(buf) - 1));
+}
+
+TEST(WsServerIface, FidQueueRouteRespectsMask) {
+    /* Очередь периферии регистрируется с маской так же, как обработчик:
+     * вызов уходит в неё только с обслуживаемого интерфейса. */
+    void *q = ws_hal_queue_create(4, sizeof(webapi_msg_t *));
+    LONGS_EQUAL(1, ws_server_register_fid_queue("iface.q", GW_IFACE_MASK(GW_IFACE_AP), q));
+
+    send_text(sta_conn, "{\"FID\":\"iface.q\",\"FLAGS\":0,\"SID\":1}");
+    LONGS_EQUAL(1, ws_transport_stub_send_attempts(sta_conn));   /* NO_HANDLER */
+    ws_server_test_worker_step();
+    LONGS_EQUAL(0, ws_hal_stub_queue_count(q));
+
+    send_text(ap_conn, "{\"FID\":\"iface.q\",\"FLAGS\":0,\"SID\":2}");
+    ws_server_test_worker_step();
+    LONGS_EQUAL(1, ws_hal_stub_queue_count(q));
+
+    webapi_msg_t *msg = NULL;
+    while (ws_hal_queue_receive(q, &msg, WS_HAL_WAIT_NONE)) {
+        free(msg->data);
+        free(msg);
+    }
+}
+
+TEST(WsServerIface, SameFidDifferentMasksIsAllowed) {
+    /* Один FID регистрируется по разу на интерфейс; повтор пары (имя, маска) —
+     * неразличимая регистрация, её отвергаем. */
+    LONGS_EQUAL(1, bApiCallRegister(iface_ap_handler, "iface.dup", GW_IFACE_MASK(GW_IFACE_AP), &ctx_ap));
+    LONGS_EQUAL(1, bApiCallRegister(iface_other_handler, "iface.dup", GW_IFACE_MASK_ANY, &ctx_other));
+    LONGS_EQUAL(0, bApiCallRegister(iface_other_handler, "iface.dup", GW_IFACE_MASK_ANY, &ctx_other));
+    LONGS_EQUAL(0, bApiCallRegister(iface_ap_handler, "iface.dup", GW_IFACE_MASK(GW_IFACE_AP), &ctx_ap));
+}
+
+TEST(WsServerIface, ZeroMaskRegistrationIsRejected) {
+    /* Маска 0 не обслуживает никого: это ошибка регистрации, а не «сервис для
+     * всех» — для всех есть GW_IFACE_MASK_ANY. */
+    void *q = ws_hal_queue_create(4, sizeof(webapi_msg_t *));
+    LONGS_EQUAL(0, bApiCallRegister(iface_ap_handler, "iface.zero", GW_IFACE_MASK_NONE, NULL));
+    LONGS_EQUAL(0, ws_server_register_fid_queue("iface.zero", GW_IFACE_MASK_NONE, q));
+}
+
+TEST(WsServerIface, UnregisterRemovesOnlyItsOwnRegistration) {
+    /* Снятие регистрации касается только своей пары (имя, маска): тот же FID,
+     * зарегистрированный на другой интерфейс, продолжает работать. */
+    bApiCallRegister(iface_ap_handler, "iface.unreg", GW_IFACE_MASK(GW_IFACE_AP), &ctx_ap);
+    bApiCallRegister(iface_other_handler, "iface.unreg", GW_IFACE_MASK_ANY, &ctx_other);
+
+    LONGS_EQUAL(0, bApiCallUnregister("iface.unreg", GW_IFACE_MASK(GW_IFACE_STA)));  /* такой пары нет */
+    LONGS_EQUAL(1, bApiCallUnregister("iface.unreg", GW_IFACE_MASK(GW_IFACE_AP)));
+
+    /* Клиента точки доступа теперь обслуживает экземпляр «любой интерфейс». */
+    send_text(ap_conn, "{\"FID\":\"iface.unreg\",\"FLAGS\":0,\"SID\":1}");
+    ws_server_test_worker_step();
+    LONGS_EQUAL(0, iface_ap_calls);
+    LONGS_EQUAL(1, iface_other_calls);
+    CHECK(iface_other_ctx_seen == &ctx_other);
+}
+
+TEST_GROUP(WsServerIfaceStub) {
+    void setup() {
+        ws_hal_stub_reset();
+        ws_server_init();
+        ws_transport_stub_reset();
+        ws_transport_stub_attach();
+    }
+    void teardown() {
+        ws_server_test_reset();
+        ws_transport_stub_reset();
+    }
+};
+
+TEST(WsServerIfaceStub, StubReportsInterfaceSetBeforeConnect) {
+    /* Стаб транспорта умеет задавать интерфейс соединения — так же, как
+     * настоящий транспорт определяет его при установлении. */
+    ws_transport_stub_set_iface(GW_IFACE_AP);
+    ws_transport_stub_conn_t *ap = ws_transport_stub_connect(1);
+    ws_transport_stub_set_iface(GW_IFACE_STA);
+    ws_transport_stub_conn_t *sta = ws_transport_stub_connect(2);
+    LONGS_EQUAL(GW_IFACE_AP,  ws_transport_stub_conn_iface(ap));
+    LONGS_EQUAL(GW_IFACE_STA, ws_transport_stub_conn_iface(sta));
 }
 
 /* ── TEST_GROUP: WsServerMultiClient ─────────────────────────────────── */
@@ -844,8 +1096,8 @@ TEST_GROUP(WsServerRegression) {
         TRANSPORT_SETUP();
         conn = ws_transport_stub_connect(1);
         periph_q = ws_hal_queue_create(4, sizeof(webapi_msg_t *));
-        bApiCallRegister(dummy_handler, REG_FID_HANDLER, NULL);
-        ws_server_register_fid_queue(REG_FID_QUEUE, periph_q);
+        bApiCallRegister(dummy_handler, REG_FID_HANDLER, GW_IFACE_MASK_ANY, NULL);
+        ws_server_register_fid_queue(REG_FID_QUEUE, GW_IFACE_MASK_ANY, periph_q);
     }
     void teardown() {
         webapi_msg_t *msg;

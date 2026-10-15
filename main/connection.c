@@ -254,8 +254,11 @@ esp_err_t disconnect_sta_by_mac(uint8_t *mac_addr) {
 }
 
 static void ip_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data) {
-    if ((event_base == IP_EVENT) && (event_id == IP_EVENT_AP_STAIPASSIGNED)) {
-        ip_event_ap_staipassigned_t *data= (ip_event_ap_staipassigned_t *)event_data;
+    /* IDF v6 переименовала событие и его структуру (старые имена помечены
+     * deprecated, значения те же): IP_EVENT_AP_STAIPASSIGNED →
+     * IP_EVENT_ASSIGNED_IP_TO_CLIENT. */
+    if ((event_base == IP_EVENT) && (event_id == IP_EVENT_ASSIGNED_IP_TO_CLIENT)) {
+        ip_event_assigned_ip_to_client_t *data = (ip_event_assigned_ip_to_client_t *)event_data;
         ESP_LOGI(TAG, "Wi-Fi AP client assigned IP: " IPSTR " MAC: " MACSTR, IP2STR(&data->ip), MAC2STR(data->mac));
         linked_list_t item = linked_list_find_first(links_active, &link_mac_match, data->mac);
         if(!item) {
@@ -408,28 +411,50 @@ static uint32_t sockaddr_ip4(const struct sockaddr_storage *ss) {
     return 0;
 }
 
-/* True when the request arrived through our softAP: the local address of that
- * socket is the AP's own address only for clients of the AP. Used to keep
- * configuration (Wi-Fi, network, firmware) on the AP side. */
-uint8_t request_from_softap(int fd) {
-    if (fd < 0) return 0;
+/* Через какой интерфейс пришло соединение с этим сокетом. Локальный адрес
+ * сокета — адрес того интерфейса, с которого нас достигли: клиент точки доступа
+ * попал на адрес AP, клиент из сети, куда подключена наша станция, — на адрес
+ * STA. Спрашивается один раз при установлении соединения: транспорт запоминает
+ * ответ в дескрипторе и больше сеть не дёргает. */
+uint32_t gw_iface_of_socket(int fd) {
+    if (fd < 0) return GW_IFACE_NONE;
 
     struct sockaddr_storage local;
     socklen_t len = sizeof(local);
     memset(&local, 0, sizeof(local));
     if (getsockname(fd, (struct sockaddr *)&local, &len) != 0) {
         ESP_LOGW(TAG, "getsockname(%d) failed", fd);
-        return 0;
+        return GW_IFACE_NONE;
     }
 
     uint32_t local_ip = sockaddr_ip4(&local);
+    if (!local_ip) return GW_IFACE_NONE;
 
-    esp_netif_t *ap = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
-    esp_netif_ip_info_t ip;
-    if (!ap || esp_netif_get_ip_info(ap, &ip) != ESP_OK)
-        return 0;
+    /* Порядок важен только для читаемости: адреса интерфейсов не совпадают. */
+    static const struct {
+        const char *ifkey;
+        uint32_t    iface;
+    } ifaces[] = {
+        { "WIFI_AP_DEF",  GW_IFACE_AP  },
+        { "WIFI_STA_DEF", GW_IFACE_STA },
+        { "ETH_DEF",      GW_IFACE_ETH },
+    };
 
-    return (local_ip != 0) && (local_ip == ip.ip.addr);
+    for (size_t i = 0; i < sizeof(ifaces) / sizeof(ifaces[0]); i++) {
+        esp_netif_t *nif = esp_netif_get_handle_from_ifkey(ifaces[i].ifkey);
+        esp_netif_ip_info_t ip;
+        if (!nif || esp_netif_get_ip_info(nif, &ip) != ESP_OK) continue;
+        if (ip.ip.addr == local_ip) return ifaces[i].iface;
+    }
+
+    return GW_IFACE_NONE;
+}
+
+/* True when the request arrived through our softAP: the local address of that
+ * socket is the AP's own address only for clients of the AP. Used to keep
+ * configuration (Wi-Fi, network, firmware) on the AP side. */
+uint8_t request_from_softap(int fd) {
+    return gw_iface_of_socket(fd) == GW_IFACE_AP;
 }
 
 uint8_t net_parse_ip4(const char *str, uint32_t *out) {

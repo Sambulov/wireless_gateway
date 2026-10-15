@@ -23,13 +23,18 @@
 
 /* System API (FID names echo, wifi.sta/ap, sys.info/reboot/files/net, see app.h).
  *
- * ws_server only forwards a call to its handler when the response comes back
- * from a peripheral queue, so every request-serving FID needs a queue of its
- * own: the request lands here as a webapi_msg_t, this task does the work and
- * posts the answer back into the worker queue, which the framework then
- * delivers to the client as {"FID":..,"SID":..,"ARG":<json>} and completes the
- * call automatically. Answers always carry a "STA" member, error codes
- * included — see web_api.h for the API_CALL_* values. */
+ * Каждый метод — обработчик, зарегистрированный в ядре API на СВОИ интерфейсы
+ * (bApiCallRegister с маской GW_IFACE_*): сервис оказывается не «вообще всем», а
+ * тому интерфейсу, с которого пришёл клиент. Методы, которые меняют настройки,
+ * зарегистрированы ДВАЖДЫ — для точки доступа (запись разрешена) и для любого
+ * другого интерфейса (только чтение); различие передано контекстом регистрации
+ * (sys_service_t), и обработчик по нему понимает, что этому клиенту можно.
+ * Политики «по номеру сокета» здесь больше нет: сокет — дело транспорта.
+ *
+ * Ответ отправляется прямо из обработчика (bApiCallSendJson): ядро само
+ * оборачивает его в конверт {"FID":..,"SID":..,"ARG":<json>} и завершает вызов.
+ * Ответы всегда несут "STA", коды — из web_api.h (API_CALL_*). Своей очереди и
+ * задачи у системного API нет: вызов идёт по тому же контракту, что у Modbus. */
 
 #define REBOOT_DELAY_MS 1000
 
@@ -50,8 +55,6 @@
 #define SYS_NO_ACCESS   "0x80000007"
 #define SYS_INTERNAL    "0x8000000f"
 
-static ws_queue_t sys_cmd_queue = NULL;
-
 /* ── helpers ─────────────────────────────────────────────────────────────── */
 
 static void netif_ip_str(const char *ifkey, char *out, size_t out_size) {
@@ -64,13 +67,12 @@ static void netif_ip_str(const char *ifkey, char *out, size_t out_size) {
 }
 
 /* Ответ собирается прямо в буфер, без дерева и без узлов: раньше на каждый
- * объект, ключ и значение прежний сборщик делал отдельным malloc, а потом весь
+ * объект, ключ и значение прежний сборщик делал отдельный malloc, а потом весь
  * ответ печатался ещё одной аллокацией.
  *
- * Буфер статический, а не на стеке: задача обслуживает запросы по одному, а
- * стек у ws_sys всего 5 КБ, тогда как листинг каталога бывает в килобайты.
- * Единственная аллокация за ответ — копия готового текста: владение ею
- * переходит к каркасу, который её освободит. */
+ * Буфер статический, а не на стеке: обработчики обслуживаются по одному, а стек
+ * задачи ядра API 8 КБ, тогда как листинг каталога бывает в килобайты. Копию
+ * готового текста в конверт ответа делает ядро (bApiCallSendJson). */
 /* Хватает с запасом: самый большой ответ — листинг каталога (имя файла до 255
  * байт плюс размер и признак каталога, то есть ~290 байт на запись), остальные
  * ответы в сотни байт. Не влезло — отвечаем отказом NOMEM, за границу буфера не
@@ -96,69 +98,73 @@ static void resp_ok(void) {
     resp_error(SYS_OK, NULL, NULL);
 }
 
-/* Hands the answer to ws_server, which owns the buffer from here on */
-static void send_response(uint32_t id, const char *fid) {
+/* ── Экземпляры сервиса ─────────────────────────────────────────────────── *
+ *
+ * Контекст регистрации: по нему обработчик понимает, ЧЕРЕЗ КАКОЙ ИНТЕРФЕЙС его
+ * вызвали и что этому клиенту можно. Один и тот же обработчик регистрируется
+ * несколько раз — на разные интерфейсы, с разными контекстами; нужный выбирает
+ * ядро по маске регистрации (см. bApiCallRegister).
+ *
+ * Wi-Fi и сетевые настройки меняет только администратор: он подключён к точке
+ * доступа, и она — единственный клиент на радио. Клиент станционной сети
+ * перестроить шлюз не может, а пока на точке доступа двое, не может никто:
+ * второй мог бы подглядывать или вмешаться в обмен. То же условие решает,
+ * показывать ли сохранённые пароли.
+ *
+ * «Ровно один клиент на точке доступа» берётся с СЕТЕВОГО ДРАЙВЕРА
+ * (wifi_ap_clients_count), а не у транспорта: сколько станций на радио — знает
+ * Wi-Fi, а не тот, кто обслуживает соединения.
+ */
+
+typedef struct {
+    app_context_t *app;
+    uint8_t from_ap;     /* клиент пришёл через нашу точку доступа */
+    uint8_t may_change;  /* ему разрешено менять состояние (настройки, перезагрузка) */
+} sys_service_t;
+
+/* Точка доступа: администратор рядом с прибором — менять можно. Это регистрация
+ * с маской GW_IFACE_MASK(GW_IFACE_AP). */
+static sys_service_t sys_svc_ap;
+/* Любой другой интерфейс (и неизвестный): только чтение. Регистрация с маской
+ * GW_IFACE_MASK_ANY обслуживает и те соединения, чей интерфейс транспорт не
+ * определил: неизвестно, что клиенту можно, — значит показываем, но не меняем. */
+static sys_service_t sys_svc_ro;
+/* Перезагрузка — не настройка: она и раньше была доступна с любого интерфейса
+ * (кнопка на странице не зависит от CAN_CONFIGURE), и снаружи поведение не
+ * меняется. Сузить её до точки доступа — поставить здесь may_change = 0:
+ * обработчик ответит AP_ONLY. */
+static sys_service_t sys_svc_mut;
+
+/* Отдать ответ клиенту. Буфер сборщика остаётся у сервиса, а ядро получает
+ * готовый текст: оно само положит его в конверт вызова ({"FID":..,"SID":..,
+ * "ARG":<json>}) и завершит вызов. */
+static void send_response(void *call) {
     if (!gw_jsonw_ok(&sys_w)) {
         ESP_LOGE(TAG, "Ответ не влез в %d байт — отвечаю отказом", SYS_RESP_MAX);
         resp_begin();
         resp_error(SYS_NO_MEM, "NOMEM", NULL);
     }
     size_t len = gw_jsonw_finish(&sys_w);
-
-    webapi_msg_t msg = {0};
-    /* +1 и ноль на конце — как было у прежнего сборщика: каркас видит в ответе
-     * C-строку (в частности, логирует её), а длину берёт отдельно. */
-    msg.data = malloc(len + 1);
-    if (msg.data) {
-        memcpy(msg.data, sys_resp_buf, len);
-        msg.data[len] = '\0';
-        msg.len = len;
-    }
-    msg.id  = id;
-    bApiFidSet(msg.fid, fid);
-    if (!ws_hal_queue_send(get_ws_worker_queue(), &msg, WS_HAL_WAIT_NONE))
-        free(msg.data);
+    if (!bApiCallSendJson(call, (const uint8_t *)sys_resp_buf, (uint32_t)len))
+        ESP_LOGW(TAG, "Ответ клиенту не ушёл");
 }
 
-static void send_verbatim(uint32_t id, const char *fid, const uint8_t *data, uint32_t len) {
-    webapi_msg_t msg = {0};
-    static const char null_json[] = "null";
-
-    if (data && len) {
-        msg.data = malloc(len);
-        if (msg.data) {
-            memcpy(msg.data, data, len);
-            msg.len = len;
-        }
-    } else {
-        msg.data = malloc(sizeof(null_json));
-        if (msg.data) {
-            memcpy(msg.data, null_json, sizeof(null_json));
-            msg.len = sizeof(null_json) - 1;
-        }
-    }
-    msg.id  = id;
-    bApiFidSet(msg.fid, fid);
-    if (!ws_hal_queue_send(get_ws_worker_queue(), &msg, WS_HAL_WAIT_NONE))
-        free(msg.data);
+/* Условия на самом приборе: администратор — клиент точки доступа, и он там
+ * один. От интерфейса (регистрации) это не зависит: сколько станций на радио,
+ * решает драйвер. */
+static uint8_t config_allowed(const sys_service_t *svc, uint8_t clients) {
+    return svc->from_ap && (clients == 1);
 }
 
-/* ── access policy ───────────────────────────────────────────────────────── *
- * Wi-Fi, network and firmware settings can only be changed from the softAP side
- * and only while exactly one station is associated: that lone client is the
- * administrator. A client sitting in the station network cannot reconfigure the
- * gateway, and while two clients are on the AP neither of them can — somebody
- * else could be watching or racing the exchange. The same rule decides whether
- * the stored passwords are disclosed at all.
- */
-
-static uint8_t config_allowed(int fd, uint8_t clients) {
-    return request_from_softap(fd) && (clients == 1);
+/* Можно ли этому клиенту менять состояние: экземпляр сервиса это позволяет
+ * (регистрация на интерфейс) и условия на приборе выполнены. */
+static uint8_t change_allowed(const sys_service_t *svc, uint8_t clients) {
+    return svc->may_change && config_allowed(svc, clients);
 }
 
 /* Refusal that tells the page what exactly is missing */
-static void resp_denied(int fd, uint8_t clients) {
-    if (request_from_softap(fd))
+static void resp_denied(const sys_service_t *svc, uint8_t clients) {
+    if (svc->from_ap)
         resp_error(SYS_NO_ACCESS, "AP_CLIENTS",
                    "Exactly one client must be connected to the softAP");
     else
@@ -169,9 +175,10 @@ static void resp_denied(int fd, uint8_t clients) {
 
 /* ── wifi.sta: station (STA) credentials ────────────────────────────────────── */
 
-static void handle_sta(app_context_t *app, const uint8_t *data, uint32_t len, int fd) {
+static void handle_sta(const sys_service_t *svc, const uint8_t *data, uint32_t len) {
+    app_context_t *app = svc->app;
     uint8_t clients = wifi_ap_clients_count();
-    uint8_t allowed = config_allowed(fd, clients);
+    uint8_t allowed = config_allowed(svc, clients);
 
     /* A request without SSID/PASS — an empty ARG included — reads the stored
      * credentials, which is what the configuration page fills its form with.
@@ -193,15 +200,15 @@ static void handle_sta(app_context_t *app, const uint8_t *data, uint32_t len, in
         gw_jsonw_str(&sys_w, "SSID", (char *)app->sta_cnf.sta.ssid);
         gw_jsonw_str(&sys_w, "PASS", allowed ? (char *)app->sta_cnf.sta.password : "");
         gw_jsonw_bool(&sys_w, "PASS_HIDDEN", !allowed);
-        gw_jsonw_bool(&sys_w, "FROM_AP", request_from_softap(fd));
+        gw_jsonw_bool(&sys_w, "FROM_AP", svc->from_ap);
         gw_jsonw_int(&sys_w, "CLIENTS", clients);
         return;
     }
 
-    if (!allowed) {
-            ESP_LOGW(TAG, "STA credentials refused (from_ap=%u clients=%u)",
-                 request_from_softap(fd), clients);
-        resp_denied(fd, clients);
+    if (!change_allowed(svc, clients)) {
+        ESP_LOGW(TAG, "STA credentials refused (from_ap=%u clients=%u, may_change=%u)",
+                 svc->from_ap, clients, svc->may_change);
+        resp_denied(svc, clients);
         return;
     }
 
@@ -237,9 +244,10 @@ static void handle_sta(app_context_t *app, const uint8_t *data, uint32_t len, in
 
 /* ── wifi.ap: softAP credentials ───────────────────────────────────────────── */
 
-static void handle_ap(app_context_t *app, const uint8_t *data, uint32_t len, int fd) {
+static void handle_ap(const sys_service_t *svc, const uint8_t *data, uint32_t len) {
+    app_context_t *app = svc->app;
     uint8_t clients = wifi_ap_clients_count();
-    uint8_t allowed = config_allowed(fd, clients);
+    uint8_t allowed = config_allowed(svc, clients);
 
     GW_JSON_TOKENS(toks, SYS_ARG_MAX_TOKENS);
     gw_json_t json;
@@ -256,15 +264,15 @@ static void handle_ap(app_context_t *app, const uint8_t *data, uint32_t len, int
         gw_jsonw_str(&sys_w, "SSID", (char *)app->ap_cnf.ap.ssid);
         gw_jsonw_str(&sys_w, "PASS", allowed ? (char *)app->ap_cnf.ap.password : "");
         gw_jsonw_bool(&sys_w, "PASS_HIDDEN", !allowed);
-        gw_jsonw_bool(&sys_w, "FROM_AP", request_from_softap(fd));
+        gw_jsonw_bool(&sys_w, "FROM_AP", svc->from_ap);
         gw_jsonw_int(&sys_w, "CLIENTS", clients);
         return;
     }
 
-    if (!allowed) {
-            ESP_LOGW(TAG, "AP credentials refused (from_ap=%u clients=%u)",
-                 request_from_softap(fd), clients);
-        resp_denied(fd, clients);
+    if (!change_allowed(svc, clients)) {
+        ESP_LOGW(TAG, "AP credentials refused (from_ap=%u clients=%u, may_change=%u)",
+                 svc->from_ap, clients, svc->may_change);
+        resp_denied(svc, clients);
         return;
     }
 
@@ -300,11 +308,11 @@ static void handle_ap(app_context_t *app, const uint8_t *data, uint32_t len, int
 
 /* ── sys.info: device status ────────────────────────────────────────────────── */
 
-static void handle_info(app_context_t *app, int fd) {
+static void handle_info(const sys_service_t *svc) {
+    app_context_t *app = svc->app;
     uint8_t mac[6] = {0};
     char mac_ap[18], mac_sta[18], ip_sta[16], ip_ap[16];
     uint8_t clients = wifi_ap_clients_count();
-    uint8_t from_ap = request_from_softap(fd);
 
     esp_read_mac(mac, ESP_MAC_WIFI_SOFTAP);
     snprintf(mac_ap, sizeof(mac_ap), MACSTR, MAC2STR(mac));
@@ -323,9 +331,9 @@ static void handle_info(app_context_t *app, int fd) {
     gw_jsonw_str(&sys_w, "AP_SSID", (char *)app->ap_cnf.ap.ssid);
     gw_jsonw_str(&sys_w, "AP_IP", ip_ap);
     gw_jsonw_int(&sys_w, "AP_CLIENTS", clients);
-    gw_jsonw_bool(&sys_w, "FROM_AP", from_ap);
+    gw_jsonw_bool(&sys_w, "FROM_AP", svc->from_ap);
     /* The page uses this to enable configuration controls */
-    gw_jsonw_bool(&sys_w, "CAN_CONFIGURE", config_allowed(fd, clients));
+    gw_jsonw_bool(&sys_w, "CAN_CONFIGURE", change_allowed(svc, clients));
     gw_jsonw_str(&sys_w, "STA_SSID", (char *)app->sta_cnf.sta.ssid);
     gw_jsonw_str(&sys_w, "STA_IP", ip_sta);
     gw_jsonw_bool(&sys_w, "STA_CONNECTED", ip_sta[0] != '\0');
@@ -358,11 +366,20 @@ static void vRebootTask(void *arg) {
     esp_restart();
 }
 
-static void handle_reboot(void) {
+/* 1 — перезагрузка разрешена этому клиенту (ответ уже собран), 0 — отказано. */
+static uint8_t handle_reboot(const sys_service_t *svc) {
+    /* Перезагрузку разрешает экземпляр сервиса (регистрация на интерфейс): у
+     * точки доступа и у «любого интерфейса» она разрешена — как было и раньше
+     * (см. sys_svc_mut). Условие про единственного клиента к ней не относится:
+     * перезагрузка настройки не меняет. */
+    if (!svc->may_change) {
+        ESP_LOGW(TAG, "Reboot refused (from_ap=%u)", svc->from_ap);
+        resp_denied(svc, wifi_ap_clients_count());
+        return 0;
+    }
     resp_ok();
     gw_jsonw_int(&sys_w, "DELAY_MS", REBOOT_DELAY_MS);
-    if (xTaskCreate(vRebootTask, "reboot", 2560, (void *)(uintptr_t)REBOOT_DELAY_MS, 5, NULL) != pdPASS)
-        ESP_LOGE(TAG, "Failed to schedule reboot");
+    return 1;
 }
 
 /* ── sys.files: filesystem listing ───────────────────────────────────────────── */
@@ -520,9 +537,10 @@ static void vNetApplyTask(void *arg) {
     vTaskDelete(NULL);
 }
 
-static void handle_net(app_context_t *app, const uint8_t *data, uint32_t len, int fd) {
+static void handle_net(const sys_service_t *svc, const uint8_t *data, uint32_t len) {
+    app_context_t *app = svc->app;
     uint8_t clients = wifi_ap_clients_count();
-    uint8_t allowed = config_allowed(fd, clients);
+    uint8_t allowed = change_allowed(svc, clients);
 
     GW_JSON_TOKENS(toks, SYS_ARG_MAX_TOKENS);
     gw_json_t json;
@@ -560,9 +578,9 @@ static void handle_net(app_context_t *app, const uint8_t *data, uint32_t len, in
     }
 
     if (!allowed) {
-            ESP_LOGW(TAG, "Network settings refused (from_ap=%u clients=%u)",
-                 request_from_softap(fd), clients);
-        resp_denied(fd, clients);
+        ESP_LOGW(TAG, "Network settings refused (from_ap=%u clients=%u, may_change=%u)",
+                 svc->from_ap, clients, svc->may_change);
+        resp_denied(svc, clients);
         return;
     }
 
@@ -644,47 +662,106 @@ static void handle_net(app_context_t *app, const uint8_t *data, uint32_t len, in
     }
 }
 
-/* ── task ────────────────────────────────────────────────────────────────── */
+/* ── Обработчики вызовов ─────────────────────────────────────────────────── *
+ *
+ * Контракт (web_api.h): обработчик не блокирующий, отвечает сам и возвращает 0 —
+ * вызов завершён. call == NULL — принудительное завершение: освобождать нечего
+ * (контекст — статический экземпляр сервиса), поэтому просто сообщаем, что
+ * завершились. Ответ отправляется ровно один раз за вызов. */
 
-/* Имя FID сравнивается целиком: "sys.info" и "sys.info2" — разные вызовы, и
- * префиксное совпадение здесь недопустимо (иначе чужой вызов попал бы в этот
- * обработчик). */
-static void handle_msg(app_context_t *app, webapi_msg_t *in_msg) {
-    const char *fid = in_msg->fid;
-
-    if (strcmp(fid, ESP_WS_API_ECHO_ID) == 0) {
-        /* Documented echo test: the argument comes back unchanged */
-        send_verbatim(in_msg->id, fid, in_msg->data, in_msg->len);
-        return;
-    }
-
-    resp_begin();
-    if      (strcmp(fid, ESP_WS_API_SYS_WIFI_STA) == 0) handle_sta(app, in_msg->data, in_msg->len, in_msg->fd);
-    else if (strcmp(fid, ESP_WS_API_SYS_WIFI_AP)  == 0) handle_ap(app, in_msg->data, in_msg->len, in_msg->fd);
-    else if (strcmp(fid, ESP_WS_API_SYS_INFO)     == 0) handle_info(app, in_msg->fd);
-    else if (strcmp(fid, ESP_WS_API_SYS_REBOOT)   == 0) handle_reboot();
-    else if (strcmp(fid, ESP_WS_API_SYS_FILES)    == 0) handle_files(in_msg->data, in_msg->len);
-    else if (strcmp(fid, ESP_WS_API_SYS_NET)      == 0) handle_net(app, in_msg->data, in_msg->len, in_msg->fd);
-    else {
-        ESP_LOGW(TAG, "No system handler for FID %s", fid);
-        return;
-    }
-
-    send_response(in_msg->id, fid);
+/* Контекст регистрации: по нему обработчик понимает, через какой интерфейс его
+ * вызвали. У методов без политики (echo, sys.files) контекста нет — NULL. */
+static const sys_service_t *svc_of(void **context) {
+    return (context != NULL) ? (const sys_service_t *)*context : NULL;
 }
 
-static void ws_sys_task(void *param) {
-    webapi_msg_t *in_msg = NULL;
-    app_context_t *app = (app_context_t *)param;
+static uint8_t sys_echo_handler(void *call, void **context, uint8_t *data, uint32_t data_len) {
+    (void)context;
+    if (!call) return 0;
+    /* Documented echo test: the argument comes back unchanged. Пустой запрос —
+     * ответ "null", как и раньше, когда присылалось пустое дерево. */
+    if (data && data_len) bApiCallSendJson(call, data, data_len);
+    else                  bApiCallSendJson(call, (const uint8_t *)"null", 4);
+    return 0;
+}
 
-    for (;;) {
-        if (ws_hal_queue_receive(sys_cmd_queue, &in_msg, WS_HAL_WAIT_FOREVER) != 0) {
-            handle_msg(app, in_msg);
-            free(in_msg->data);
-            free(in_msg);
-            in_msg = NULL;
-        }
-    }
+static uint8_t sys_sta_handler(void *call, void **context, uint8_t *data, uint32_t data_len) {
+    if (!call) return 0;
+    const sys_service_t *svc = svc_of(context);
+    if (!svc) return 0;
+    resp_begin();
+    handle_sta(svc, data, data_len);
+    send_response(call);
+    return 0;
+}
+
+static uint8_t sys_ap_handler(void *call, void **context, uint8_t *data, uint32_t data_len) {
+    if (!call) return 0;
+    const sys_service_t *svc = svc_of(context);
+    if (!svc) return 0;
+    resp_begin();
+    handle_ap(svc, data, data_len);
+    send_response(call);
+    return 0;
+}
+
+static uint8_t sys_info_handler(void *call, void **context, uint8_t *data, uint32_t data_len) {
+    (void)data; (void)data_len;
+    if (!call) return 0;
+    const sys_service_t *svc = svc_of(context);
+    if (!svc) return 0;
+    resp_begin();
+    handle_info(svc);
+    send_response(call);
+    return 0;
+}
+
+static uint8_t sys_reboot_handler(void *call, void **context, uint8_t *data, uint32_t data_len) {
+    (void)data; (void)data_len;
+    if (!call) return 0;
+    const sys_service_t *svc = svc_of(context);
+    if (!svc) return 0;
+    resp_begin();
+    uint8_t armed = handle_reboot(svc);
+    /* Ответ уходит клиенту до перезагрузки: задача её откладывает, а отправка
+     * асинхронна — соединение успевает получить конверт ответа. */
+    send_response(call);
+    if (armed && (xTaskCreate(vRebootTask, "reboot", 2560,
+                              (void *)(uintptr_t)REBOOT_DELAY_MS, 5, NULL) != pdPASS))
+        ESP_LOGE(TAG, "Failed to schedule reboot");
+    return 0;
+}
+
+static uint8_t sys_files_handler(void *call, void **context, uint8_t *data, uint32_t data_len) {
+    (void)context;
+    if (!call) return 0;
+    resp_begin();
+    handle_files(data, data_len);
+    send_response(call);
+    return 0;
+}
+
+static uint8_t sys_net_handler(void *call, void **context, uint8_t *data, uint32_t data_len) {
+    if (!call) return 0;
+    const sys_service_t *svc = svc_of(context);
+    if (!svc) return 0;
+    resp_begin();
+    handle_net(svc, data, data_len);
+    send_response(call);
+    return 0;
+}
+
+/* ── Регистрация сервисов ────────────────────────────────────────────────── */
+
+/* Регистрация экземпляра сервиса: что за метод, каким интерфейсам он оказан и с
+ * каким контекстом. Один FID регистрируется по разу на интерфейс — этим и
+ * выражена политика (см. sys_service_t). */
+static uint8_t register_service(api_handler_t handler, const char *fid,
+                                uint32_t iface_mask, void *context) {
+    if (bApiCallRegister(handler, fid, iface_mask, context)) return 1;
+    ESP_LOGE(TAG, "Не удалось зарегистрировать %s (маска интерфейсов 0x%08lx)", fid,
+             (unsigned long)iface_mask);
+    return 0;
 }
 
 esp_err_t api_sys_run(app_context_t *app) {
@@ -693,21 +770,43 @@ esp_err_t api_sys_run(app_context_t *app) {
      * (проверено: страница конфигурации оставалась с прочерками). */
     gw_jsonw_init(&sys_w, sys_resp_buf, sizeof(sys_resp_buf));
 
-    sys_cmd_queue = ws_hal_queue_create(8, sizeof(void *));
-    if (!sys_cmd_queue) {
-        ESP_LOGE(TAG, "Cannot create system API queue");
-        return ESP_FAIL;
-    }
+    /* Один и тот же контекст описывает «кто спрашивает»: приложение, интерфейс
+     * (из точки доступа или нет) и что этому клиенту можно. */
+    sys_svc_ap.app      = app; sys_svc_ap.from_ap      = 1; sys_svc_ap.may_change      = 1;
+    sys_svc_ro.app      = app; sys_svc_ro.from_ap      = 0; sys_svc_ro.may_change      = 0;
+    sys_svc_mut.app     = app; sys_svc_mut.from_ap     = 0; sys_svc_mut.may_change     = 1;
 
-    ws_server_register_fid_queue(ESP_WS_API_ECHO_ID,      sys_cmd_queue);
-    ws_server_register_fid_queue(ESP_WS_API_SYS_WIFI_STA, sys_cmd_queue);
-    ws_server_register_fid_queue(ESP_WS_API_SYS_WIFI_AP,  sys_cmd_queue);
-    ws_server_register_fid_queue(ESP_WS_API_SYS_INFO,     sys_cmd_queue);
-    ws_server_register_fid_queue(ESP_WS_API_SYS_REBOOT,   sys_cmd_queue);
-    ws_server_register_fid_queue(ESP_WS_API_SYS_FILES,    sys_cmd_queue);
-    ws_server_register_fid_queue(ESP_WS_API_SYS_NET,      sys_cmd_queue);
+    uint8_t ok = 1;
+    const uint32_t ap_mask = GW_IFACE_MASK(GW_IFACE_AP);
 
-    ws_hal_task_create(ws_sys_task, "ws_sys", 5120, app, 5);
+    /* Методы, которые МЕНЯЮТ настройки: две регистрации одного обработчика —
+     * для точки доступа (запись разрешена) и для любого другого интерфейса
+     * (только чтение). Точная маска выигрывает у «любой», поэтому клиент точки
+     * доступа получает первый экземпляр, а станционный — второй. */
+    ok &= register_service(sys_sta_handler,  ESP_WS_API_SYS_WIFI_STA, ap_mask, &sys_svc_ap);
+    ok &= register_service(sys_sta_handler,  ESP_WS_API_SYS_WIFI_STA, GW_IFACE_MASK_ANY, &sys_svc_ro);
+    ok &= register_service(sys_ap_handler,   ESP_WS_API_SYS_WIFI_AP,  ap_mask, &sys_svc_ap);
+    ok &= register_service(sys_ap_handler,   ESP_WS_API_SYS_WIFI_AP,  GW_IFACE_MASK_ANY, &sys_svc_ro);
+    ok &= register_service(sys_net_handler,  ESP_WS_API_SYS_NET,      ap_mask, &sys_svc_ap);
+    ok &= register_service(sys_net_handler,  ESP_WS_API_SYS_NET,      GW_IFACE_MASK_ANY, &sys_svc_ro);
+
+    /* sys.info — чтение, но страница по нему решает, можно ли ей показывать
+     * кнопки записи: FROM_AP и CAN_CONFIGURE берутся из контекста регистрации. */
+    ok &= register_service(sys_info_handler, ESP_WS_API_SYS_INFO,     ap_mask, &sys_svc_ap);
+    ok &= register_service(sys_info_handler, ESP_WS_API_SYS_INFO,     GW_IFACE_MASK_ANY, &sys_svc_ro);
+
+    /* Перезагрузка: интерфейс различается регистрацией, но разрешена с любого —
+     * как было снаружи (см. sys_svc_mut). */
+    ok &= register_service(sys_reboot_handler, ESP_WS_API_SYS_REBOOT, ap_mask, &sys_svc_ap);
+    ok &= register_service(sys_reboot_handler, ESP_WS_API_SYS_REBOOT, GW_IFACE_MASK_ANY, &sys_svc_mut);
+
+    /* Методы без политики: политики у них нет, поэтому и контекста нет — один
+     * экземпляр на все интерфейсы. */
+    ok &= register_service(sys_echo_handler,  ESP_WS_API_ECHO_ID,     GW_IFACE_MASK_ANY, NULL);
+    ok &= register_service(sys_files_handler, ESP_WS_API_SYS_FILES,   GW_IFACE_MASK_ANY, NULL);
+
+    if (!ok) return ESP_FAIL;
+
     ESP_LOGI(TAG, "System API ready (echo, wifi.sta, wifi.ap, sys.info, sys.reboot, sys.files, sys.net)");
     return ESP_OK;
 }
