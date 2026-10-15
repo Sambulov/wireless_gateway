@@ -11,13 +11,20 @@
     body { margin:0; background:var(--bg); color:var(--ink);
            font:14px/1.45 -apple-system, "Segoe UI", Roboto, Arial, sans-serif; }
     .header { background:linear-gradient(90deg,#1a1a2e,#0f3460); color:#e2e8f0;
-              padding:10px 16px; display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
-    .header h1 { font-size:16px; margin:0; font-weight:600; }
+              padding:10px 16px; display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+    .header h1 { font-size:16px; margin:0 6px 0 0; font-weight:600; }
     .header a { color:#93c5fd; text-decoration:none; font-size:13px; }
     .header a:hover { text-decoration:underline; }
-    .badge { padding:2px 10px; border-radius:10px; font-size:12px; background:#334155; }
-    .badge.ok { background:var(--ok); color:#fff; }
-    .badge.err { background:var(--err); color:#fff; }
+    /* Шапка без текста: состояние читается по значку, слова — в подсказке (title).
+     * .ok — работает/разрешено, .err — отказ, .wait — ждём, .dim — нет данных
+     * или действие недоступно (цвет значка приглушается). */
+    .hdr-icon { display:inline-flex; align-items:center; justify-content:center;
+                min-width:28px; height:26px; padding:0 7px; border-radius:8px; font-size:15px;
+                line-height:1; background:#334155; cursor:help; }
+    .hdr-icon.ok   { background:rgba(22,163,74,.32); }
+    .hdr-icon.err  { background:rgba(220,38,38,.38); }
+    .hdr-icon.wait { background:rgba(217,119,6,.35); }
+    .hdr-icon.dim  { background:#334155; filter:grayscale(1); opacity:.55; }
     .wrap { max-width:1000px; margin:0 auto; padding:14px; display:flex;
             flex-direction:column; gap:14px; }
     .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:14px; }
@@ -42,6 +49,7 @@
     input[type=file]:hover::file-selector-button,
     input[type=file]:hover::-webkit-file-upload-button { background:#164a80; }
     input:focus { outline:2px solid var(--accent); border-color:transparent; }
+    input[type=checkbox] { width:15px; height:15px; margin:0; cursor:pointer; }
     button { border:1px solid #cbd5e1; background:#f8fafc; border-radius:5px; padding:6px 12px;
              font-size:13px; cursor:pointer; font-family:inherit; }
     button:hover:not(:disabled) { background:#e2e8f0; }
@@ -49,15 +57,20 @@
     button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
     button.primary:hover:not(:disabled) { background:#164a80; }
     button.danger { background:#fee2e2; border-color:#fecaca; color:#991b1b; }
+    /* Кнопка-значок: слова живут в подсказке, а не на кнопке */
+    button.btn-icon { min-width:42px; padding:6px 10px; font-size:16px; line-height:1.1; }
     .row { display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap; }
     .msg { margin-top:8px; font-size:13px; min-height:18px; }
     .msg.ok { color:var(--ok); } .msg.err { color:var(--err); } .msg.warn { color:var(--warn); }
     .hint { color:var(--dim); font-size:12px; margin-top:6px; }
+    /* Значок «i»: подробности в подсказке, а не простынёй текста на странице */
+    .hint-icon { display:flex; align-items:baseline; gap:6px; }
+    .info { cursor:help; font-size:13px; opacity:.8; }
     table { width:100%; border-collapse:collapse; font-size:13px; }
     th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); }
     th { color:var(--dim); font-weight:600; font-size:12px; }
-    td.actions { white-space:nowrap; }
-    td.actions button { padding:3px 8px; font-size:12px; }
+    th.cb, td.cb { width:1px; white-space:nowrap; }
+    tr.selected td { background:#eff6ff; }
     .size { color:var(--dim); font-family:ui-monospace, monospace; }
     .crumbs { margin:2px 0 10px; font-size:13px; }
     .crumbs a { color:var(--accent); text-decoration:none; }
@@ -73,8 +86,26 @@
     /* Address fields only make sense for a static configuration */
     .row.disabled { display:none; }
     .empty { color:var(--dim); padding:10px 0; }
-    /* Панель действий файлового менеджера: кнопка выбора файла и что выбрано */
-    .toolbar { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+    /* Индикатор активности режима: цветная точка + слово, счётчик клиентов рядом */
+    .state { display:flex; align-items:center; gap:9px; flex-wrap:wrap; margin:2px 0 8px; }
+    .state b { font-weight:600; }
+    .state .dim-text { font-weight:600; color:var(--dim); }
+    .state .hint { margin:0; }
+    .dot { width:10px; height:10px; border-radius:50%; background:#cbd5e1; flex:0 0 auto; }
+    .dot.on { background:var(--ok); box-shadow:0 0 0 3px rgba(22,163,74,.18); }
+    /* Место в файловой системе: полоска «занято/всего» с подписью */
+    .fsbar { margin-bottom:12px; }
+    .fsbar-top { display:flex; justify-content:space-between; gap:10px; font-size:12px; color:var(--dim); }
+    .fsbar-top b { color:var(--ink); font-family:ui-monospace, Menlo, Consolas, monospace; }
+    .fsbar-track { height:12px; margin:5px 0 4px; border-radius:6px; background:#e2e8f0; overflow:hidden; }
+    .fsbar-fill { height:100%; width:0; border-radius:6px; background:var(--ok);
+                  transition:width .3s ease; }
+    .fsbar-fill.warn { background:var(--warn); }
+    .fsbar-fill.err { background:var(--err); }
+    .fsbar-legend { display:flex; gap:16px; flex-wrap:wrap; font-size:12px; color:var(--dim); }
+    .fsbar-legend b { color:var(--ink); font-family:ui-monospace, Menlo, Consolas, monospace; }
+    /* Панель действий файлового менеджера: кнопки-значки и что выбрано на диске */
+    .toolbar { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
     .pick { color:var(--dim); font-size:12px; }
     .pick b { color:var(--ink); font-family:ui-monospace, Menlo, Consolas, monospace; }
     .hidden-file { position:absolute; width:1px; height:1px; opacity:0; pointer-events:none; }
@@ -83,59 +114,78 @@
     .kv-grid { grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); }
     .kv-grid .kv span:first-child { white-space:nowrap; }
     progress { width:100%; max-width:340px; height:14px; }
+    /* Модальное окно страницы: prompt/confirm браузера здесь не используются */
+    .modal-backdrop { position:fixed; inset:0; z-index:50; padding:16px; display:flex;
+                      align-items:center; justify-content:center; background:rgba(15,23,42,.45); }
+    .modal-backdrop[hidden] { display:none; }
+    .modal { width:100%; max-width:420px; padding:16px; background:var(--card);
+             border:1px solid var(--line); border-radius:10px; box-shadow:0 18px 40px rgba(15,23,42,.25); }
+    .modal h3 { margin:0 0 6px; font-size:15px; color:var(--accent); }
+    .modal .row.modal-buttons { align-items:center; justify-content:flex-end; margin-top:14px; }
 </style>
 </head>
 <body>
 <div class="header">
     <h1>⚙ Wireless Gateway</h1>
-    <span class="badge" id="ws-status">нет связи</span>
-    <span class="badge" id="mac-badge">—</span>
+    <!-- Состояние шапки — три значка без слов: связь, MAC рабочего интерфейса,
+         разрешена ли настройка. Текст каждой — в подсказке. -->
+    <span class="hdr-icon wait" id="ws-status" role="img" tabindex="0"
+          title="Подключаемся к устройству…" aria-label="Подключаемся к устройству…">⏳</span>
+    <span class="hdr-icon dim" id="mac-badge" role="img" tabindex="0"
+          title="MAC интерфейса, через который открыта страница: данных пока нет"
+          aria-label="MAC интерфейса, через который открыта страница: данных пока нет">🏷</span>
+    <span class="hdr-icon dim" id="access-icon" role="img" tabindex="0"
+          title="Проверяем, разрешена ли настройка…"
+          aria-label="Проверяем, разрешена ли настройка…">🔧</span>
 </div>
 
 <div class="wrap">
 
-    <!-- Системная информация: состояние устройства, прошивка и действия -->
+    <!-- Устройство: только состояние (время работы, память) и обслуживание -->
     <div class="card">
-        <h2>Устройство <small>системная информация</small></h2>
-        <div class="msg" id="access-note">проверяем права…</div>
+        <h2>Устройство <small>состояние и обслуживание</small></h2>
         <div class="grid kv-grid">
-            <div class="kv"><span>Режим работы</span><span id="i-mode">—</span></div>
-            <div class="kv"><span>Подключено к</span><span id="i-sta-ssid">—</span></div>
-            <div class="kv"><span>IP: в сети / точки доступа</span><span><span id="i-ip-sta">—</span> / <span id="i-ip-ap">—</span></span></div>
-            <div class="kv"><span>MAC: станции / точки доступа</span><span><span id="i-mac-sta">—</span> / <span id="i-mac-ap">—</span></span></div>
-            <div class="kv"><span>Клиентов на точке доступа</span><span id="i-ap-clients">—</span></div>
             <div class="kv"><span>Время работы</span><span id="i-uptime">—</span></div>
-            <div class="kv"><span>Свободная память</span><span id="i-heap">—</span></div>
-            <div class="kv"><span>Файловая система</span><span id="i-fs">—</span></div>
+            <div class="kv"><span>Свободная память ОЗУ</span><span id="i-heap">—</span></div>
         </div>
 
         <div class="iface">
-            <h3 class="sub">Прошивка <small id="fw-version">—</small></h3>
+            <h3 class="sub">Обновление прошивки <small id="fw-version">—</small></h3>
             <div class="hint" id="fw-line">образ <b id="fw-name">—</b>, сборка <b id="fw-date">—</b>,
                 ESP-IDF <b id="fw-idf">—</b>; работает раздел <b id="ota-running">—</b>,
                 для обновления доступен <b id="ota-next">—</b></div>
-            <div class="row">
+            <div class="row" style="margin-top:8px">
                 <div class="grow">
                     <label class="field" for="fw-file">Файл прошивки (.bin)</label>
                     <input type="file" id="fw-file" accept=".bin,application/octet-stream">
                 </div>
                 <button class="primary" id="fw-upload">Обновить</button>
-                <button class="danger" id="reboot">Перезагрузить</button>
             </div>
             <progress id="fw-progress" value="0" max="100" style="display:none"></progress>
             <div class="msg" id="fw-msg"></div>
+            <div class="hint hint-icon"><span class="info" role="img" tabindex="0" title="Прошивка пишется во второй раздел и включается перезагрузкой; при ошибке проверки образа остаётся рабочей прежняя. Обновление и перезагрузка доступны только с точки доступа при ровно одном клиенте. Файл — ws_echo_server.bin из каталога build/ .">ℹ️</span> обновление и перезагрузка — только с точки доступа при одном клиенте</div>
+        </div>
+
+        <div class="iface">
+            <h3 class="sub">Перезагрузка</h3>
+            <div class="row">
+                <button class="danger" id="reboot">Перезагрузить</button>
+            </div>
             <div class="msg" id="reboot-msg"></div>
-            <div class="hint">Прошивка пишется во второй раздел и включается перезагрузкой; при ошибке
-                проверки образа остаётся рабочей прежняя. Обновление и перезагрузка доступны только с
-                точки доступа при ровно одном клиенте. Файл — <b>ws_echo_server.bin</b> из каталога
-                <code>build/</code>.</div>
         </div>
     </div>
 
-    <!-- Подключение: сеть, к которой подключается сам шлюз -->
+    <!-- Подключение: сеть, к которой подключается сам шлюз, и её текущее состояние -->
     <div class="card">
         <h2>Подключение <small>режим станции (STA)</small></h2>
-        <div class="row">
+        <div class="state">
+            <span class="dot" id="sta-dot"></span>
+            <b id="sta-state">—</b>
+            <span class="hint" id="sta-state-hint">проверяем состояние…</span>
+        </div>
+        <div class="kv"><span>MAC станции</span><span id="i-mac-sta">—</span></div>
+
+        <div class="row" style="margin-top:8px">
             <div class="grow">
                 <label class="field" for="sta-ssid">Имя сети (SSID)</label>
                 <input type="text" id="sta-ssid" maxlength="31" autocomplete="off" spellcheck="false">
@@ -171,15 +221,20 @@
             <button class="primary" id="net-sta-save">Применить настройки станции</button>
             <div class="msg" id="net-sta-msg"></div>
         </div>
-        <div class="hint">Пароль можно оставить пустым для открытой сети (иначе 8–63 символа).
-            Изменения применяются сразу: шлюз переподключится и получит новый адрес. Настройки
-            меняются только с точки доступа при ровно одном клиенте.</div>
+        <div class="hint hint-icon"><span class="info" role="img" tabindex="0" title="Пароль можно оставить пустым для открытой сети (иначе 8–63 символа). Изменения применяются сразу: шлюз переподключится и получит новый адрес. Настройки меняются только с точки доступа при ровно одном клиенте.">ℹ️</span> пароль пустой — открытая сеть; изменения применяются сразу</div>
     </div>
 
-    <!-- Точка доступа самого шлюза -->
+    <!-- Точка доступа самого шлюза: активность режима и число клиентов -->
     <div class="card">
         <h2>Точка доступа <small>режим AP</small></h2>
-        <div class="row">
+        <div class="state">
+            <span class="dot" id="ap-dot"></span>
+            <b id="ap-state">—</b>
+            <span class="hint">клиентов подключено: <b id="i-ap-clients">—</b></span>
+        </div>
+        <div class="kv"><span>MAC точки доступа</span><span id="i-mac-ap">—</span></div>
+
+        <div class="row" style="margin-top:8px">
             <div class="grow">
                 <label class="field" for="ap-ssid">Имя точки доступа</label>
                 <input type="text" id="ap-ssid" maxlength="31" autocomplete="off" spellcheck="false">
@@ -205,56 +260,84 @@
             <button class="primary" id="net-ap-save">Применить настройки точки доступа</button>
             <div class="msg" id="net-ap-msg"></div>
         </div>
-        <div class="hint">Смена имени и пароля разрешена только тогда, когда к точке доступа подключён
-            <b>ровно один</b> клиент — вы (сейчас: <b id="ap-clients-hint">—</b>), иначе пароль мог бы
-            перехватить посторонний. После сохранения связь оборвётся — подключитесь заново с новым
-            паролем. Заводские имя и пароль печатаются в консоли устройства при включении.</div>
+        <div class="hint hint-icon"><span class="info" role="img" tabindex="0" title="Смена имени и пароля разрешена только тогда, когда к точке доступа подключён ровно один клиент — вы (сейчас: — ), иначе пароль мог бы перехватить посторонний. После сохранения связь оборвётся — подключитесь заново с новым паролем. Заводские имя и пароль печатаются в консоли устройства при включении.">ℹ️</span> смена настроек — только при одном клиенте</div>
     </div>
 
-    <!-- Файлы -->
+    <!-- Файлы: место в файловой системе и файловый менеджер -->
     <div class="card">
         <h2>Файлы <small>LittleFS</small></h2>
+
+        <!-- Место в файловой системе вместо строки в «Устройстве»: занято/всего -->
+        <div class="fsbar">
+            <div class="fsbar-top">
+                <span>Файловая система</span>
+                <span id="fs-caption">—</span>
+            </div>
+            <div class="fsbar-track" id="fs-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100"
+                 aria-valuenow="0" aria-label="Занято места в файловой системе">
+                <div class="fsbar-fill" id="fs-fill"></div>
+            </div>
+            <div class="fsbar-legend">
+                <span>занято <b id="fs-used">—</b></span>
+                <span>свободно <b id="fs-free">—</b></span>
+                <span>всего <b id="fs-total">—</b></span>
+            </div>
+        </div>
+
         <div class="crumbs"><span class="hint">Каталог:</span> <span id="files-path">корень</span></div>
 
+        <!-- Панель инструментов: только значки, слова — в подсказках -->
         <div class="toolbar">
-            <button id="pick-btn">Выбрать файл…</button>
-            <button class="primary" id="up-btn">Загрузить</button>
-            <input type="file" id="up-file" class="hidden-file">
+            <button class="btn-icon" id="dl-btn" title="Скачать отмеченные файлы"
+                    aria-label="Скачать отмеченные файлы">⬇️</button>
+            <button class="btn-icon" id="pick-btn" title="Выбрать файл на компьютере"
+                    aria-label="Выбрать файл на компьютере">💻</button>
+            <button class="btn-icon primary" id="up-btn" title="Загрузить выбранный файл в текущий каталог"
+                    aria-label="Загрузить выбранный файл в текущий каталог">⬆️</button>
+            <button class="btn-icon" id="mkdir-btn" title="Создать каталог в текущем каталоге"
+                    aria-label="Создать каталог в текущем каталоге">📁</button>
+            <button class="btn-icon" id="ren-btn" title="Переименовать: отметьте ровно один элемент"
+                    aria-label="Переименовать отмеченный элемент">✏️</button>
+            <button class="btn-icon danger" id="del-btn" title="Удалить отмеченное"
+                    aria-label="Удалить отмеченное">🗑️</button>
+            <button class="btn-icon" id="files-refresh" title="Обновить список каталога"
+                    aria-label="Обновить список каталога">🔄</button>
             <span class="pick">выбрано: <b id="pick-name">ничего</b></span>
+            <input type="file" id="up-file" class="hidden-file">
         </div>
-
-        <div class="row" style="margin-top:8px">
-            <div class="grow">
-                <label class="field" for="up-name">Имя файла в устройстве</label>
-                <input type="text" id="up-name" placeholder="page.html" autocomplete="off" spellcheck="false">
-            </div>
-        </div>
-        <progress id="up-progress" value="0" max="100" style="display:none"></progress>
-
-        <div class="iface">
-            <h3 class="sub">Создать каталог</h3>
-            <div class="row">
-                <div class="grow">
-                    <label class="field" for="mkdir-name">Имя каталога</label>
-                    <input type="text" id="mkdir-name" placeholder="maps" autocomplete="off" spellcheck="false">
-                </div>
-                <button id="mkdir-btn">Создать каталог</button>
-                <button id="files-refresh" type="button">Обновить список</button>
-            </div>
-        </div>
+        <progress id="up-progress" value="0" max="100" style="display:none; margin-top:8px"></progress>
 
         <div class="msg" id="files-msg"></div>
         <table>
-            <thead><tr><th>Имя</th><th>Размер</th><th>Действия</th></tr></thead>
+            <thead><tr>
+                <th class="cb"><input type="checkbox" id="files-all" title="Отметить все в каталоге"
+                                      aria-label="Отметить все в каталоге"></th>
+                <th>Имя</th><th>Размер</th>
+            </tr></thead>
             <tbody id="files-body"><tr><td colspan="3" class="empty">список пуст</td></tr></tbody>
         </table>
-        <div class="hint">«Загрузить файл» выбирает файл на вашем компьютере, имя подставляется само —
-            его можно поправить в поле выше. Передача идёт порциями по 6 КБ и складывается во временный
-            файл, который встаёт на место цели лишь после последней порции: оборванная передача рабочий
-            файл не портит, а существующий заменяется целиком. Ограничение — 500 КБ на файл.
-            Имя файла в списке открывает его по HTTP (так же отдаются страницы и карты регистров). Каталог можно переименовать и удалить — удаляется только пустой.</div>
+        <div class="hint hint-icon"><span class="info" role="img" tabindex="0" title="Кнопки панели — значки, их назначение в подсказке: скачать отмеченные файлы, выбрать файл на компьютере, загрузить выбранный, создать каталог, переименовать (ровно один отмеченный элемент), удалить отмеченное, обновить список. Имя загружаемого файла берётся из имени файла на компьютере как есть (до 63 символов); если файл с таким именем уже есть, страница спросит подтверждение — замена идёт целиком, а прежний файл живёт до последней порции. Передача идёт порциями по 6 КБ во временный файл, который встаёт на место цели лишь после последней порции: оборванная передача рабочий файл не портит. Предел — 500 КБ на файл.">ℹ️</span> назначение значков панели — в подсказке при наведении</div>
+        <div class="hint hint-icon"><span class="info" role="img" tabindex="0" title="Отмеченные каталоги удаляются рекурсивно: сначала файлы, затем пустые каталоги (предел обхода — 200 записей и 8 уровней вложенности). Имя файла в списке открывает его по HTTP, имя каталога — переход внутрь. Если каталог не удаляется как «не пустой», внутри мог остаться скрытый файл .имя.part от оборванной загрузки — в списке он не виден. При скачивании нескольких файлов браузер может спросить разрешение на несколько загрузок.">ℹ️</span> каталоги удаляются рекурсивно; загрузка идёт порциями по 6 КБ</div>
     </div>
 
+</div>
+
+<!-- Модальное окно страницы: имя каталога и новое имя, подтверждения удаления,
+     прошивки и перезагрузки. prompt() и confirm() браузера не используются. -->
+<div class="modal-backdrop" id="modal" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+        <h3 id="modal-title">Действие</h3>
+        <div class="hint" id="modal-text"></div>
+        <div id="modal-field">
+            <label class="field" for="modal-input">Имя</label>
+            <input type="text" id="modal-input" autocomplete="off" spellcheck="false">
+        </div>
+        <div class="msg" id="modal-msg"></div>
+        <div class="row modal-buttons">
+            <button id="modal-cancel" type="button">Отмена</button>
+            <button class="primary" id="modal-ok" type="button">OK</button>
+        </div>
+    </div>
 </div>
 
 <script>
@@ -269,6 +352,12 @@ const MAX_UPLOAD = 500 * 1024;
 /* Сколько данных уходит в одной порции: 6 КБ — это 8 КБ base64, и запрос вместе
  * с путём и обёрткой влезает в предел сообщения транспорта (16 КБ). */
 const FILE_CHUNK = 6 * 1024;
+/* Предел имени файла: CONFIG_LITTLEFS_OBJ_NAME_LEN = 64, то есть 63 символа. */
+const MAX_NAME = 63;
+/* Пределы обхода при рекурсивном удалении каталога: случайный клик по «Удалить»
+ * не должен молотить файловую систему без конца. */
+const DEL_MAX_ENTRIES = 200;
+const DEL_MAX_DEPTH = 8;
 
 const STATUS_TEXT = {
     0x00000000: 'Готово',
@@ -296,28 +385,65 @@ const ERROR_TEXT = {
     DATA: 'Порция файла повреждена при передаче',
     SIZE: 'Файл больше 500 КБ',
     EXIST: 'Такое имя уже занято',
+    NOTEMPTY: 'Каталог не пуст — возможно, внутри скрытый файл «.имя.part» от оборванной загрузки',
 };
 
 let ws = null, sid = 1, apClients = null, fromAp = false, canConfigure = false;
-let apSsid = '', rebootPending = false;
+let apSsid = '', apIp = '', macSta = '', macAp = '', staSsid = '', staIp = '', staConnected = false;
+let rebootPending = false;
 const pending = new Map();                  // SID -> callback
 
 const $ = id => document.getElementById(id);
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-function setWsStatus(ok) {
-    const el = $('ws-status');
-    el.className = 'badge ' + (ok ? 'ok' : 'err');
-    el.textContent = ok ? 'связь есть' : 'нет связи';
+/* ── значки шапки ───────────────────────────────────────────────────────── *
+ * Текста в шапке нет: состояние показывает значок, а слова живут в подсказке
+ * (title) и в aria-label — для чтения с экрана. */
+
+function setIcon(id, glyph, cls, text) {
+    const el = $(id);
+    el.textContent = glyph;
+    el.className = 'hdr-icon' + (cls ? ' ' + cls : '');
+    el.title = text;
+    el.setAttribute('aria-label', text);
+}
+
+function setWsStatus(state) {
+    if (state === 'ok') {
+        setIcon('ws-status', '✅', 'ok',
+                'Связь с устройством есть: страница получает данные по WebSocket');
+    } else if (state === 'err') {
+        setIcon('ws-status', '❌', 'err',
+                'Нет связи с устройством: WebSocket закрыт, подключение повторяется раз в секунду');
+    } else {
+        setIcon('ws-status', '⏳', 'wait', 'Подключаемся к устройству…');
+    }
+}
+
+/* MAC интерфейса, через который открыта страница: с точки доступа — MAC точки
+ * доступа, из сети — MAC станции. Сам адрес ушёл в подсказку, а оба MAC видны
+ * в своих группах. */
+function updateHeaderMac() {
+    const mac = (fromAp ? macAp : macSta) || '';
+    if (!mac) {
+        setIcon('mac-badge', '🏷', 'dim',
+                'MAC интерфейса, через который открыта страница: данных пока нет');
+        return;
+    }
+    setIcon('mac-badge', '🏷', '',
+            fromAp ? `Страница открыта через точку доступа — MAC точки доступа: ${mac}`
+                   : `Страница открыта через сеть, режим станции — MAC станции: ${mac}`);
 }
 
 function connect() {
+    setWsStatus('wait');
     ws = new WebSocket(`ws://${location.hostname}:${WS_PORT}/ws`);
-    ws.onopen = () => { setWsStatus(true); refreshAll(); };
+    ws.onopen = () => { setWsStatus('ok'); refreshAll(); };
     ws.onclose = () => {
-        setWsStatus(false);
+        setWsStatus('err');
         if (!rebootPending) setTimeout(connect, 1000);
     };
-    ws.onerror = () => setWsStatus(false);
+    ws.onerror = () => setWsStatus('err');
     ws.onmessage = e => {
         let obj;
         try { obj = JSON.parse(e.data); } catch (_) { return; }
@@ -357,7 +483,9 @@ function send(fid, arg, cb) {
  * каждую следующую порцию можно слать только после ответа на предыдущую —
  * устройство сверяет OFFSET с числом принятых байт. Ошибка связи приходит тем же
  * путём (STA: null, ERR: 'NOWS'), поэтому ждать «вечного» обещания не придётся;
- * на случай потерянного ответа (вызов мог не дойти) есть свой предел ожидания. */
+ * на случай потерянного ответа (вызов мог не дойти) есть свой предел ожидания.
+ * Тем же путём идут и обходы дерева при рекурсивном удалении: ответ на такой
+ * вызов уходит в это обещание и список каталога на экране не перерисовывает. */
 function request(fid, arg, timeout_ms = 15000) {
     return new Promise(resolve => {
         let finished = false;
@@ -382,6 +510,7 @@ function refreshAll() {
 /* ── device status ──────────────────────────────────────────────────────── */
 
 function fmtBytes(n) {
+    n = n || 0;
     if (n < 1024) return n + ' Б';
     if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' КБ';
     return (n / 1024 / 1024).toFixed(2) + ' МБ';
@@ -389,18 +518,17 @@ function fmtBytes(n) {
 
 function renderInfo(i) {
     if (!i) return;
-    $('mac-badge').textContent = i.MAC_AP || '—';
-    $('i-mac-ap').textContent = i.MAC_AP || '—';
-    $('i-mac-sta').textContent = i.MAC_STA || '—';
-    $('i-ip-ap').textContent = i.AP_IP || '—';
-    $('i-ip-sta').textContent = i.STA_IP || 'не подключено';
-    $('i-sta-ssid').textContent = i.STA_SSID || '—';
+    macSta = i.MAC_STA || '';
+    macAp = i.MAC_AP || '';
+    staSsid = i.STA_SSID || '';
+    staIp = i.STA_IP || '';
+    staConnected = (typeof i.STA_CONNECTED === 'boolean') ? i.STA_CONNECTED : !!staIp;
+    apIp = i.AP_IP || '';
+
+    $('i-mac-sta').textContent = macSta || '—';
+    $('i-mac-ap').textContent = macAp || '—';
     $('i-uptime').textContent = fmtUptime(i.UPTIME);
     $('i-heap').textContent = fmtBytes(i.HEAP);
-    $('i-fs').textContent = `${fmtBytes(i.FS_USED)} из ${fmtBytes(i.FS_TOTAL)}`;
-    /* Режим виден по тому, есть ли адрес в чужой сети: точка доступа работает
-     * всегда, станция — только когда подключена. */
-    $('i-mode').textContent = i.STA_IP ? 'станция и точка доступа' : 'только точка доступа';
     $('fw-name').textContent = i.FW_NAME || '—';
     $('fw-version').textContent = i.FW_VERSION || '—';
     $('fw-date').textContent = i.FW_DATE || '—';
@@ -412,7 +540,12 @@ function renderInfo(i) {
     if (typeof i.AP_CLIENTS === 'number') apClients = i.AP_CLIENTS;
     fromAp = !!i.FROM_AP;
     canConfigure = !!i.CAN_CONFIGURE;
+
+    renderStaState();
+    renderApState();
+    updateHeaderMac();
     applyAccess();
+    updateFsBar(i.FS_USED, i.FS_TOTAL);
     if (!$('sta-ssid').value && i.STA_SSID) $('sta-ssid').value = i.STA_SSID;
     if (!$('ap-ssid').value && i.AP_SSID) $('ap-ssid').value = i.AP_SSID;
 }
@@ -427,7 +560,39 @@ function fmtUptime(sec) {
     return `${s} с`;
 }
 
+/* ── место в файловой системе ───────────────────────────────────────────── *
+ * Данные приходят и в sys.info (FS_TOTAL/FS_USED), и в листинге sys.files
+ * (TOTAL/USED) — источник один и тот же, поэтому пишет кто пришёл. */
+
+function updateFsBar(used, total) {
+    if (typeof used !== 'number' || typeof total !== 'number' || total <= 0) return;
+    const free = Math.max(0, total - used);
+    const pct = Math.min(100, used / total * 100);
+    const fill = $('fs-fill');
+    fill.style.width = pct.toFixed(1) + '%';
+    fill.className = 'fsbar-fill' + (pct >= 92 ? ' err' : (pct >= 75 ? ' warn' : ''));
+    $('fs-bar').setAttribute('aria-valuenow', String(Math.round(pct)));
+    $('fs-caption').innerHTML = `занято <b>${fmtBytes(used)}</b> из <b>${fmtBytes(total)}</b>`
+                              + ` — ${pct.toFixed(0)} %`;
+    $('fs-used').textContent = fmtBytes(used);
+    $('fs-free').textContent = fmtBytes(free);
+    $('fs-total').textContent = fmtBytes(total);
+}
+
 /* ── station (STA) ──────────────────────────────────────────────────────── */
+
+/* Индикатор режима станции: адрес есть — режим активен, нет — серый и «не активен». */
+function renderStaState() {
+    const on = staConnected && !!staIp;
+    $('sta-dot').className = 'dot' + (on ? ' on' : '');
+    const state = $('sta-state');
+    state.textContent = on ? 'активен' : 'не активен';
+    state.className = on ? '' : 'dim-text';
+    $('sta-state-hint').textContent = on
+        ? `подключено к сети ${staSsid || '—'}, адрес ${staIp}`
+        : (staSsid ? `к сети ${staSsid} подключения нет, адрес не получен`
+                   : 'сеть не задана — имя сети в поле ниже');
+}
 
 function renderSta(s) {
     if (!s) return;
@@ -436,6 +601,7 @@ function renderSta(s) {
     $('sta-pass').placeholder = s.PASS_HIDDEN ? 'скрыт — доступен только с точки доступа' : '';
     if (typeof s.CLIENTS === 'number') apClients = s.CLIENTS;
     if (typeof s.FROM_AP === 'boolean') fromAp = s.FROM_AP;
+    updateHeaderMac();
     applyAccess();
 }
 
@@ -458,6 +624,16 @@ $('sta-show').onclick = () => togglePass('sta-pass', 'sta-show');
 
 /* ── access point (AP) ──────────────────────────────────────────────────── */
 
+/* Режим AP работает всегда, пока у него есть адрес: гашения режима ещё нет, но
+ * индикатор уже на месте — и рядом счётчик клиентов. */
+function renderApState() {
+    const on = !!apIp;
+    $('ap-dot').className = 'dot' + (on ? ' on' : '');
+    const state = $('ap-state');
+    state.textContent = on ? 'активна' : 'не активна';
+    state.className = on ? '' : 'dim-text';
+}
+
 function renderAp(a) {
     if (!a) return;
     if (document.activeElement !== $('ap-ssid')) $('ap-ssid').value = a.SSID || '';
@@ -465,32 +641,38 @@ function renderAp(a) {
     $('ap-pass').placeholder = a.PASS_HIDDEN ? 'скрыт — доступен только с точки доступа' : '';
     if (typeof a.CLIENTS === 'number') apClients = a.CLIENTS;
     if (typeof a.FROM_AP === 'boolean') fromAp = a.FROM_AP;
+    updateHeaderMac();
     applyAccess();
 }
 
 /* Wi-Fi configuration — both forms — is unlocked only for an AP client while
- * exactly one station is associated; the device enforces the same rule. */
+ * exactly one station is associated; the device enforces the same rule.
+ * Слова, которые раньше занимали строку в верхней карточке, теперь живут
+ * подсказкой значка-гаечного ключа: он активен и цветной — настройка разрешена,
+ * приглушён — запрещена, а причина написана в его подсказке. */
 function applyAccess() {
     $('i-ap-clients').textContent = (apClients === null) ? '—' : apClients;
     $('ap-clients-hint').textContent = (apClients === null) ? '—' : apClients;
     for (const id of ['sta-save', 'ap-save', 'net-sta-save', 'net-ap-save', 'fw-upload']) {
         const b = $(id);
         b.disabled = !canConfigure;
-        b.title = canConfigure ? '' : 'Доступно только с точки доступа при ровно одном клиенте';
+        b.title = canConfigure
+            ? 'Доступно: вы единственный клиент точки доступа'
+            : 'Доступно только с точки доступа при ровно одном клиенте';
+        b.setAttribute('aria-label', b.title);
     }
-    const note = $('access-note');
+    let text;
     if (canConfigure) {
-        note.className = 'msg ok';
-        note.textContent = `Настройка разрешена: вы подключены к точке доступа ${apSsid}, клиентов — 1.`;
+        text = `Настройка разрешена: вы подключены к точке доступа ${apSsid}, клиентов — 1.`;
     } else if (!fromAp) {
-        note.className = 'msg warn';
-        note.textContent = `Вы подключены через сеть, а не через точку доступа. Чтобы менять Wi-Fi, `
-                         + `подключитесь к точке доступа ${apSsid} и откройте http://${$('i-ip-ap').textContent}/config`;
+        text = 'Вы подключены через сеть, а не через точку доступа. Чтобы менять Wi-Fi, '
+             + `подключитесь к точке доступа ${apSsid} и откройте `
+             + (apIp ? `http://${apIp}/config` : 'её адрес (см. «Точка доступа» → «Адрес»)');
     } else {
-        note.className = 'msg warn';
-        note.textContent = `К точке доступа подключено клиентов: ${apClients}. `
-                         + `Смена настроек разрешена только при ровно одном.`;
+        text = `К точке доступа подключено клиентов: ${apClients}. `
+             + 'Смена настроек разрешена только при ровно одном.';
     }
+    setIcon('access-icon', '🔧', canConfigure ? 'ok' : 'dim', text);
 }
 
 $('ap-save').onclick = () => {
@@ -522,10 +704,91 @@ function togglePass(inputId, btnId) {
     $(btnId).textContent = on ? 'Скрыть пароль' : 'Показать пароль';
 }
 
+/* ── модальное окно страницы (вместо prompt и confirm) ──────────────────── */
+
+let modalState = null;
+
+/* askModal({title, text, input, value, placeholder, ok, danger, check}) →
+ * обещание: строка (режим поля ввода), true (подтверждение) или null (отмена).
+ * Enter подтверждает, Esc отменяет, check() проверяет имя до закрытия окна. */
+function askModal(opts) {
+    return new Promise(resolve => {
+        modalState = { input: !!opts.input, check: opts.check || null, resolve };
+        $('modal-title').textContent = opts.title || '';
+        const text = $('modal-text');
+        text.textContent = opts.text || '';
+        text.hidden = !opts.text;
+        $('modal-field').hidden = !opts.input;
+        const inp = $('modal-input');
+        inp.value = opts.value || '';
+        inp.placeholder = opts.placeholder || '';
+        const okBtn = $('modal-ok');
+        okBtn.textContent = opts.ok || 'OK';
+        okBtn.className = opts.danger ? 'primary danger' : 'primary';
+        msg('modal-msg', '');
+        $('modal').hidden = false;
+        /* Фокус ставим следующим кадром: иначе браузер ещё не показал окно и
+         * фокус остаётся на кнопке панели, а Enter уходит не туда. */
+        setTimeout(() => {
+            if (opts.input) { inp.focus(); inp.select(); } else { okBtn.focus(); }
+        }, 0);
+    });
+}
+
+function closeModal(value) {
+    const state = modalState;
+    modalState = null;
+    $('modal').hidden = true;
+    if (state) state.resolve(value);
+}
+
+$('modal-ok').onclick = () => {
+    if (!modalState) return;
+    if (!modalState.input) { closeModal(true); return; }
+    const value = $('modal-input').value.trim();
+    const problem = modalState.check ? modalState.check(value) : '';
+    if (problem) { msg('modal-msg', problem, 'err'); return; }
+    closeModal(value);
+};
+
+$('modal-cancel').onclick = () => closeModal(null);
+$('modal').onclick = e => { if (e.target === $('modal')) closeModal(null); };
+document.addEventListener('keydown', e => {
+    if (!modalState) return;
+    if (e.key === 'Escape') { e.preventDefault(); closeModal(null); }
+    else if (e.key === 'Enter') { e.preventDefault(); $('modal-ok').click(); }
+});
+
+/* Имя внутри одного каталога: «/» и «\» его разрывают, «.» и «..» — служебные
+ * имена, а начинающиеся с точки файлы листинг не показывает вовсе (в них же
+ * устройство держит недописанные порции загрузки). */
+function nameProblem(name) {
+    if (!name) return 'Имя не может быть пустым';
+    if (/[\/\\]/.test(name)) return 'Имя не должно содержать «/» и «\\»';
+    if (name === '.' || name === '..') return 'Такое имя недопустимо';
+    if (name[0] === '.') return 'Имя не должно начинаться с точки: такие файлы в списке не видны';
+    if (name.length > MAX_NAME) return `Имя длиннее ${MAX_NAME} символов — файловая система столько не примет`;
+    return '';
+}
+
+/* Устройство отдаёт файлы по HTTP GET, разбирая путь как есть (get_path_from_uri
+ * в web_file_server.c не декодирует %XX). Имя загружаемого файла берём с
+ * компьютера как есть, но о такой особенности честно предупреждаем. */
+function httpNameWarning(name) {
+    return (encodeURIComponent(name) === name) ? ''
+        : ' Внимание: в имени есть символ, который браузер кодирует (пробел, «%», «#», «?», '
+        + 'не-латиница) — ссылка на файл из списка, скорее всего, не откроется.';
+}
+
 /* ── reboot ─────────────────────────────────────────────────────────────── */
 
-$('reboot').onclick = () => {
-    if (!confirm('Перезагрузить устройство? Текущие соединения оборвутся.')) return;
+$('reboot').onclick = async () => {
+    const ok = await askModal({
+        title: 'Перезагрузить устройство?',
+        text: 'Текущие соединения оборвутся, устройство вернётся примерно через 10 секунд.',
+        ok: 'Перезагрузить', danger: true,
+    });
+    if (!ok) return;
     msg('reboot-msg', 'Перезагрузка…', 'warn');
     rebootPending = true;
     send(FID.REBOOT, {}, () => {});
@@ -570,7 +833,9 @@ function renderNet(n) {
     $('net-sta-addr').textContent = n.STA_ADDR || 'не получен';
     $('net-ap-addr').textContent = n.AP_ADDR || '—';
     applyAccess();
-}$('net-sta-save').onclick = () => {
+}
+
+$('net-sta-save').onclick = () => {
     const mode = staMode();
     const arg = { IF: 'STA', MODE: mode };
     if (mode === 'static') {
@@ -609,10 +874,16 @@ $('net-ap-save').onclick = () => {
 
 /* ── firmware update ───────────────────────────────────────────────────── */
 
-$('fw-upload').onclick = () => {
+$('fw-upload').onclick = async () => {
     const file = $('fw-file').files[0];
     if (!file) { msg('fw-msg', 'Выберите файл прошивки (.bin)', 'err'); return; }
-    if (!confirm(`Прошить «${file.name}» (${fmtBytes(file.size)})? Устройство перезагрузится.`)) return;
+    const ok = await askModal({
+        title: 'Прошить устройство?',
+        text: `Файл: ${file.name} (${fmtBytes(file.size)}). Устройство запишет образ во второй `
+            + 'раздел и перезагрузится в него.',
+        ok: 'Прошить', danger: true,
+    });
+    if (!ok) return;
 
     const xhr = new XMLHttpRequest();
     xhr.open('POST', '/update', true);
@@ -650,9 +921,16 @@ $('fw-upload').onclick = () => {
 /* ── files ──────────────────────────────────────────────────────────────── */
 
 let curPath = '/';                       // текущий каталог в файловом менеджере
+let currentRows = [];                    // строки списка: {full, name, dir, tr, cb}
+const selected = new Map();              // полный путь -> {NAME, DIR}
 
 function fsJoin(dir, name) {
     return (dir === '/' ? '' : dir) + '/' + name;
+}
+
+/* Ссылка на файл для HTTP GET: путь кодируется по сегментам, как и раньше. */
+function fileUrl(full) {
+    return full.split('/').map(encodeURIComponent).join('/');
 }
 
 function refreshFiles() {
@@ -686,12 +964,59 @@ function renderCrumb(f) {
     }
 }
 
+/* ── отметки в списке и панель инструментов ─────────────────────────────── */
+
+function setTitle(id, text) {
+    const el = $(id);
+    el.title = text;
+    el.setAttribute('aria-label', text);
+}
+
+function updateToolbar() {
+    const items = [...selected.values()];
+    const files = items.filter(it => !it.DIR).length;
+    $('dl-btn').disabled = files === 0;
+    $('ren-btn').disabled = items.length !== 1;
+    $('del-btn').disabled = items.length === 0;
+    setTitle('dl-btn', files
+        ? `Скачать отмеченные файлы (${files})`
+        : 'Скачать отмеченные файлы: отметьте хотя бы один файл (каталоги не скачиваются)');
+    setTitle('ren-btn', items.length === 1
+        ? `Переименовать «${items[0].NAME}»`
+        : 'Переименовать: отметьте ровно один файл или каталог');
+    setTitle('del-btn', items.length
+        ? `Удалить отмеченное (${items.length})`
+        : 'Удалить отмеченное: сначала отметьте файлы или каталоги');
+}
+
+function syncSelectAll() {
+    const all = $('files-all');
+    const total = currentRows.length;
+    all.checked = total > 0 && selected.size === total;
+    all.indeterminate = selected.size > 0 && selected.size < total;
+}
+
+function setRowSelected(row, on) {
+    row.cb.checked = on;
+    row.tr.classList.toggle('selected', on);
+    if (on) selected.set(row.full, { NAME: row.name, DIR: row.dir });
+    else selected.delete(row.full);
+}
+
+/* Отметки живут до следующего обновления списка: после удаления и переименования
+ * строки уже другие, и отметка на исчезнувшем пути — это готовый отказ от
+ * устройства. Чистим сразу, не дожидаясь нового листинга. */
+function clearSelection() {
+    selected.clear();
+    for (const row of currentRows) setRowSelected(row, false);
+    $('files-all').checked = false;
+    $('files-all').indeterminate = false;
+    updateToolbar();
+}
+
 function renderFiles(f) {
     if (!f) return;
-    if (typeof f.TOTAL === 'number') {
-        const free = f.TOTAL - f.USED;
-        $('i-fs').textContent = `${fmtBytes(f.USED)} из ${fmtBytes(f.TOTAL)} (свободно ${fmtBytes(free)})`;
-    }
+    if (typeof f.TOTAL === 'number') updateFsBar(f.USED, f.TOTAL);
     if (f.ERR === 'PATH' || f.ERR === 'FS') {
         msg('files-msg', 'Каталог недоступен', 'err');
         openDir('/');
@@ -699,21 +1024,26 @@ function renderFiles(f) {
     }
     curPath = f.PATH || '/';
     renderCrumb(f);
+    clearSelection();
+    currentRows = [];
 
     const body = $('files-body');
     const items = f.FILES || [];
     if (!items.length) {
         body.innerHTML = '<tr><td colspan="3" class="empty">пусто</td></tr>';
+        $('files-all').disabled = true;
+        updateToolbar();
         return;
     }
+    $('files-all').disabled = false;
     /* Сначала каталоги, затем файлы — как в обычном файловом менеджере */
     items.sort((a, b) => (b.DIR - a.DIR) || a.NAME.localeCompare(b.NAME));
     body.innerHTML = '';
 
     if (f.PARENT !== undefined) {
         const tr = document.createElement('tr');
+        tr.insertCell().className = 'cb';         // у «наверх» отметки нет
         tr.insertCell().appendChild(upLink(f.PARENT));
-        tr.insertCell();
         tr.insertCell();
         body.appendChild(tr);
     }
@@ -721,7 +1051,16 @@ function renderFiles(f) {
     for (const item of items) {
         const full = fsJoin(curPath, item.NAME);
         const tr = document.createElement('tr');
-        const nameCell = document.createElement('td');
+
+        const cbCell = tr.insertCell();
+        cbCell.className = 'cb';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.title = (item.DIR ? 'Отметить каталог ' : 'Отметить файл ') + item.NAME;
+        cb.setAttribute('aria-label', cb.title);
+        cbCell.appendChild(cb);
+
+        const nameCell = tr.insertCell();
         if (item.DIR) {
             const link = document.createElement('a');
             link.href = '#';
@@ -730,24 +1069,27 @@ function renderFiles(f) {
             nameCell.appendChild(link);
         } else {
             const link = document.createElement('a');
-            link.href = full.split('/').map(encodeURIComponent).join('/');
+            link.href = fileUrl(full);
             link.target = '_blank';
+            link.rel = 'noopener';
             link.textContent = item.NAME;
             nameCell.appendChild(link);
         }
-        const sizeCell = document.createElement('td');
+
+        const sizeCell = tr.insertCell();
         sizeCell.className = 'size';
         sizeCell.textContent = item.DIR ? 'каталог' : fmtBytes(item.SIZE);
-        const actions = document.createElement('td');
-        actions.className = 'actions';
-        actions.appendChild(button('Переименовать', () => renameItem(full, item.NAME)));
-        actions.appendChild(document.createTextNode(' '));
-        actions.appendChild(item.DIR
-            ? button('Удалить', () => deleteDir(full, item.NAME), 'danger')
-            : button('Удалить', () => deleteFile(full, item.NAME), 'danger'));
-        tr.append(nameCell, sizeCell, actions);
+
+        const row = { full, name: item.NAME, dir: !!item.DIR, tr, cb };
+        cb.onchange = () => {
+            setRowSelected(row, cb.checked);
+            syncSelectAll();
+            updateToolbar();
+        };
+        currentRows.push(row);
         body.appendChild(tr);
     }
+    updateToolbar();
 }
 
 function upLink(parent) {
@@ -758,37 +1100,65 @@ function upLink(parent) {
     return link;
 }
 
-function button(text, onclick, cls) {
-    const b = document.createElement('button');
-    b.textContent = text;
-    b.onclick = onclick;
-    if (cls) b.className = cls;
-    return b;
-}
-
-/* Выбор файла: имя подставляем всегда (раньше — только если поле пустое, из-за
- * чего после первой загрузки подставлялось старое имя), и показываем, что выбрано. */
-$('pick-btn').onclick = () => $('up-file').click();
-$('up-file').onchange = () => {
-    const f = $('up-file').files[0];
-    $('pick-name').textContent = f ? `${f.name} (${fmtBytes(f.size)})` : 'ничего';
-    if (f) $('up-name').value = f.name;
+$('files-all').onchange = () => {
+    const on = $('files-all').checked;
+    for (const row of currentRows) setRowSelected(row, on);
+    syncSelectAll();
+    updateToolbar();
 };
 
-/* Создание каталога в текущем каталоге (сервис sys.file.mkdir) */
-$('mkdir-btn').onclick = async () => {
-    const name = $('mkdir-name').value.trim();
-    if (!name) { msg('files-msg', 'Укажите имя каталога', 'err'); return; }
-    if (/[\/\\ ]/.test(name)) { msg('files-msg', 'Имя не должно содержать пробелов и «/»', 'err'); return; }
-    const target = fsJoin(curPath, name);
-    msg('files-msg', `Создаём каталог ${target}…`, 'warn');
-    const { resp, sta } = await request(FID.FILE_MKDIR, { PATH: target });
-    if (sta === 0) {
-        msg('files-msg', `Каталог ${target} создан`, 'ok');
-        $('mkdir-name').value = '';
-        refreshFiles();
+/* ── скачивание отмеченных файлов ───────────────────────────────────────── */
+
+/* Файл берём по HTTP GET и отдаём браузеру готовым объектом: так видно и отказ
+ * устройства (404 и прочее), чего не покажет обычная ссылка с download. */
+async function downloadOne(full, name) {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 20000);
+    try {
+        const resp = await fetch(fileUrl(full), { signal: ctl.signal, cache: 'no-store' });
+        if (!resp.ok) throw new Error('устройство ответило «' + resp.status + '»');
+        const blob = await resp.blob();
+        const obj = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = obj;
+        a.download = name;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(obj), 15000);
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
+$('dl-btn').onclick = async () => {
+    const files = [...selected.entries()].filter(([, it]) => !it.DIR);
+    if (!files.length) {
+        msg('files-msg', 'Отметьте хотя бы один файл: каталоги не скачиваются', 'err');
+        return;
+    }
+    const btn = $('dl-btn');
+    btn.disabled = true;
+    const failed = [];
+    for (let k = 0; k < files.length; k++) {
+        const [full, it] = files[k];
+        msg('files-msg', `Скачиваем ${k + 1} из ${files.length}: ${it.NAME}…`, 'warn');
+        try {
+            await downloadOne(full, it.NAME);
+        } catch (e) {
+            failed.push(`${it.NAME} — ${e.message || e}`);
+        }
+        /* По очереди: устройство отдаёт файлы одной задачей, а браузер иначе
+         * теряет часть одновременных загрузок. */
+        if (k + 1 < files.length) await sleep(400);
+    }
+    btn.disabled = false;
+    updateToolbar();
+    const done = files.length - failed.length;
+    if (failed.length) {
+        msg('files-msg', `Скачано ${done} из ${files.length}. Не получилось: ${failed.join('; ')}`, 'err');
     } else {
-        msg('files-msg', `Каталог не создан: ${describe(resp, sta)}`, 'err');
+        msg('files-msg', `Скачано файлов: ${done}`, 'ok');
     }
 };
 
@@ -813,13 +1183,52 @@ function toBase64(buffer) {
     return btoa(bin);
 }
 
+/* Выбор файла на компьютере: имя для устройства — это имя самого файла, поля
+ * «имя файла в устройстве» больше нет. */
+$('pick-btn').onclick = () => $('up-file').click();
+$('up-file').onchange = () => {
+    const f = $('up-file').files[0];
+    $('pick-name').textContent = f ? `${f.name} (${fmtBytes(f.size)})` : 'ничего';
+};
+
+/* Занято ли имя в каталоге. Список спрашиваем у устройства заново: тот, что на
+ * экране, мог устареть, а список — единственное, по чему страница может узнать о
+ * существующем файле (сам sys.file.write цель не проверяет). */
+async function nameTaken(dir, name) {
+    const { resp, sta } = await request(FID.FILES, { PATH: dir });
+    if (sta === 0 && resp && !resp.ERR)
+        return (resp.FILES || []).some(it => it.NAME === name);
+    return currentRows.some(row => row.name === name);
+}
+
 $('up-btn').onclick = async () => {
     const file = $('up-file').files[0];
-    const name = $('up-name').value.trim();
-    if (!file) { msg('files-msg', 'Выберите файл', 'err'); return; }
-    if (!name) { msg('files-msg', 'Укажите имя файла в устройстве', 'err'); return; }
-    if (/[\/\\ ]/.test(name)) { msg('files-msg', 'Имя не должно содержать пробелов и «/»', 'err'); return; }
+    if (!file) { msg('files-msg', 'Сначала выберите файл на компьютере (значок «💻»)', 'err'); return; }
+    const name = file.name;
+    const bad = nameProblem(name);
+    if (bad) { msg('files-msg', bad, 'err'); return; }
     if (file.size > MAX_UPLOAD) { msg('files-msg', 'Файл больше 500 КБ', 'err'); return; }
+
+    msg('files-msg', 'Проверяем каталог…', 'warn');
+    /* Прежний POST /upload/… отвечал на занятое имя отказом (409 «File already
+     * exists: delete or rename it first»), а sys.file.write перезаписывает цель
+     * молча. Поэтому спрашиваем подтверждение: устройство пишет порции во
+     * временный файл, поэтому до последней порции старый файл цел, а после неё он
+     * заменяется целиком. */
+    const replacing = await nameTaken(curPath, name);
+    if (replacing) {
+        const where = (curPath === '/' ? 'в корне файловой системы' : `в каталоге ${curPath}`);
+        const ok = await askModal({
+            title: `Файл «${name}» уже есть`,
+            text: `Файл ${name} ${where} уже есть — он будет заменён выбранным `
+                + `(${fmtBytes(file.size)}). Если передача оборвётся, прежний файл останется на месте.`,
+            ok: 'Заменить', danger: true,
+        });
+        if (!ok) {
+            msg('files-msg', 'Замена отменена — файл на устройстве не тронут', '');
+            return;
+        }
+    }
 
     const target = fsJoin(curPath, name);
     const bar = $('up-progress');
@@ -857,56 +1266,169 @@ $('up-btn').onclick = async () => {
         btn.disabled = false;
     }
 
-    msg('files-msg', `Файл ${target} загружен (${fmtBytes(file.size)})`, 'ok');
+    msg('files-msg', `Файл ${target} ${replacing ? 'заменён' : 'загружен'} `
+        + `(${fmtBytes(file.size)})` + httpNameWarning(name), 'ok');
     $('up-file').value = '';
-    $('up-name').value = '';
     $('pick-name').textContent = 'ничего';
     refreshFiles();
 };
 
-async function deleteFile(full, name) {
-    if (!confirm(`Удалить ${name}?`)) return;
-    msg('files-msg', `Удаляем ${name}…`, 'warn');
-    const { resp, sta } = await request(FID.FILE_DELETE, { PATH: full });
+/* ── создание каталога, переименование и удаление ───────────────────────── */
+
+/* Создание каталога в текущем каталоге (сервис sys.file.mkdir); имя — из
+ * модального окна страницы. */
+$('mkdir-btn').onclick = async () => {
+    const name = await askModal({
+        title: 'Создать каталог',
+        text: `Каталог появится в ${curPath === '/' ? 'корне файловой системы' : curPath}`,
+        input: true, placeholder: 'maps', ok: 'Создать', check: nameProblem,
+    });
+    if (name === null) return;
+    if (currentRows.some(r => r.name === name)) {
+        msg('files-msg', `«${name}» в этом каталоге уже есть`, 'err');
+        return;
+    }
+    const target = fsJoin(curPath, name);
+    msg('files-msg', `Создаём каталог ${target}…`, 'warn');
+    const { resp, sta } = await request(FID.FILE_MKDIR, { PATH: target });
     if (sta === 0) {
-        msg('files-msg', `Файл ${name} удалён`, 'ok');
+        msg('files-msg', `Каталог ${target} создан`, 'ok');
         refreshFiles();
     } else {
-        msg('files-msg', `Файл ${name} не удалён: ${describe(resp, sta)}`, 'err');
+        msg('files-msg', `Каталог не создан: ${describe(resp, sta)}`, 'err');
     }
-}
+};
 
-/* Удаление каталога: сервис сам откажет, если внутри что-то есть */
-async function deleteDir(full, name) {
-    if (!confirm(`Удалить каталог ${name}? Он должен быть пустым.`)) return;
-    msg('files-msg', `Удаляем каталог ${name}…`, 'warn');
-    const { resp, sta } = await request(FID.FILE_RMDIR, { PATH: full });
-    if (sta === 0) {
-        msg('files-msg', `Каталог ${name} удалён`, 'ok');
-        refreshFiles();
-    } else {
-        msg('files-msg', `Каталог не удалён: ${describe(resp, sta)}`, 'err');
+/* Переименование — ровно для одного отмеченного элемента (файла или каталога). */
+$('ren-btn').onclick = async () => {
+    const items = [...selected.entries()];
+    if (items.length !== 1) { msg('files-msg', 'Отметьте ровно один файл или каталог', 'err'); return; }
+    const [full, it] = items[0];
+    const name = await askModal({
+        title: it.DIR ? 'Новое имя каталога' : 'Новое имя файла',
+        text: `Сейчас: ${it.NAME}`,
+        input: true, value: it.NAME, placeholder: it.NAME, ok: 'Переименовать', check: nameProblem,
+    });
+    if (name === null || name === it.NAME) return;
+    if (currentRows.some(r => r.name === name)) {
+        msg('files-msg', `«${name}» в этом каталоге уже есть`, 'err');
+        return;
     }
-}
-
-async function renameItem(full, name) {
-    const target = prompt(`Новое имя для ${name}:`, name);
-    if (target === null) return;
-    const clean = target.trim();
-    if (!clean || clean === name) return;
-    if (/[\/\\ ]/.test(clean)) { msg('files-msg', 'Имя не должно содержать пробелов и «/»', 'err'); return; }
-    /* Новое имя остаётся в том же каталоге, что и файл: путь собирает страница,
-     * устройство принимает полный путь (или короткое имя в каталоге FROM). */
-    const to = fsJoin(curPath, clean);
-    msg('files-msg', `Переименовываем ${name}…`, 'warn');
+    /* Новое имя остаётся в том же каталоге, что и элемент: путь собирает страница,
+     * устройство принимает полный путь. */
+    const to = fsJoin(curPath, name);
+    msg('files-msg', `Переименовываем ${it.NAME}…`, 'warn');
     const { resp, sta } = await request(FID.FILE_RENAME, { FROM: full, TO: to });
     if (sta === 0) {
-        msg('files-msg', `${name} → ${clean}`, 'ok');
+        msg('files-msg', `${it.NAME} → ${name}`, 'ok');
+        clearSelection();      // отмеченного пути больше нет
         refreshFiles();
     } else {
         msg('files-msg', `Не переименовано: ${describe(resp, sta)}`, 'err');
     }
+};
+
+/* Обход дерева перед удалением: сначала перечисляем, потом удаляем. Так предел
+ * числа записей и глубины останавливает случайный клик до того, как что-то
+ * удалено. Файлы собираются отдельно от каталогов, каталоги — в порядке
+ * «сверху вниз», чтобы удалять их в обратном порядке (сначала вложенные). */
+async function planDeletion(path, depth, plan) {
+    if (depth > DEL_MAX_DEPTH) return 'DEPTH';
+    const { resp, sta } = await request(FID.FILES, { PATH: path });
+    if (sta !== 0 || !resp || resp.ERR) return 'LIST';
+    for (const it of (resp.FILES || [])) {
+        const full = fsJoin(path, it.NAME);
+        if (++plan.count > DEL_MAX_ENTRIES) return 'MANY';
+        if (it.DIR) {
+            plan.dirs.push(full);
+            const err = await planDeletion(full, depth + 1, plan);
+            if (err) return err;
+        } else {
+            plan.files.push(full);
+        }
+    }
+    return '';
 }
+
+$('del-btn').onclick = async () => {
+    const items = [...selected.entries()];
+    if (!items.length) return;
+    const files = items.filter(([, it]) => !it.DIR);
+    const dirs = items.filter(([, it]) => it.DIR);
+    const btn = $('del-btn');
+    btn.disabled = true;
+
+    /* Первая фаза: обход отмеченных каталогов — без единого удаления. */
+    const plan = { files: [], dirs: [], count: 0 };
+    if (dirs.length) {
+        msg('files-msg', 'Считаем содержимое отмеченных каталогов…', 'warn');
+        let problem = '';
+        for (const [full] of dirs) {
+            if (++plan.count > DEL_MAX_ENTRIES) { problem = 'MANY'; break; }
+            plan.dirs.push(full);
+            problem = await planDeletion(full, 1, plan);
+            if (problem) break;
+        }
+        if (problem) {
+            btn.disabled = false;
+            updateToolbar();
+            const reasons = {
+                MANY: `В отмеченных каталогах больше ${DEL_MAX_ENTRIES} записей — такие удаляем `
+                    + 'по частям: зайдите внутрь и удалите вложенные каталоги отдельно.',
+                DEPTH: `Вложенность глубже ${DEL_MAX_DEPTH} уровней — удалите каталог ниже по дереву `
+                    + 'отдельно.',
+                LIST: 'Не удалось прочитать содержимое каталога — ничего не удалено.',
+            };
+            msg('files-msg', reasons[problem], 'err');
+            return;
+        }
+    }
+
+    const totalFiles = files.length + plan.files.length;
+    const totalDirs = plan.dirs.length;
+    const ok = await askModal({
+        title: 'Удалить отмеченное?',
+        text: `Файлов: ${totalFiles}, каталогов: ${totalDirs} (вложенные удаляются целиком вместе `
+            + 'с содержимым). Отменить это действие нельзя.',
+        ok: 'Удалить', danger: true,
+    });
+    if (!ok) {
+        btn.disabled = false;
+        updateToolbar();
+        msg('files-msg', 'Удаление отменено — ничего не тронуто', '');
+        return;
+    }
+
+    /* Вторая фаза: сначала все файлы, затем пустые каталоги (вложенные раньше
+     * родительских), потому что sys.file.rmdir удаляет только пустой каталог. */
+    let doneFiles = 0, doneDirs = 0, failure = '';
+    const allFiles = [...files.map(([full]) => full), ...plan.files];
+    for (const path of allFiles) {
+        msg('files-msg', `Удаляем файлы: ${doneFiles + 1} из ${allFiles.length} (${path})…`, 'warn');
+        const { resp, sta } = await request(FID.FILE_DELETE, { PATH: path });
+        if (sta !== 0) { failure = `${path} — ${describe(resp, sta)}`; break; }
+        doneFiles++;
+    }
+    if (!failure) {
+        const allDirs = [...plan.dirs].reverse();
+        for (const path of allDirs) {
+            msg('files-msg', `Удаляем каталоги: ${doneDirs + 1} из ${allDirs.length} (${path})…`, 'warn');
+            const { resp, sta } = await request(FID.FILE_RMDIR, { PATH: path });
+            if (sta !== 0) { failure = `${path} — ${describe(resp, sta)}`; break; }
+            doneDirs++;
+        }
+    }
+
+    btn.disabled = false;
+    clearSelection();          // пути отмеченных записей уже не существуют
+    refreshFiles();
+    if (failure) {
+        msg('files-msg', `Удалено файлов: ${doneFiles}, каталогов: ${doneDirs}. `
+            + `Остановились на «${failure}». Остальное не тронуто.`, 'err');
+    } else {
+        msg('files-msg', `Удалено файлов: ${doneFiles}, каталогов: ${doneDirs}`, 'ok');
+    }
+};
 
 $('files-refresh').onclick = refreshFiles;
 
@@ -925,6 +1447,7 @@ function describe(resp, sta) {
     return STATUS_TEXT[sta] || ('Код статуса 0x' + (sta >>> 0).toString(16));
 }
 
+updateToolbar();
 connect();
 setInterval(() => { if (ws && ws.readyState === WebSocket.OPEN && !rebootPending) send(FID.INFO); }, 2000);
 </script>
