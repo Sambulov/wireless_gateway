@@ -193,7 +193,10 @@ static void _vCallTeardown(ApiCall_t *call) {
         if(call->fHandler(NULL, &call->pxHandlerContext, NULL, 0)) continue;
         break;
     }
-    call->pxHandlerContext = NULL;
+    /* pxHandlerContext НЕ обнуляем: обработчик сам решает, что там оставить.
+     * Для подписки (FLAGS:4) вызов после тел-дауна живёт дальше и при
+     * следующем переопросе должен снова получить свой контекст регистрации —
+     * иначе он не знает, какой периферией управляет. */
 }
 
 static void vWsTransferComplete_cb(int err, int fd, void *arg) {
@@ -805,6 +808,15 @@ static void vWsApiWorkCycle(void) {
             ws_hal_mutex_give(xWsApiMutex);
             continue;                      /* ещё где-то в списках — не трогаем */
         }
+        if(call->flags & CALL_FLAG_LONG_TERM) {
+            /* Подписка: вызов не закрываем, а возвращаем в работу — ядро само
+             * повторит запрос (по ARG.RDL или сразу), и обработчик получит его
+             * заново как обычный запрос клиента. Данные запроса сохраняем. */
+            call->ulNextPollTick = ws_hal_tick() + call->ulPollIntervalTicks;
+            vLinkedListInsertLast(&pxWsApiCall, li);
+            ws_hal_mutex_give(xWsApiMutex);
+            continue;
+        }
         free(call->pucReqData);
         free(call);
         ws_hal_mutex_give(xWsApiMutex);
@@ -909,9 +921,17 @@ static void vWsApiCallWorkerStep(void) {
                 ws_hal_mutex_take(xWsApiMutex, WS_HAL_WAIT_FOREVER);
                 if(!alive) {
                     _vCallTeardown(call);
-                    vLinkedListUnlink(item);
-                    free(call->pucReqData);
-                    free(call);
+                    if(call->flags & CALL_FLAG_LONG_TERM) {
+                        /* Подписка живёт дальше: возвращаем её в работу, ядро
+                         * повторит запрос по таймеру переопроса. */
+                        call->ulNextPollTick = ws_hal_tick() + call->ulPollIntervalTicks;
+                        vLinkedListUnlink(item);
+                        vLinkedListInsertLast(&pxWsApiCall, item);
+                    } else {
+                        vLinkedListUnlink(item);
+                        free(call->pucReqData);
+                        free(call);
+                    }
                 }
             } else {
                 ws_hal_log_i(TAG, "no handler or queue for FID %s, send status INVALID", call->fid);

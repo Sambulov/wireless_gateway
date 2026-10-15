@@ -26,14 +26,27 @@ static const modbus_iface_t mb_iface = {
     .pfTimer = mb_timer_fn,
 };
 
+typedef struct mb_call_ctx mb_call_ctx_t;
+
+/* Порт и его очередь запросов. Драйвер один на порт, поэтому «кто просит»
+ * обработчику не важно — важно, в каком порядке запросы пришли: голова очереди
+ * отдаётся драйверу, когда он освободится. */
 typedef struct {
-    modbus_t          mb;
-    uint8_t           payload[MB_PAYLOAD_SIZE];
-    queue_handle_t    queue;
+    modbus_t           mb;
+    uint8_t            payload[MB_PAYLOAD_SIZE];
     struct app_uart_t *app_uart;
-    int               port_no;
-    delegate_t        rx_delegate;   /* приём байт линии в библиотеку Modbus */
+    int                port_no;
+    delegate_t         rx_delegate;  /* приём байт линии в библиотеку Modbus */
+    mb_call_ctx_t     *head;         /* очередь запросов порта */
+    mb_call_ctx_t     *tail;
+    uint8_t            queue_len;
+    mb_call_ctx_t     *active;       /* чья транзакция сейчас на линии */
 } modbus_worker_t;
+
+/* Сколько запросов порт готов держать в очереди. Ждём линии сколько нужно, но
+ * копить вызовы бесконечно нельзя: каждый это контекст в куче. Кто не влез —
+ * получает отказ «занято» и может повторить. */
+#define MB_QUEUE_MAX 8
 
 /* Коды ошибок в ответе клиенту. Отличать их от кода исключения Modbus важно:
  * ERR из кадра прибора — это код исключения прибора, а здесь — отказ каркаса. */
@@ -43,52 +56,112 @@ typedef struct {
 #define MB_ERR_ARG     2    /* ARG не разобран */
 #define MB_ERR_MEM     1    /* не хватило памяти */
 
-typedef struct {
-    modbus_frame_t    frame;
-    uint8_t           data[MB_PAYLOAD_SIZE];
-    volatile uint8_t  done;
-} mb_cb_ctx_t;
-
-/* Состояние одного вызова API: разобранный запрос, идущая транзакция и её
- * результат. Живёт в контексте вызова, который принадлежит обработчику. */
+/* Состояние одного вызова API: разобранный запрос и место в очереди порта.
+ * Живёт в контексте вызова, который принадлежит обработчику. Ответ клиенту
+ * формирует и отправляет драйвер из своего колбэка — тогда же он помечает
+ * контекст done, и обработчик сообщает ядру, что вызов обработан. */
 #define MB_CTX_MAGIC 0x4d424354u   /* 'MBCT' — признак своего контекста */
 
-typedef struct {
+struct mb_call_ctx {
     uint32_t         magic;
-    void            *call;
+    void            *call;                      /* NULL — вызов уже снят ядром */
     modbus_worker_t *worker;
-    mb_cb_ctx_t      cb;
     modbus_frame_t   req;                       /* разобранный запрос клиента */
     uint8_t          wr_buf[MB_PAYLOAD_SIZE];
     uint16_t         awt_ms;
-    TickType_t       t_req;
-    TickType_t       deadline;
-    uint8_t          started;                   /* транзакция запущена */
-} mb_call_ctx_t;
+    TickType_t       deadline;                  /* таймаут самой транзакции */
+    mb_call_ctx_t   *next;                      /* очередь порта */
+    uint8_t          queued;                    /* стоит в очереди порта */
+    volatile uint8_t done;                      /* драйвер ответил, ответ отправлен */
+};
 
 static modbus_worker_t mb_workers[2];
 
+static void send_mb_frame(void *call, modbus_frame_t *f);
 
-/* Колбэк нового CL: (кадр, дескриптор, контекст). Длину данных берём из
- * ucLengthCode — поля ucBufferSize у кадра больше нет. */
+
+/* Колбэк драйвера: транзакция закончилась (есть ответ, ошибка прибора или
+ * таймаут). Здесь же уходит ответ клиенту — драйвер знает результат лучше
+ * кого-либо, — и ставится отметка, по которой обработчик сообщит ядру API, что
+ * вызов обработан: ядро либо закроет вызов, либо повторит его (подписка). */
 static void mb_on_complete(modbus_frame_t *frame, modbus_t *mb, void *ctx) {
     (void)mb;
-    mb_cb_ctx_t *cb = (mb_cb_ctx_t *)ctx;
-    if (frame) {
-        cb->frame = *frame;
-        uint8_t sz = frame->ucLengthCode;
-        if (frame->pucData && sz > 0) {
-            memcpy(cb->data, frame->pucData, sz);
-            cb->frame.pucData = cb->data;
-            cb->frame.ucLengthCode = sz;
-        } else {
-            cb->frame.pucData = NULL;
-            cb->frame.ucLengthCode = 0;
-        }
+    mb_call_ctx_t *c = (mb_call_ctx_t *)ctx;
+    if (!c || c->magic != MB_CTX_MAGIC)
+        return;
+
+    if (c->worker && c->worker->active == c)
+        c->worker->active = NULL;
+
+    if (c->call) {
+        send_mb_frame(c->call, frame);
+        c->done = 1;
     } else {
-        memset(&cb->frame, 0, sizeof(modbus_frame_t));
+        /* Вызов сняли, пока транзакция шла: ответ отправлять некому, а
+         * обработчик этого контекста уже не получит — освобождаем здесь. */
+        free(c);
     }
-    cb->done = 1;
+}
+
+/* ── Очередь порта ───────────────────────────────────────────────────────── */
+
+static void mb_queue_push(modbus_worker_t *w, mb_call_ctx_t *c) {
+    c->next   = NULL;
+    c->queued = 1;
+    if (w->tail) w->tail->next = c;
+    else         w->head = c;
+    w->tail = c;
+    w->queue_len++;
+}
+
+static void mb_queue_pop(modbus_worker_t *w) {
+    mb_call_ctx_t *c = w->head;
+    if (!c) return;
+    w->head = c->next;
+    if (w->tail == c) w->tail = NULL;
+    c->next   = NULL;
+    c->queued = 0;
+    if (w->queue_len) w->queue_len--;
+}
+
+static void mb_queue_remove(modbus_worker_t *w, mb_call_ctx_t *c) {
+    mb_call_ctx_t **pp = &w->head;
+    while (*pp) {
+        if (*pp == c) {
+            *pp = c->next;
+            if (w->tail == c) {                 /* хвост пересчитываем */
+                w->tail = w->head;
+                while (w->tail && w->tail->next) w->tail = w->tail->next;
+            }
+            c->next   = NULL;
+            c->queued = 0;
+            if (w->queue_len) w->queue_len--;
+            return;
+        }
+        pp = &(*pp)->next;
+    }
+}
+
+/* Отдать голову очереди драйверу. 0 — драйвер занят: вызов остаётся в очереди
+ * и подождёт следующего такта, ожидания внутри обработчика нет. */
+static uint8_t mb_worker_start(modbus_worker_t *w) {
+    mb_call_ctx_t *c = w->head;
+    if (!c || modbus_busy(&w->mb))
+        return 0;
+
+    modbus_reset(&w->mb);
+    uint16_t tid = modbus_request(&w->mb, &c->req, mb_on_complete, c, c->awt_ms);
+    if (!tid)
+        return 0;
+
+    mb_queue_pop(w);
+    w->active = c;
+    /* Таймаут транзакции считается от её начала: пока вызов ждал линию, его
+     * время не должно сгорать (иначе последний в очереди не успевает). */
+    c->deadline = xTaskGetTickCount() + pdMS_TO_TICKS(c->awt_ms + 500);
+    /* Кадр уходит в линию сразу, не дожидаясь следующего такта. */
+    modbus_work(&w->mb);
+    return 1;
 }
 
 /* Байты из UART отдаём библиотеке сами. */
@@ -113,8 +186,9 @@ static void send_mb_error(void *call, int code) {
     send_mb_msg(call, tmp, len);
 }
 
-static void format_and_send_mb_response(void *call, mb_cb_ctx_t *cb) {
-    modbus_frame_t *f = &cb->frame;
+static void send_mb_frame(void *call, modbus_frame_t *f) {
+    modbus_frame_t zero = {0};
+    if (!f) f = &zero;                 /* драйвер не дал кадр — отвечаем пустым */
     uint8_t code = 0, amount = 0, size = 0;
     uint8_t *regs = pucModbusExtructFrameData(f, &code, &amount, &size);
 
@@ -160,9 +234,9 @@ static void format_and_send_mb_response(void *call, mb_cb_ctx_t *cb) {
     free(buf);
 }
 
-/* Запуск транзакции по первичному запросу клиента. Возвращает 1, если
- * транзакция пошла (ответ отправим из такта работы), 0 — если не удалось. */
-static uint8_t mb_call_start(mb_call_ctx_t *ctx, uint8_t *data, uint32_t len) {
+/* Разбор ARG запроса. Возвращает 1, если запрос готов к выдаче драйверу, и 0,
+ * если разобрать не удалось (ответ об ошибке уже отправлен). */
+static uint8_t mb_call_parse(mb_call_ctx_t *ctx, uint8_t *data, uint32_t len) {
     if (!data || !len) {
         send_mb_error(ctx->call, MB_ERR_ARG);
         return 0;
@@ -227,125 +301,126 @@ static uint8_t mb_call_start(mb_call_ctx_t *ctx, uint8_t *data, uint32_t len) {
      * линию под уже идущей транзакцией первого, и таймаут получали все. */
     ctx->req       = frame;                 /* pucData уже указывает на wr_buf */
     ctx->awt_ms    = (uint16_t)awt_ms;
-    ctx->t_req     = xTaskGetTickCount();
-    ctx->deadline  = ctx->t_req + pdMS_TO_TICKS(awt_ms + 500);
-    ctx->started   = 0;
+    ctx->done      = 0;
+    ctx->queued    = 0;
     return 1;
 }
 
-/* Запуск транзакции на линии (когда порт свободен) и её продолжение по такту
- * работы. Возвращает 1, пока вызов жив, и 0, когда ответ отправлен. */
-static uint8_t mb_call_step(mb_call_ctx_t *ctx) {
-    modbus_worker_t *w = ctx->worker;
-
-    if (!ctx->started) {
-        /* Пытаемся занять драйвер. Он один на порт, и занятость видна по его
-         * состоянию: пока идёт чужая транзакция, modbus_request вернёт 0.
-         * Ждать здесь нельзя — вызов держал бы обработчик, — поэтому просто
-         * возвращаемся: следующий такт попробует снова. Кто пришёл первым,
-         * тот и занимает линию: обработчики вызываются по очереди. */
-        if (modbus_busy(&w->mb)) {
-            if ((int32_t)(xTaskGetTickCount() - ctx->deadline) >= 0) {
-                ESP_LOGW(TAG, "modbus порт %d: линия занята, вызов не дождался", w->port_no);
-                send_mb_error(ctx->call, MB_ERR_BUSY);
-                return 0;
-            }
-            return 1;                        /* ждём такта, вызов жив */
-        }
-
-        modbus_reset(&w->mb);
-        uint16_t tid = modbus_request(&w->mb, &ctx->req, mb_on_complete, &ctx->cb,
-                                      ctx->awt_ms);
-        if (!tid) {
-            send_mb_error(ctx->call, MB_ERR_START);
-            return 0;
-        }
-        ctx->started = 1;
-        /* Отсчёт таймаута — от старта транзакции, а не от прихода запроса:
-         * пока вызов ждал линию, его время не должно сгорать. */
-        ctx->t_req    = xTaskGetTickCount();
-        ctx->deadline = ctx->t_req + pdMS_TO_TICKS(ctx->awt_ms + 500);
-        /* Кадр уходит в линию сразу, не дожидаясь следующего такта: иначе
-         * отправка стоит ещё один такт работы. */
-        modbus_work(&w->mb);
-        return 1;
-    }
-
-    /* Транзакцию двигает только тот вызов, который её начал: у остальных
-     * started == 0, и к драйверу они не прикасаются. */
-    modbus_work(&w->mb);
-
-    if (ctx->cb.done) {
-        ctx->started = 0;
-        format_and_send_mb_response(ctx->call, &ctx->cb);
-        return 0;
-    }
-
-    if ((int32_t)(xTaskGetTickCount() - ctx->deadline) >= 0) {
-        modbus_reset(&w->mb);
-        ctx->started = 0;
-        ESP_LOGW(TAG, "modbus: таймаут транзакции на порту %d", w->port_no);
-        send_mb_error(ctx->call, MB_ERR_TIMEOUT);
-        return 0;
-    }
-    return 1;
-}
-
-/* Обработчик запросов к прибору по контракту API:
- *   data != NULL — первичный запрос клиента: разбираем ARG и готовим транзакцию;
- *   data == NULL — такт работы: держим линию и, получив ответ, отправляем его;
- *   call == NULL — принудительное завершение: освобождаем контекст вызова.
- * Ожидания внутри нет: пока прибор не ответил, обработчик возвращает TRUE. */
+/* Обработчик по контракту API:
+ *   data != NULL — запрос клиента (первичный или переопрос подписки): разбираем
+ *                  ARG и ставим вызов в очередь порта;
+ *   data == NULL — такт работы: двигаем свою транзакцию, если она на линии, и
+ *                  сообщаем ядру о завершении, когда драйвер ответил;
+ *   call == NULL — вызов снимают: убираем его из очереди и освобождаем.
+ * Никаких ожиданий внутри: пока линия занята, обработчик просто возвращает TRUE. */
 static uint8_t mb_api_handler(void *call, void **context, uint8_t *data, uint32_t data_len) {
     if (!call) {
-        mb_call_ctx_t *ctx = (mb_call_ctx_t *)*context;
-        if (ctx) {
-            /* Вызов снимают (обрыв связи, конец подписки). Если транзакция была
-             * нашей, гасим её, чтобы линия не осталась занятой навсегда. */
-            if (ctx->started && ctx->worker) {
-                modbus_reset(&ctx->worker->mb);
-                ctx->started = 0;
+        mb_call_ctx_t *c = (mb_call_ctx_t *)*context;
+        /* В *context лежит либо наш контекст вызова, либо контекст регистрации
+         * (воркер порта) — различить их можно только по метке. */
+        if (c && c->magic == MB_CTX_MAGIC) {
+            if (c->worker) {
+                if (c->worker->active == c) {
+                    /* Транзакция на линии: гасим её. Контекст НЕ освобождаем —
+                     * драйвер ещё может позвать колбэк, и он обратится к этому
+                     * контексту (освободит его сам, увидев call == NULL). */
+                    modbus_reset(&c->worker->mb);
+                    c->worker->active = NULL;
+                    c->call = NULL;
+                    /* Контекст освободит колбэк драйвера; контекст регистрации
+                     * (порт) возвращаем на место — подписка может продолжиться. */
+                    *context = c->worker;
+                    return 0;
+                }
+                if (c->queued)
+                    mb_queue_remove(c->worker, c);
             }
-            free(ctx);
+            modbus_worker_t *w = c->worker;
+            free(c);
+            *context = w;                 /* контекст регистрации — на место */
         }
-        *context = NULL;
         return 0;
     }
 
-    mb_call_ctx_t *ctx = (mb_call_ctx_t *)*context;
+    mb_call_ctx_t *c = (mb_call_ctx_t *)*context;
 
     if (data != NULL) {
-        if (ctx && ctx->magic == MB_CTX_MAGIC) {
-            /* Повторный запрос по тому же вызову (длинная подписка): начинаем
-             * заново, контекст не создаём заново, иначе он утечёт. Транзакция
-             * при этом уже завершена или идёт — состояние знает драйвер, мы
-             * лишь разрешаем новую попытку. */
-            ctx->started = 0;
-            ctx->cb.done = 0;
+        if (c && c->magic == MB_CTX_MAGIC) {
+            /* Переопрос подписки: если предыдущий запрос ещё в очереди или на
+             * линии, второй раз его не ставим — он уже будет выполнен. */
+            if (c->queued || (c->worker && c->worker->active == c))
+                return 1;
+            c->done = 0;
         } else {
-            /* Первичный вызов: контекст регистрации (порт) заменяем своим. */
-            ctx = calloc(1, sizeof(*ctx));
-            if (!ctx) {
+            c = calloc(1, sizeof(*c));
+            if (!c) {
                 send_mb_error(call, MB_ERR_MEM);
                 return 0;
             }
-            ctx->magic  = MB_CTX_MAGIC;
-            ctx->call   = call;
-            ctx->worker = (modbus_worker_t *)*context;
-            *context    = ctx;
+            c->magic  = MB_CTX_MAGIC;
+            c->call   = call;
+            c->worker = (modbus_worker_t *)*context;
+            *context  = c;
         }
-        ctx->deadline = xTaskGetTickCount() + pdMS_TO_TICKS(MB_DEFAULT_AWT_MS + 500);
-        if (!mb_call_start(ctx, data, data_len)) {
-            /* не разобрали запрос — ответ уже отправлен, вызов завершён */
-            *context = ctx->worker;
-            free(ctx);
+
+        if (!mb_call_parse(c, data, data_len)) {
+            /* ARG не разобрали — ответ уже отправлен, вызов завершён */
+            *context = c->worker;
+            free(c);
+            return 0;
+        }
+        if (c->worker->queue_len >= MB_QUEUE_MAX) {
+            ESP_LOGW(TAG, "modbus порт %d: очередь полна (%d)", c->worker->port_no, MB_QUEUE_MAX);
+            send_mb_error(call, MB_ERR_BUSY);
+            *context = c->worker;
+            free(c);
+            return 0;
+        }
+        mb_queue_push(c->worker, c);
+        /* Попробуем отдать драйверу прямо сейчас; если он занят — очередь
+         * подождёт такта работы, а обработчик не блокирует задачу. */
+        mb_worker_start(c->worker);
+        return 1;
+    }
+
+    /* Такт работы */
+    if (!c)
+        return 0;
+
+    if (c->done) {
+        /* Драйвер ответил и ответ уже ушёл клиенту: говорим ядру, что вызов
+         * обработан. Ядро само решит — закрыть его или повторить (подписка). */
+        *context = c->worker;
+        free(c);
+        return 0;
+    }
+
+    modbus_worker_t *w = c->worker;
+
+    if (w->active == c) {
+        modbus_work(&w->mb);
+        if (c->done) {
+            *context = w;
+            free(c);
+            return 0;
+        }
+        if ((int32_t)(xTaskGetTickCount() - c->deadline) >= 0) {
+            ESP_LOGW(TAG, "modbus: прибор не ответил на порту %d", w->port_no);
+            modbus_reset(&w->mb);
+            w->active = NULL;
+            if (c->call) send_mb_error(c->call, MB_ERR_TIMEOUT);
+            *context = w;
+            free(c);
             return 0;
         }
         return 1;
     }
 
-    if (!ctx) return 0;
-    return mb_call_step(ctx);
+    /* Стоим в очереди: ждём без своего лимита по времени — вызов снимет ядро,
+     * если клиент отключится. Продвигаем очередь, когда линия освободилась. */
+    if (c->queued && w->head == c)
+        mb_worker_start(w);
+    return 1;
 }
 
 esp_err_t ws_modbus_run(app_context_t *app) {
