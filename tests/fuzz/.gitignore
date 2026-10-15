@@ -1,7 +1,0 @@
-build/
-corpus/
-crash-*
-leak-*
-oom-*
-timeout-*
-corpus_seq/

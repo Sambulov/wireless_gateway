@@ -8,6 +8,3 @@ dependencies:
     path: ../ws_server
   ws_api:
     path: ../ws_api
-  esp-idf-lib/onewire: '*'
-  espressif/ds18b20: '*'
-  espressif/onewire_bus: '*'
