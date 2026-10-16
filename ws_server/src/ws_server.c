@@ -207,6 +207,34 @@ static uint8_t bCallIdMatch(LinkedListItem_t *item, void *arg) {
     return (call->ulId == (uint32_t)arg) && call->session;
 }
 
+/* Ключ снятия вызова: соединение + FID + SID. Совпадения только по FID и SID
+ * мало — у одного клиента бывает несколько вызовов одного FID с разными SID, и
+ * снятие одного не должно задевать соседний (так уже было: снятие по
+ * совпадению fd/FID/SID сносило чужой вызов). */
+typedef struct {
+    ApiSession_t *session;
+    const char   *fid;
+    uint32_t      id;
+} delete_key_t;
+
+static uint8_t bCallDeleteMatch(LinkedListItem_t *item, void *arg) {
+    const delete_key_t *key = (const delete_key_t *)arg;
+    ApiCall_t *call = LinkedListGetObject(ApiCall_t, item);
+    return (call->session == key->session)
+        && (call->ulId == key->id)
+        && (strcmp(call->fid, key->fid) == 0);
+}
+
+/* Ищем вызов в обоих списках: он бывает и в работе (ждёт такта переспроса), и в
+ * ожидании ответа периферии. */
+static ApiCall_t *pxCallFindToDelete(ApiSession_t *sess, const char *fid, uint32_t id) {
+    delete_key_t key = { sess, fid, id };
+    LinkedListItem_t *item = pxLinkedListFindFirst(pxWsApiCall, bCallDeleteMatch, &key);
+    if(!item)
+        item = pxLinkedListFindFirst(pxWsApiWaitingForResponse, bCallDeleteMatch, &key);
+    return item ? LinkedListGetObject(ApiCall_t, item) : NULL;
+}
+
 /* Рассылка по имени FID: получатель — вызов этого FID, чьё соединение
  * обслуживается маской регистрации вызова. Сервис оказан конкретным
  * интерфейсам, поэтому соединение с чужим интерфейсом ответа не получает.
@@ -220,6 +248,21 @@ static uint8_t bCallFidMatch(LinkedListItem_t *item, void *arg) {
     if((name == NULL) || (call->session == NULL)) return 0;
     if(strcmp(call->fid, name) != 0) return 0;
     return bIfaceMaskServes(call->ulIfaceMask, call->session->ulIface);
+}
+
+/* Получатели рассылки по FID. Вызов подписки живёт то в списке работы (ждёт
+ * такта переспроса), то в списке ожидания ответа периферии — данные, которые
+ * периферия отправляет САМА, без опроса, должны доходить до неё в любом из
+ * состояний. Раньше искали только в списке ожидания, поэтому отправленный «сам
+ * по себе» кадр получал лишь тот, кто в этот момент опрашивал. */
+#define WS_API_BCAST_BATCH 8
+static ApiCall_t *apxWsApiBcast[WS_API_BCAST_BATCH];
+static int        nWsApiBcast;
+
+static void vWsApiBcastCollect(LinkedListItem_t *item, void *arg) {
+    if(nWsApiBcast >= WS_API_BCAST_BATCH) return;
+    if(!bCallFidMatch(item, arg)) return;
+    apxWsApiBcast[nWsApiBcast++] = LinkedListGetObject(ApiCall_t, item);
 }
 
 static void vBreakApiCallByFid(LinkedListItem_t *item, void *arg) {
@@ -393,6 +436,11 @@ static uint8_t _bApiCallSendJson(void *pxApiCall, const char *group_name, const 
     }
 
     if(targets == 0) {
+        /* Рассылать некому: подписчиков этого FID сейчас нет (вызов снят,
+         * соединение закрыто или подписка ещё не зарегистрирована). Молчать об
+         * этом нельзя — снаружи это выглядит как «данные пропали». */
+        ws_hal_log_i(TAG, "broadcast %s: подписчиков нет, кадр (%lu Б) не отправлен",
+                     group_name ? group_name : "-", (unsigned long)ulLen);
         ws_hal_mutex_give(xWsApiMutex);
         return 0;
     }
@@ -756,6 +804,35 @@ static void vSessionOnMessage(ApiSession_t *sess, const void *data, uint32_t len
         wscd->ulId    = (uint32_t)sid;
     }
 
+    /* FLAGS с битом удаления — это ПРОСЬБА снять раньше созданный вызов этого же
+     * клиента (тот же FID и SID), а не новый вызов. Раньше на такое сообщение
+     * создавался вызов, который тут же удалялся сам, а настоящая подписка
+     * оставалась жить: клиент, «снимавший» её, продолжал получать данные (в
+     * терминале это выходило двойным приёмом после смены канала). Снимает вызов
+     * такт работы — и только после того, как обработчик вернёт FALSE
+     * (см. _bCallTeardown), поэтому здесь только ставим флаг. */
+    if(wscd->flags & CALL_FLAG_TO_DELETE) {
+        ApiCall_t *victim = NULL;
+        if(wscd->bHasSid) {
+            ws_hal_mutex_take(xWsApiMutex, WS_HAL_WAIT_FOREVER);
+            victim = pxCallFindToDelete(sess, wscd->fid, wscd->ulId);
+            if(victim)
+                victim->flags |= CALL_FLAG_TO_DELETE;
+            ws_hal_mutex_give(xWsApiMutex);
+        } else {
+            ws_hal_log_w(TAG, "Снятие вызова %s без SID: нечего искать", wscd->fid);
+        }
+
+        ws_hal_log_i(TAG, "Снятие вызова %s id:%lu %s", wscd->fid, (unsigned long)wscd->ulId,
+                     victim ? "принято" : "— такого вызова нет");
+        /* Клиент ждёт подтверждения, что просьба дошла. */
+        bApiCallSendStatus(wscd, API_CALL_STATUS_DELIVERED);
+        free(wscd->pucReqData);
+        free(wscd);
+        return;
+    }
+
+
     /* Токены jsmn указывают внутрь принятого сообщения, и оно живёт до конца
      * этого вызова: буфер принадлежит транспорту и освобождается им после
      * возврата из обработчика события. */
@@ -1068,27 +1145,60 @@ static void vWsApiCallWorkerStep(void) {
             ws_hal_mutex_take(xWsApiMutex, WS_HAL_WAIT_FOREVER);
 
             if(periph_msg.id == 0) {
-                /* Broadcast: deliver to all waiting subscribers of this FID */
-                LinkedListItem_t *it = pxLinkedListFindFirst(pxWsApiWaitingForResponse, bCallFidMatch, (void *)periph_msg.fid);
-                while(it != NULL) {
-                    LinkedListItem_t *next_it = pxLinkedListFindNextNoOverlap(it, bCallFidMatch, (void *)periph_msg.fid);
-                    ApiCall_t *c = LinkedListGetObject(ApiCall_t, it);
+                /* Рассылка по FID — ВСЕМ подписчикам сервиса, в каком бы списке
+                 * их вызов ни лежал. Собираем получателей под мьютексом, а
+                 * доставляем уже без него: обработчик подписки сам зовёт
+                 * bApiCallSendJson, который берёт тот же (нерекурсивный) мьютекс,
+                 * то есть рассылка под мьютексом — самоблокировка. */
+                /* Мьютекс уже взят в начале тела цикла — второй захват того же
+                 * нерекурсивного мьютекса останавливает задачу API навсегда
+                 * (проверено на устройстве: HTTP отвечает, WebSocket молчит). */
+                nWsApiBcast = 0;
+                ulLinkedListDoForeach(pxWsApiWaitingForResponse, vWsApiBcastCollect, (void *)periph_msg.fid);
+                ulLinkedListDoForeach(pxWsApiCall, vWsApiBcastCollect, (void *)periph_msg.fid);
+                ws_hal_mutex_give(xWsApiMutex);        /* доставка — уже без мьютекса */
+
+                /* Данные — ОДНИМ буфером на всех подписчиков:
+                 * _bApiCallSendJson с именем FID собирает конверт один раз, отдаёт
+                 * его всем подписчикам и освобождает после последней отправки
+                 * (счётчик получателей в блоке ответа). Раньше на КАЖДОГО
+                 * подписчика собирался свой буфер с копией тех же данных — одна и
+                 * та же портянка из порта дублировалась в куче N раз. */
+                if(periph_msg.len) {
+                    ws_hal_log_d(TAG, "broadcast fid:%s len:%lu, получателей %d",
+                                 periph_msg.fid, periph_msg.len, nWsApiBcast);
+                    _bApiCallSendJson(NULL, periph_msg.fid, periph_msg.data, periph_msg.len);
+                }
+
+                for(int i = 0; i < nWsApiBcast; i++) {
+                    ApiCall_t *c = apxWsApiBcast[i];
+                    /* Обработчику подписки данные отдаём как раньше — сам кадр
+                     * клиенту уже ушёл выше, общим буфером. */
                     if(c->fHandler)
                         c->fHandler(c, &c->pxHandlerContext, periph_msg.data, periph_msg.len);
-                    if(periph_msg.len) {
-                        ws_hal_log_i(TAG, "broadcast fid:%s len:%lu", periph_msg.fid, periph_msg.len);
-                        _bApiCallSendJson(c, NULL, periph_msg.data, periph_msg.len);
-                    }
-                    if(!(c->flags & CALL_FLAG_LONG_TERM)) {
-                        vLinkedListUnlink(it);
-                        free(c);
-                    } else {
+
+                    ws_hal_mutex_take(xWsApiMutex, WS_HAL_WAIT_FOREVER);
+                    LinkedListItem_t *li = LinkedListItem(c);
+                    if(c->flags & CALL_FLAG_LONG_TERM) {
+                        /* Подписка живёт: вызов из списка ожидания возвращаем в
+                         * список работы, а уже лежащий там не трогаем — вторая
+                         * вставка порвала бы список. */
                         c->ulNextPollTick = ws_hal_tick() + c->ulPollIntervalTicks;
-                        vLinkedListInsertLast(&pxWsApiCall, it);
+                        if(bLinkedListContains(pxWsApiWaitingForResponse, li)) {
+                            vLinkedListUnlink(li);
+                            vLinkedListInsertLast(&pxWsApiCall, li);
+                        }
+                    } else {
+                        if(bLinkedListContains(pxWsApiWaitingForResponse, li)) vLinkedListUnlink(li);
+                        else if(bLinkedListContains(pxWsApiCall, li)) vLinkedListUnlink(li);
+                        free(c->pucReqData);
+                        free(c);
                     }
-                    it = next_it;
+                    ws_hal_mutex_give(xWsApiMutex);
                 }
-                goto next;
+
+                free(periph_msg.data);
+                continue;                  /* мьютекс отпущен, к next: не идём */
             }
 
             LinkedListItem_t *it2 = pxLinkedListFindFirst(pxWsApiWaitingForResponse, bCallIdMatch, (void *)periph_msg.id);

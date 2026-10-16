@@ -370,6 +370,11 @@ int ws_transport_stub_pending_count(ws_transport_stub_conn_t *conn) {
     return conn ? conn->pending_count : 0;
 }
 
+const void *ws_transport_stub_pending_data(ws_transport_stub_conn_t *conn, int idx) {
+    if((conn == NULL) || (idx < 0) || (idx >= conn->pending_count)) return NULL;
+    return conn->pending[idx].data;
+}
+
 void ws_transport_stub_complete_pending(ws_transport_stub_conn_t *conn, ws_transport_result_t res) {
     if(conn == NULL) return;
     /* Обработчик может поставить новые отправки: завершаем только те, что уже

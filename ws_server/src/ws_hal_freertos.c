@@ -48,6 +48,14 @@ uint32_t ws_hal_ms_to_ticks(uint32_t ms) {
     return (uint32_t)pdMS_TO_TICKS(ms);
 }
 
+uint32_t ws_hal_ticks_to_ms(uint32_t ticks) {
+    return (uint32_t)(ticks * portTICK_PERIOD_MS);
+}
+
+void ws_hal_delay_ms(uint32_t ms) {
+    vTaskDelay(pdMS_TO_TICKS(ms));
+}
+
 void ws_hal_task_create(void (*fn)(void *), const char *name,
                         uint32_t stack_words, void *arg, int priority) {
     xTaskCreate(fn, name, stack_words, arg, priority, NULL);

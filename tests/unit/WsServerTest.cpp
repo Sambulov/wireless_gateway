@@ -64,12 +64,16 @@
  * Regression (built with ASan/UBSan, see Makefile):
  * [x] Отправка не прошла у снятого вызова → нет записи через NULL-сессию
  * [x] TO_DELETE followed by same fid/SID call → both freed, no UAF
+ * [x] TO_DELETE снимает вызов с этим SID и не трогает соседний
  */
 
 extern "C" {
 #include "web_api.h"
 #include "ws_transport.h"
 #include "ws_hal.h"
+/* Очередь ядра для ответов периферии: в устройстве объявлена в app.h, тесту
+ * достаточно самого символа (он определён в ws_server.c). */
+void *get_ws_worker_queue(void);
 }
 #include "ws_hal_stub.h"
 #include "ws_transport_stub.h"
@@ -101,6 +105,17 @@ static int long_handler_pulses;
 static uint8_t long_handler(void *call, void **ctx, uint8_t *data, uint32_t len) {
     (void)call; (void)ctx; (void)data; (void)len;
     if (!data) long_handler_pulses++;
+    return 1;
+}
+
+/* Подписка, которая живёт тактами, но честно завершается, когда вызов снимают:
+ * по контракту обработчик получает call == NULL и обязан вернуть FALSE. Так
+ * ведут себя настоящие обработчики (например Modbus). */
+static int removable_pulses;
+static uint8_t removable_handler(void *call, void **ctx, uint8_t *data, uint32_t len) {
+    (void)ctx; (void)len;
+    if (!call) return 0;
+    if (!data) removable_pulses++;
     return 1;
 }
 
@@ -1137,15 +1152,92 @@ TEST(WsServerRegression, ToDeleteFreesSameCallQueuedRightAfterIt) {
 
     ws_server_test_worker_step();
 
-    /* Снимается ТОЛЬКО вызов с флагом удаления; второй (подписка) живёт и уходит
-     * в очередь периферии — раньше по совпадению fid/SID сносило оба. */
+    /* Снятие — просьба, а не вызов: подтверждение уходит сразу, а подписка,
+     * пришедшая следом, живёт и уходит в очередь периферии. Раньше на просьбу
+     * создавался свой вызов (и второй такт тратился на его подтверждение), а
+     * снятие по совпадению fid/SID сносило соседний вызов. */
     LONGS_EQUAL(1, ws_hal_stub_queue_count(periph_q));
-    LONGS_EQUAL(1, ws_transport_stub_send_attempts(conn));   /* DELIVERED отданному запросу */
+    LONGS_EQUAL(2, ws_transport_stub_send_attempts(conn));   /* DELIVERED просьбе и подписке */
 
-    /* Снятие подтверждается клиенту следующим тактом (такт работы идёт в начале
-     * шага, а на первом шаге тик ещё нулевой). */
     ws_hal_stub_advance_tick(20);
     ws_server_test_worker_step();
-    LONGS_EQUAL(2, ws_transport_stub_send_attempts(conn));   /* DELIVERED о снятии */
+    LONGS_EQUAL(2, ws_transport_stub_send_attempts(conn));   /* больше ничего не уходит */
     LONGS_EQUAL(1, ws_hal_stub_queue_count(periph_q));
+}
+
+TEST(WsServerRegression, ToDeleteRemovesCallWithThatSidAndKeepsNeighbour) {
+    /* Один FID, две подписки одного клиента: SID 7 и SID 8. Просьба снять SID 7
+     * обязана снять ИМЕННО его: соседний вызов того же FID остаётся в работе и
+     * продолжает переспрашиваться. Раньше такая просьба не снимала ничего —
+     * создавался вызов, удалявший сам себя, а подписка жила дальше (на устройстве
+     * это давало двойной приём данных после смены канала в терминале). */
+    removable_pulses = 0;
+    LONGS_EQUAL(1, bApiCallRegister(removable_handler, "regx.pulse", GW_IFACE_MASK_ANY, NULL));
+
+    send_text(conn, "{\"FID\":\"regx.pulse\",\"FLAGS\":4,\"SID\":7,\"ARG\":{\"RDL\":10}}");
+    send_text(conn, "{\"FID\":\"regx.pulse\",\"FLAGS\":4,\"SID\":8,\"ARG\":{\"RDL\":10}}");
+    ws_server_test_worker_step();                        /* обе подписки отданы обработчику */
+    ws_hal_stub_advance_tick(50);
+    ws_server_test_worker_step();
+    LONGS_EQUAL(2, removable_pulses);                    /* такт каждой из двух подписок */
+
+    send_text(conn, "{\"FID\":\"regx.pulse\",\"FLAGS\":8,\"SID\":7}");
+    ws_server_test_worker_step();                        /* снятие доходит до конца */
+
+    ws_hal_stub_advance_tick(50);
+    ws_server_test_worker_step();
+    const int one_alive = removable_pulses - 2;
+
+    ws_hal_stub_advance_tick(50);
+    ws_server_test_worker_step();
+    const int still_one = removable_pulses - 2 - one_alive;
+
+    /* Живая подписка ровно одна: каждый шаг даёт один такт, а не два. При старом
+     * поведении снятие не работало, и тактов было бы по два на шаг. */
+    LONGS_EQUAL(1, one_alive);
+    LONGS_EQUAL(1, still_one);
+}
+TEST(WsServerRegression, BroadcastSendsOneSharedBufferToEverySubscriber) {
+    /* Данные периферии уходят подписчикам ОДНИМ буфером: на каждого клиента не
+     * собирается своя копия той же портянки. Проверяем по адресу, который ядро
+     * отдало транспорту: у обоих подписчиков он один и тот же. */
+    ws_transport_stub_set_deferred(conn, 1);
+    ws_transport_stub_conn_t *conn2 = ws_transport_stub_connect(2);
+    ws_transport_stub_set_deferred(conn2, 1);
+
+    send_text(conn,  "{\"FID\":\"regx.queue\",\"FLAGS\":4,\"SID\":1,\"ARG\":{\"RDL\":1000}}");
+    send_text(conn2, "{\"FID\":\"regx.queue\",\"FLAGS\":4,\"SID\":2,\"ARG\":{\"RDL\":1000}}");
+    ws_server_test_worker_step();
+    /* Оба опроса уже отданы периферии — очередь опустошаем: дальше она нужна
+     * только для ответа-рассылки. */
+    webapi_msg_t *msg;
+    while (ws_hal_queue_receive(periph_q, &msg, WS_HAL_WAIT_NONE)) {
+        free(msg->data);
+        free(msg);
+    }
+    webapi_msg_t resp = { .fd = -1 };
+    resp.id = 0;
+    bApiFidSet(resp.fid, REG_FID_QUEUE);
+    resp.data = (uint8_t *)malloc(6);
+    memcpy(resp.data, "\"AAAA\"", 6);
+    resp.len  = 6;
+    ws_hal_queue_send(get_ws_worker_queue(), &resp, WS_HAL_WAIT_NONE);
+
+    ws_server_test_worker_step();
+
+    /* Кадр ушёл обоим подписчикам, хотя опрашивал только первый. Перед кадром
+     * каждому ушло подтверждение (DELIVERED), поэтому смотрим ПОСЛЕДНЮЮ
+     * отправку: у обоих это данные, и это ОДИН И ТОТ ЖЕ буфер. */
+    const int n1 = ws_transport_stub_pending_count(conn);
+    const int n2 = ws_transport_stub_pending_count(conn2);
+    CHECK(n1 >= 2);
+    CHECK(n2 >= 2);
+    POINTERS_EQUAL(ws_transport_stub_pending_data(conn,  n1 - 1),
+                   ws_transport_stub_pending_data(conn2, n2 - 1));
+    STRCMP_CONTAINS("\"AAAA\"", ws_transport_stub_last_sent(conn));
+
+    /* Завершение отправок освобождает общий блок ровно один раз (ASan поймал бы
+     * двойное освобождение) */
+    ws_transport_stub_complete_pending(conn, WS_TRANSPORT_OK);
+    ws_transport_stub_complete_pending(conn2, WS_TRANSPORT_OK);
 }

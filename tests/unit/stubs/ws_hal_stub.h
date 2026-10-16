@@ -26,6 +26,8 @@ uint32_t ws_hal_stub_log_w_count(void);
 
 /* Queue introspection — how many items are currently pending in a queue */
 uint32_t ws_hal_stub_queue_count(void *queue);
+/* Сколько миллисекунд сервис просил подождать (суммарно с последнего сброса) */
+uint32_t ws_hal_stub_last_delay(void);
 
 #ifdef __cplusplus
 }

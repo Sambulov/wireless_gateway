@@ -100,6 +100,20 @@ typedef struct {
     /* IPv4 settings of the two interfaces, see net_iface_cnf_t */
     net_iface_cnf_t net_sta;
     net_iface_cnf_t net_ap;
+    /* Точка доступа, которую выбрал пользователь (BSSID конкретного радио).
+     * Все нули — не выбирал: подключаемся к любой точке с этим именем, выбирая
+     * сильнейшую. Адрес привязан к имени сети: сменилось имя — привязка не
+     * действует. */
+    uint8_t sta_bssid[6];
+    /* MAC адреса интерфейсов. mac_sta/mac_ap — то, что ЗАКАЗАЛ пользователь
+     * (все нули — «как с завода»); mac_sta_factory/mac_ap_factory — заводские
+     * значения из eFuse, прочитанные до первого esp_wifi_set_mac. Драйвер
+     * принимает новый MAC только на остановленном интерфейсе, поэтому смена
+     * действует со следующей перезагрузки (см. wifi_init_ap_sta). */
+    uint8_t mac_sta[6];
+    uint8_t mac_ap[6];
+    uint8_t mac_sta_factory[6];
+    uint8_t mac_ap_factory[6];
     httpd_handle_t web_server;
     httpd_handle_t ws_server;
     struct {
@@ -119,7 +133,14 @@ httpd_uri_t *ws_transport_httpd_init(char *uri);
 
 bool load_config(app_context_t *app);
 void save_wifi_sta_config(const char *ssid, const char *password);
+/* BSSID выбранной точки (6 байт); NULL или нули — «любая точка с этим именем» */
+void save_wifi_sta_bssid(const uint8_t *bssid);
 void save_wifi_ap_config(const char *ssid, const char *password);
+/* Персональный MAC интерфейса: mac == NULL (или все нули) — вернуть заводской,
+ * ключ в NVS стирается. Значение проверяется по тем же правилам, что и в
+ * драйвере: первый байт без бита групповой адресации, не все нули. */
+void save_wifi_mac_config(uint8_t ap, const uint8_t *mac);
+uint8_t wifi_mac_valid(const uint8_t *mac);
 /* Per-device softAP credentials: "WG-<3 MAC bytes>" + password derived from the
  * MAC. CONFIG_WIFI_AP_DEFAULT_SSID/_PASS override the generated values when set. */
 void wifi_ap_credentials_default(char *ssid, size_t ssid_size, char *pass, size_t pass_size);
@@ -156,6 +177,12 @@ void net_format_ip4(uint32_t ip, char *out, size_t out_size);
  *   sys.file.rename RENAME a file: FROM, TO (refused when TO already exists)
  *   sys.net    GET/SET IPv4 settings of the station and access point interfaces
  *              (DHCP or static address, mask, gateway, DNS)
+ *   wifi.mac   GET/SET the MAC of one interface (IF = STA|AP, MAC = address or
+ *              "factory"): the driver takes a new MAC only while the interface is
+ *              stopped, so the change is stored in NVS and applied on reboot
+ *   wifi.scan  GET the list of networks around (SSID, RSSI, channel, security);
+ *              a helper for filling the SSID field — credentials are still typed
+ *              by hand
  *
  * Файловый менеджер (sys.files и sys.file.*) оказывается только точке доступа:
  * раньше это была та же граница у HTTP-методов /upload/…, /delete/…, /rename/…,
@@ -171,6 +198,8 @@ void net_format_ip4(uint32_t ip, char *out, size_t out_size);
 #define ESP_WS_API_SYS_FILE_MKDIR    "sys.file.mkdir"
 #define ESP_WS_API_SYS_FILE_RMDIR    "sys.file.rmdir"
 #define ESP_WS_API_SYS_NET           "sys.net"
+#define ESP_WS_API_SYS_WIFI_MAC      "wifi.mac"
+#define ESP_WS_API_SYS_WIFI_SCAN     "wifi.scan"
 /* Registers the system FID queue and starts the task serving it */
 esp_err_t api_sys_run(app_context_t *app);
 

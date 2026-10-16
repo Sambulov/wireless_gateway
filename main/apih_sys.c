@@ -55,6 +55,8 @@
 #define SYS_BAD_ARG     "0x80000003"
 #define SYS_NO_MEM      "0x80000006"
 #define SYS_NO_ACCESS   "0x80000007"
+#define SYS_BUSY        "0x80000008"
+#define SYS_TIMEOUT     "0x80000009"
 #define SYS_INTERNAL    "0x8000000f"
 
 /* ── helpers ─────────────────────────────────────────────────────────────── */
@@ -99,6 +101,12 @@ static void resp_error(const char *sta, const char *err, const char *msg) {
 static void resp_ok(void) {
     resp_error(SYS_OK, NULL, NULL);
 }
+
+/* Разбор и печать MAC-адреса: сами функции ниже (раздел wifi.mac), но нужны и
+ * сервисам Wi-Fi, которые идут раньше по тексту — привязке к выбранной точке. */
+#define MAC_TEXT_LEN 18   /* "aa:bb:cc:dd:ee:ff" — 17 символов и нуль */
+static uint8_t mac_parse(const char *s, uint8_t *out);
+static void    mac_text(const uint8_t *mac, char *out, size_t out_size);
 
 /* ── Экземпляры сервиса ─────────────────────────────────────────────────── *
  *
@@ -177,6 +185,27 @@ static void resp_denied(const sys_service_t *svc, uint8_t clients) {
 
 /* ── wifi.sta: station (STA) credentials ────────────────────────────────────── */
 
+/* Переподключение станции откладывается на полсекунды: сначала должен уйти ответ
+ * (см. handle_sta). */
+#define STA_APPLY_DELAY_MS 500
+
+static void vStaApplyTask(void *arg) {
+    app_context_t *app = (app_context_t *)arg;
+    vTaskDelay(pdMS_TO_TICKS(STA_APPLY_DELAY_MS));
+    ESP_LOGW(TAG, "Applying station credentials, reconnecting");
+    /* Привязка к выбранной точке — часть настроек станции: пусто значит «любая
+     * точка с этим именем, сильнейшая». */
+    wifi_sta_set_target(&app->sta_cnf, app->sta_bssid);
+    esp_err_t err = esp_wifi_set_config(WIFI_IF_STA, &app->sta_cnf);
+    if (err == ESP_OK) {
+        esp_wifi_disconnect();
+        err = esp_wifi_connect();
+    }
+    if (err != ESP_OK)
+        ESP_LOGE(TAG, "STA configuration failed: %s", esp_err_to_name(err));
+    vTaskDelete(NULL);
+}
+
 static void handle_sta(const sys_service_t *svc, const uint8_t *data, uint32_t len) {
     app_context_t *app = svc->app;
     uint8_t clients = wifi_ap_clients_count();
@@ -191,17 +220,46 @@ static void handle_sta(const sys_service_t *svc, const uint8_t *data, uint32_t l
     gw_json_t json;
     char ssid[SSID_MAX + 1] = {0};
     char pass[PASS_MAX + 1] = {0};
+    char bssid_in[MAC_TEXT_LEN + 8] = {0};
+    uint8_t bssid_new[6] = {0};
     uint8_t parsed = (data && len)
                      && gw_json_parse(&json, (const char *)data, len, toks, SYS_ARG_MAX_TOKENS);
     uint8_t write = parsed
                     && gw_json_str(&json, "SSID", ssid, sizeof(ssid))
                     && gw_json_str(&json, "PASS", pass, sizeof(pass));
 
+    if (write) {
+        /* BSSID — необязательное поле: пусто (или его нет) значит «любая точка с
+         * этим именем». Так страница может и привязать к выбранной из таблицы
+         * точке, и отказаться от привязки, не меняя остального. */
+        uint8_t mac[6];
+        gw_json_str(&json, "BSSID", bssid_in, sizeof(bssid_in));
+        if (bssid_in[0] == '\0') {
+            memset(bssid_new, 0, sizeof(bssid_new));
+        } else if (!mac_parse(bssid_in, mac) || !wifi_mac_valid(mac)) {
+            resp_error(SYS_BAD_ARG, "BSSID", "BSSID must look like aa:bb:cc:dd:ee:ff");
+            return;
+        } else {
+            memcpy(bssid_new, mac, sizeof(bssid_new));
+        }
+    }
+
     if (!write) {
+        char pin[MAC_TEXT_LEN];
+        mac_text(app->sta_bssid, pin, sizeof(pin));   /* нули печатаются как есть */
         resp_ok();
         gw_jsonw_str(&sys_w, "SSID", (char *)app->sta_cnf.sta.ssid);
         gw_jsonw_str(&sys_w, "PASS", allowed ? (char *)app->sta_cnf.sta.password : "");
         gw_jsonw_bool(&sys_w, "PASS_HIDDEN", !allowed);
+        /* Выбранная точка: пусто — привязки нет. BSSID_ACTIVE отвечает, действует
+         * ли она прямо сейчас: если выбранной точки не было в эфире, устройство
+         * сняло привязку, чтобы не остаться без связи (в NVS выбор сохранён). */
+        wifi_config_t live;
+        uint8_t pin_active = (esp_wifi_get_config(WIFI_IF_STA, &live) == ESP_OK)
+                             && live.sta.bssid_set;
+        gw_jsonw_str(&sys_w, "BSSID", wifi_mac_valid(app->sta_bssid) ? pin : "");
+        gw_jsonw_bool(&sys_w, "BSSID_SET", wifi_mac_valid(app->sta_bssid));
+        gw_jsonw_bool(&sys_w, "BSSID_ACTIVE", pin_active);
         gw_jsonw_bool(&sys_w, "FROM_AP", svc->from_ap);
         gw_jsonw_int(&sys_w, "CLIENTS", clients);
         return;
@@ -223,28 +281,63 @@ static void handle_sta(const sys_service_t *svc, const uint8_t *data, uint32_t l
         return;
     }
 
+    /* Сменилось имя сети — прежняя привязка к точке относится к другой сети и
+     * смысла не имеет. */
+    if (strcmp((char *)app->sta_cnf.sta.ssid, ssid) != 0)
+        memset(bssid_new, 0, sizeof(bssid_new));
+
+    uint8_t changed = (strcmp((char *)app->sta_cnf.sta.ssid, ssid) != 0)
+                   || (strcmp((char *)app->sta_cnf.sta.password, pass) != 0)
+                   || (memcmp(app->sta_bssid, bssid_new, 6) != 0);
+
     strlcpy((char *)app->sta_cnf.sta.ssid, ssid, sizeof(app->sta_cnf.sta.ssid));
     strlcpy((char *)app->sta_cnf.sta.password, pass, sizeof(app->sta_cnf.sta.password));
-
-    save_wifi_sta_config((char *)app->sta_cnf.sta.ssid, (char *)app->sta_cnf.sta.password);
-
-    esp_err_t err = esp_wifi_set_config(WIFI_IF_STA, &app->sta_cnf);
-    if (err == ESP_OK) {
-        esp_wifi_disconnect();
-        err = esp_wifi_connect();
+    memcpy(app->sta_bssid, bssid_new, sizeof(app->sta_bssid));
+    if (changed) {
+        save_wifi_sta_config(ssid, pass);
+        save_wifi_sta_bssid(wifi_mac_valid(bssid_new) ? bssid_new : NULL);
     }
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "STA configuration failed: %s", esp_err_to_name(err));
-        resp_error(SYS_INTERNAL, "WIFI", esp_err_to_name(err));
+
+    /* Ответ уходит ДО применения. Станция переподключается (disconnect/connect),
+     * а это событие двигает радио: пока ответ не отправлен, клиент рискует его
+     * не получить вовсе (проверено: ответ терялся, страница вечно показывала
+     * «Сохраняем…»). Так же поступает sys.net с адресом точки доступа.
+     * Если ничего не менялось, радио не трогаем совсем. */
+    resp_ok();
+    gw_jsonw_str(&sys_w, "SSID", (char *)app->sta_cnf.sta.ssid);
+    char pin[MAC_TEXT_LEN];
+    mac_text(app->sta_bssid, pin, sizeof(pin));
+    gw_jsonw_str(&sys_w, "BSSID", wifi_mac_valid(app->sta_bssid) ? pin : "");
+    gw_jsonw_bool(&sys_w, "BSSID_SET", wifi_mac_valid(app->sta_bssid));
+    gw_jsonw_bool(&sys_w, "CHANGED", changed);
+
+    if (!changed) {
+        ESP_LOGI(TAG, "STA credentials unchanged — nothing to apply");
         return;
     }
 
-    ESP_LOGI(TAG, "STA set to SSID '%s', connecting...", app->sta_cnf.sta.ssid);
-    resp_ok();
-    gw_jsonw_str(&sys_w, "SSID", (char *)app->sta_cnf.sta.ssid);
+    gw_jsonw_bool(&sys_w, "RECONNECT", 1);
+    if (xTaskCreate(vStaApplyTask, "sta_apply", 3072, app, 5, NULL) != pdPASS)
+        ESP_LOGE(TAG, "Failed to schedule station apply");
+    ESP_LOGI(TAG, "STA set to SSID '%s', reconnecting...", app->sta_cnf.sta.ssid);
 }
 
 /* ── wifi.ap: softAP credentials ───────────────────────────────────────────── */
+
+/* Как и у станции: сначала ответ, потом применение. Запись настроек работающей
+ * точки доступа её перезапускает и рассылает deauth (проверено по логу платы),
+ * поэтому ответ, отправленный после, до клиента уже не доходит. */
+#define AP_APPLY_DELAY_MS 500
+
+static void vApApplyTask(void *arg) {
+    app_context_t *app = (app_context_t *)arg;
+    vTaskDelay(pdMS_TO_TICKS(AP_APPLY_DELAY_MS));
+    ESP_LOGW(TAG, "Applying access point credentials (its clients will be dropped)");
+    esp_err_t err = esp_wifi_set_config(WIFI_IF_AP, &app->ap_cnf);
+    if (err != ESP_OK)
+        ESP_LOGE(TAG, "AP configuration failed: %s", esp_err_to_name(err));
+    vTaskDelete(NULL);
+}
 
 static void handle_ap(const sys_service_t *svc, const uint8_t *data, uint32_t len) {
     app_context_t *app = svc->app;
@@ -287,39 +380,243 @@ static void handle_ap(const sys_service_t *svc, const uint8_t *data, uint32_t le
         return;
     }
 
+    uint8_t changed = (strcmp((char *)app->ap_cnf.ap.ssid, ssid) != 0)
+                   || (strcmp((char *)app->ap_cnf.ap.password, pass) != 0);
+
     strlcpy((char *)app->ap_cnf.ap.ssid, ssid, sizeof(app->ap_cnf.ap.ssid));
     app->ap_cnf.ap.ssid_len = strlen(ssid);
     strlcpy((char *)app->ap_cnf.ap.password, pass, sizeof(app->ap_cnf.ap.password));
     app->ap_cnf.ap.authmode = (pass[0] != '\0') ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN;
 
-    esp_err_t err = esp_wifi_set_config(WIFI_IF_AP, &app->ap_cnf);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "AP configuration failed: %s", esp_err_to_name(err));
-        resp_error(SYS_INTERNAL, "WIFI", esp_err_to_name(err));
-        return;
-    }
-
-    save_wifi_ap_config((char *)app->ap_cnf.ap.ssid, (char *)app->ap_cnf.ap.password);
-    ESP_LOGW(TAG, "AP set to SSID '%s' (password %s)", app->ap_cnf.ap.ssid,
-             app->ap_cnf.ap.password[0] ? "changed" : "cleared, network is open");
-
+    /* Ответ уходит ДО применения: точка доступа при смене настроек перезапускает
+     * радио и выбивает всех своих клиентов, включая того, кто ждёт этот ответ.
+     * Ничего не менялось — радио не трогаем совсем (страница присылает имя и
+     * пароль при каждом сохранении, в том числе когда правили только MAC). */
     resp_ok();
     gw_jsonw_str(&sys_w, "SSID", (char *)app->ap_cnf.ap.ssid);
     gw_jsonw_int(&sys_w, "CLIENTS", clients);
+    gw_jsonw_bool(&sys_w, "CHANGED", changed);
+
+    if (!changed) {
+        ESP_LOGI(TAG, "AP credentials unchanged — nothing to apply");
+        return;
+    }
+
+    save_wifi_ap_config(ssid, pass);
+    ESP_LOGW(TAG, "AP set to SSID '%s' (password %s): its clients will reconnect",
+             app->ap_cnf.ap.ssid,
+             app->ap_cnf.ap.password[0] ? "changed" : "cleared, network is open");
+
+    gw_jsonw_bool(&sys_w, "RECONNECT", 1);
+    if (xTaskCreate(vApApplyTask, "ap_apply", 3072, app, 5, NULL) != pdPASS)
+        ESP_LOGE(TAG, "Failed to schedule access point apply");
+}
+
+/* ── wifi.mac: MAC адрес интерфейса ────────────────────────────────────────── *
+ *
+ * Драйвер принимает новый MAC только на ОСТАНОВЛЕННОМ интерфейсе, а интерфейс
+ * у нас работает всегда: гасить радио на время правки — значит рвать ту самую
+ * связь, по которой пришла команда. Поэтому адрес сохраняется в NVS и
+ * применяется при следующей загрузке (wifi_init_ap_sta), а страница честно
+ * говорит, что нужна перезагрузка.
+ *
+ * Заводской адрес берётся не «из ниоткуда»: он прочитан из eFuse при старте
+ * (load_config) и лежит в app->mac_*_factory — после подмены адреса спросить
+ * его у eFuse ещё раз уже не получится. */
+
+static int hex_nibble(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+/* "aa:bb:cc:dd:ee:ff", "aa-bb-…", "aabb.ccdd.eeff" или просто 12 hex-цифр.
+ * 0 — разобрать не удалось (в out при этом ничего осмысленного). */
+static uint8_t mac_parse(const char *s, uint8_t *out) {
+    uint8_t nib = 0;
+    if (!s) return 0;
+    for (; *s; s++) {
+        if (*s == ':' || *s == '-' || *s == '.' || *s == ' ') continue;
+        int v = hex_nibble(*s);
+        if (v < 0 || nib >= 12) return 0;
+        if ((nib & 1) == 0) out[nib >> 1] = (uint8_t)(v << 4);
+        else                out[nib >> 1] |= (uint8_t)v;
+        nib++;
+    }
+    return nib == 12;
+}
+
+static void mac_text(const uint8_t *mac, char *out, size_t out_size) {
+    snprintf(out, out_size, MACSTR, MAC2STR(mac));
+}
+
+/* Текущий адрес интерфейса спрашиваем у драйвера, а не у своих записей: после
+ * перезагрузки истина только там, а наши записи — это «что заказано». */
+static void mac_runtime(wifi_interface_t iface, const uint8_t *factory, char *out, size_t out_size) {
+    uint8_t mac[6];
+    if (esp_wifi_get_mac(iface, mac) == ESP_OK) mac_text(mac, out, out_size);
+    else                                        mac_text(factory, out, out_size);
+}
+
+/* Что будет у интерфейса после перезагрузки: личный адрес, а без него — заводской. */
+static const uint8_t *mac_effective(const uint8_t *custom, const uint8_t *factory) {
+    return wifi_mac_valid(custom) ? custom : factory;
+}
+
+/* Заказан ли адрес, который ещё не действует: пока это так, странице есть что
+ * сказать про перезагрузку. */
+static uint8_t mac_iface_pending(const app_context_t *app, uint8_t ap) {
+    uint8_t mac[6];
+    const uint8_t *want = mac_effective(ap ? app->mac_ap : app->mac_sta,
+                                        ap ? app->mac_ap_factory : app->mac_sta_factory);
+    if (esp_wifi_get_mac(ap ? WIFI_IF_AP : WIFI_IF_STA, mac) != ESP_OK)
+        return 0;
+    return memcmp(mac, want, 6) != 0;
+}
+
+static uint8_t mac_pending(const app_context_t *app) {
+    if (mac_iface_pending(app, 0)) return 1;
+#if CONFIG_WIFI_AP_ENABLE
+    if (mac_iface_pending(app, 1)) return 1;
+#endif
+    return 0;
+}
+
+static void handle_mac(const sys_service_t *svc, const uint8_t *data, uint32_t len) {
+    app_context_t *app = svc->app;
+    uint8_t clients = wifi_ap_clients_count();
+
+    GW_JSON_TOKENS(toks, SYS_ARG_MAX_TOKENS);
+    gw_json_t json;
+    char iface[8] = {0};
+    char mac_in[MAC_TEXT_LEN + 8] = {0};
+    uint8_t parsed = (data && len)
+                     && gw_json_parse(&json, (const char *)data, len, toks, SYS_ARG_MAX_TOKENS);
+    /* Признак записи — поле IF; MAC читается здесь же: пустое значение (или его
+     * отсутствие) значит «верни заводской адрес». */
+    uint8_t write = parsed && gw_json_str(&json, "IF", iface, sizeof(iface));
+    if (write) gw_json_str(&json, "MAC", mac_in, sizeof(mac_in));
+
+    if (!write) {
+        char cur_sta[MAC_TEXT_LEN], cur_ap[MAC_TEXT_LEN];
+        char fct_sta[MAC_TEXT_LEN], fct_ap[MAC_TEXT_LEN];
+        char want_sta[MAC_TEXT_LEN], want_ap[MAC_TEXT_LEN];
+        mac_runtime(WIFI_IF_STA, app->mac_sta_factory, cur_sta, sizeof(cur_sta));
+        mac_runtime(WIFI_IF_AP,  app->mac_ap_factory,  cur_ap,  sizeof(cur_ap));
+        mac_text(app->mac_sta_factory, fct_sta, sizeof(fct_sta));
+        mac_text(app->mac_ap_factory,  fct_ap,  sizeof(fct_ap));
+        /* WANT_* — что будет действовать после перезагрузки: страница заполняет
+         * поля именно этим, а заводской адрес показывает подсказкой. */
+        mac_text(mac_effective(app->mac_sta, app->mac_sta_factory), want_sta, sizeof(want_sta));
+        mac_text(mac_effective(app->mac_ap,  app->mac_ap_factory),  want_ap,  sizeof(want_ap));
+
+        resp_ok();
+        gw_jsonw_str(&sys_w, "MAC_STA", cur_sta);
+        gw_jsonw_str(&sys_w, "MAC_AP", cur_ap);
+        gw_jsonw_str(&sys_w, "FACTORY_STA", fct_sta);
+        gw_jsonw_str(&sys_w, "FACTORY_AP", fct_ap);
+        gw_jsonw_str(&sys_w, "WANT_STA", want_sta);
+        gw_jsonw_str(&sys_w, "WANT_AP", want_ap);
+        gw_jsonw_bool(&sys_w, "CUSTOM_STA", wifi_mac_valid(app->mac_sta));
+        gw_jsonw_bool(&sys_w, "CUSTOM_AP", wifi_mac_valid(app->mac_ap));
+        gw_jsonw_bool(&sys_w, "PENDING_STA", mac_iface_pending(app, 0));
+        gw_jsonw_bool(&sys_w, "PENDING_AP", mac_iface_pending(app, 1));
+        gw_jsonw_bool(&sys_w, "RESTART", mac_pending(app));
+        gw_jsonw_bool(&sys_w, "CAN_CONFIGURE", change_allowed(svc, clients));
+        gw_jsonw_bool(&sys_w, "FROM_AP", svc->from_ap);
+        gw_jsonw_int(&sys_w, "CLIENTS", clients);
+        return;
+    }
+
+    if (!change_allowed(svc, clients)) {
+        ESP_LOGW(TAG, "MAC change refused (from_ap=%u clients=%u, may_change=%u)",
+                 svc->from_ap, clients, svc->may_change);
+        resp_denied(svc, clients);
+        return;
+    }
+
+    uint8_t is_sta = (strcasecmp(iface, "STA") == 0);
+    uint8_t is_ap  = (strcasecmp(iface, "AP") == 0);
+    if (!is_sta && !is_ap) {
+        resp_error(SYS_BAD_ARG, "IF", "IF must be STA or AP");
+        return;
+    }
+#if !CONFIG_WIFI_AP_ENABLE
+    if (is_ap) {
+        resp_error(SYS_BAD_ARG, "IF", "The access point is disabled in this build");
+        return;
+    }
+#endif
+
+    /* Пустое поле или слово factory — «верни заводской». Всё остальное — адрес. */
+    uint8_t mac[6] = {0};
+    uint8_t custom = !(mac_in[0] == '\0'
+                       || strcasecmp(mac_in, "factory") == 0
+                       || strcasecmp(mac_in, "default") == 0);
+    if (custom) {
+        if (!mac_parse(mac_in, mac)) {
+            resp_error(SYS_BAD_ARG, "MAC", "MAC must look like aa:bb:cc:dd:ee:ff");
+            return;
+        }
+        if (!wifi_mac_valid(mac)) {
+            resp_error(SYS_BAD_ARG, "MAC",
+                       "MAC must be a unicast address (an even first byte) and not all zeros");
+            return;
+        }
+    }
+
+    uint8_t *slot          = is_sta ? app->mac_sta : app->mac_ap;
+    const uint8_t *factory = is_sta ? app->mac_sta_factory : app->mac_ap_factory;
+    /* Адрес, совпавший с заводским, — это и есть заводской: так в NVS не
+     * появится запись-двойник, а «личный MAC» останется честным признаком. */
+    if (custom && memcmp(mac, factory, 6) == 0)
+        custom = 0;
+
+    /* Половины радио не могут носить один адрес — драйвер это отвергает. Смотрим
+     * на результат применения, а не на то, что прислали. */
+    const uint8_t *eff_sta = is_sta ? (custom ? mac : app->mac_sta_factory)
+                                    : mac_effective(app->mac_sta, app->mac_sta_factory);
+    const uint8_t *eff_ap  = is_ap  ? (custom ? mac : app->mac_ap_factory)
+                                    : mac_effective(app->mac_ap, app->mac_ap_factory);
+    if (memcmp(eff_sta, eff_ap, 6) == 0) {
+        resp_error(SYS_BAD_ARG, "MAC", "The station and the access point cannot share one MAC");
+        return;
+    }
+
+    if (custom) memcpy(slot, mac, 6);
+    else        memset(slot, 0, 6);
+    save_wifi_mac_config(is_ap, custom ? mac : NULL);
+
+    /* Ответ говорит и что будет после перезагрузки, и что действует сейчас:
+     * страница показывает это пользователю словами («новый адрес такой-то,
+     * текущий такой-то, перезагрузите устройство»). Перезагрузку устройство НЕ
+     * делает само — адрес ждёт её. */
+    char eff[MAC_TEXT_LEN], cur[MAC_TEXT_LEN];
+    mac_text(custom ? mac : factory, eff, sizeof(eff));
+    mac_runtime(is_ap ? WIFI_IF_AP : WIFI_IF_STA, factory, cur, sizeof(cur));
+
+    resp_ok();
+    gw_jsonw_str(&sys_w, "IF", is_sta ? "STA" : "AP");
+    gw_jsonw_str(&sys_w, "MAC", eff);
+    gw_jsonw_str(&sys_w, "CURRENT", cur);
+    gw_jsonw_bool(&sys_w, "FACTORY", !custom);
+    /* Действующий адрес меняется только при следующей загрузке драйвера. */
+    gw_jsonw_bool(&sys_w, "RESTART", mac_pending(app));
 }
 
 /* ── sys.info: device status ────────────────────────────────────────────────── */
 
 static void handle_info(const sys_service_t *svc) {
     app_context_t *app = svc->app;
-    uint8_t mac[6] = {0};
     char mac_ap[18], mac_sta[18], ip_sta[16], ip_ap[16];
     uint8_t clients = wifi_ap_clients_count();
 
-    esp_read_mac(mac, ESP_MAC_WIFI_SOFTAP);
-    snprintf(mac_ap, sizeof(mac_ap), MACSTR, MAC2STR(mac));
-    esp_read_mac(mac, ESP_MAC_WIFI_STA);
-    snprintf(mac_sta, sizeof(mac_sta), MACSTR, MAC2STR(mac));
+    /* MAC — у ДРАЙВЕРА, а не из eFuse: esp_read_mac() отдаёт заводской адрес даже
+     * когда интерфейсу назначен другой (esp_wifi_set_mac его не меняет), и тогда
+     * страница показывала бы не тот адрес, которым прибор работает в эфире. */
+    mac_runtime(WIFI_IF_STA, app->mac_sta_factory, mac_sta, sizeof(mac_sta));
+    mac_runtime(WIFI_IF_AP,  app->mac_ap_factory,  mac_ap,  sizeof(mac_ap));
     netif_ip_str("WIFI_STA_DEF", ip_sta, sizeof(ip_sta));
     netif_ip_str("WIFI_AP_DEF", ip_ap, sizeof(ip_ap));
 
@@ -339,6 +636,19 @@ static void handle_info(const sys_service_t *svc) {
     gw_jsonw_str(&sys_w, "STA_SSID", (char *)app->sta_cnf.sta.ssid);
     gw_jsonw_str(&sys_w, "STA_IP", ip_sta);
     gw_jsonw_bool(&sys_w, "STA_CONNECTED", ip_sta[0] != '\0');
+    /* К КАКОЙ точке подключены: имя сети у двух точек одно, различает их BSSID.
+     * Страница показывает это рядом с состоянием, чтобы выбор был проверяем. */
+    wifi_ap_record_t ap_info;
+    if (esp_wifi_sta_get_ap_info(&ap_info) == ESP_OK) {
+        char ap_bssid[MAC_TEXT_LEN];
+        mac_text(ap_info.bssid, ap_bssid, sizeof(ap_bssid));
+        gw_jsonw_str(&sys_w, "STA_BSSID", ap_bssid);
+        gw_jsonw_int(&sys_w, "STA_RSSI", ap_info.rssi);
+        gw_jsonw_int(&sys_w, "STA_CH", ap_info.primary);
+    }
+    char pin_now[MAC_TEXT_LEN];
+    mac_text(app->sta_bssid, pin_now, sizeof(pin_now));
+    gw_jsonw_str(&sys_w, "STA_PIN", wifi_mac_valid(app->sta_bssid) ? pin_now : "");
     gw_jsonw_int(&sys_w, "UPTIME", (int64_t)(esp_timer_get_time() / 1000000));
     gw_jsonw_uint(&sys_w, "HEAP", (uint64_t)esp_get_free_heap_size());
     gw_jsonw_uint(&sys_w, "FS_TOTAL", (uint64_t)fs_total);
@@ -1072,13 +1382,27 @@ static void handle_net(const sys_service_t *svc, const uint8_t *data, uint32_t l
 
     if (bad) return;
 
+    /* Сравниваем с прежними настройками: страница присылает адрес при каждом
+     * сохранении карточки, в том числе когда правили только MAC или пароль.
+     * Перезапускать из-за этого DHCP точки доступа (а он у неё останавливается
+     * на время смены адреса) незачем. */
+    const net_iface_cnf_t *cur = is_sta ? &app->net_sta : &app->net_ap;
+    uint8_t changed = memcmp(cur, &cfg, sizeof(cfg)) != 0;
+
     if (is_sta) app->net_sta = cfg;
     else        app->net_ap  = cfg;
-    net_save_config(app);
 
     resp_ok();
     gw_jsonw_str(&sys_w, "IF", is_sta ? "STA" : "AP");
     net_cfg_to_json(is_sta ? "STA_CFG" : "AP_CFG", &cfg);
+    gw_jsonw_bool(&sys_w, "CHANGED", changed);
+
+    if (!changed) {
+        ESP_LOGI(TAG, "%s address unchanged — nothing to apply", is_sta ? "STA" : "AP");
+        return;
+    }
+
+    net_save_config(app);
 
     if (is_ap) {
         /* Changing the access point address drops the very connection this answer
@@ -1089,6 +1413,102 @@ static void handle_net(const sys_service_t *svc, const uint8_t *data, uint32_t l
     } else {
         net_apply_config(app);
     }
+}
+
+/* ── wifi.scan: сети вокруг ────────────────────────────────────────────────── *
+ *
+ * Скан — вспомогательный инструмент: имя сети и пароль пользователь по-прежнему
+ * вводит руками, таблица найденных сетей лишь избавляет от опечаток. Менять он
+ * ничего не может, поэтому оказывается любому интерфейсу (см. регистрацию).
+ *
+ * Драйвер сканирует в фоне (esp_wifi_scan_start(..., false)), а признак
+ * готовности ставит событие SCAN_DONE — его обрабатывает connection.c.
+ * Обработчик вызывается и в такте работы, поэтому ожиданий и своих задач внутри
+ * нет: вызов держится возвратом TRUE, пока скан идёт.
+ */
+
+/* Двадцать строк — это уже длинная таблица на странице, а записи драйвера
+ * копируются в статический массив (своей памяти сервису не надо). */
+#define SCAN_MAX_NETS   20
+/* Активный скан 13 каналов занимает 1.5–3 с (по 120 мс на канал плюс
+ * перестройка), запас — на занятый эфир. */
+#define SCAN_TIMEOUT_MS 12000
+/* Станция в момент подключения не даёт запустить скан: повторяем попытку, а не
+ * просим клиента жать кнопку ещё раз. */
+#define SCAN_RETRY_MS   500
+
+static wifi_ap_record_t scan_recs[SCAN_MAX_NETS];
+
+/* Метка «этот вызов ведём мы»: своей памяти сервису не нужно, а по метке
+ * обработчик отличает первичный вызов от такта работы. */
+static uint8_t scan_token;
+
+static struct {
+    uint8_t    starting;   /* скан ещё не запустился: ждём, пока станция отпустит радио */
+    uint32_t   asked_ms;   /* когда клиент попросил скан — для поля MS в ответе */
+    TickType_t deadline;   /* когда перестаём ждать драйвер */
+    TickType_t retry_at;   /* когда снова пробовать запуск */
+} scan_req;
+
+/* Вид защиты — коротким словом: странице нужно показать, нужен ли пароль, а
+ * числовой код драйвера ничего не говорит человеку. */
+static const char *scan_auth_str(wifi_auth_mode_t mode) {
+    switch (mode) {
+    case WIFI_AUTH_OPEN:            return "open";
+    case WIFI_AUTH_WEP:             return "wep";
+    case WIFI_AUTH_WPA_PSK:         return "wpa";
+    case WIFI_AUTH_WPA2_PSK:        return "wpa2";
+    case WIFI_AUTH_WPA_WPA2_PSK:    return "wpa/wpa2";
+    case WIFI_AUTH_WPA2_ENTERPRISE: return "wpa2-ent";
+    case WIFI_AUTH_WPA3_PSK:        return "wpa3";
+    case WIFI_AUTH_WPA2_WPA3_PSK:   return "wpa2/wpa3";
+    case WIFI_AUTH_WAPI_PSK:        return "wapi";
+    default:                        return "?";
+    }
+}
+
+/* Сильные сети — вверх: в таблице глазами ищут ту, к которой подключаются. */
+static void scan_sort(wifi_ap_record_t *recs, uint16_t n) {
+    for (uint16_t i = 1; i < n; i++) {
+        wifi_ap_record_t key = recs[i];
+        int16_t j = (int16_t)i - 1;
+        while (j >= 0 && recs[j].rssi < key.rssi) {
+            recs[j + 1] = recs[j];
+            j--;
+        }
+        recs[j + 1] = key;
+    }
+}
+
+/* Ответ собираем из того, что драйвер положил в свой список. Забрать его можно
+ * ровно один раз — wifi_scan_take освобождает память драйвера. */
+static void scan_respond(void) {
+    uint16_t found = 0;
+    uint16_t n = wifi_scan_take(scan_recs, SCAN_MAX_NETS, &found);
+    scan_sort(scan_recs, n);
+
+    resp_ok();
+    gw_jsonw_int(&sys_w, "COUNT", found);
+    gw_jsonw_int(&sys_w, "SHOWN", n);
+    gw_jsonw_int(&sys_w, "MS", (int64_t)((uint32_t)(esp_timer_get_time() / 1000) - scan_req.asked_ms));
+    gw_jsonw_arr(&sys_w, "NETS");
+    for (uint16_t i = 0; i < n; i++) {
+        /* Буфер ответа конечен: не влезло — дальше не пишем, SHOWN скажет,
+         * сколько строк на самом деле в ответе. */
+        if (!gw_jsonw_ok(&sys_w)) break;
+        const wifi_ap_record_t *r = &scan_recs[i];
+        char bssid[MAC_TEXT_LEN];
+        mac_text(r->bssid, bssid, sizeof(bssid));
+
+        gw_jsonw_obj(&sys_w, NULL);
+        gw_jsonw_str(&sys_w, "SSID", (const char *)r->ssid);
+        gw_jsonw_int(&sys_w, "RSSI", r->rssi);
+        gw_jsonw_int(&sys_w, "CH", r->primary);
+        gw_jsonw_str(&sys_w, "AUTH", scan_auth_str(r->authmode));
+        gw_jsonw_str(&sys_w, "BSSID", bssid);
+        gw_jsonw_end(&sys_w);
+    }
+    gw_jsonw_end(&sys_w);
 }
 
 /* ── Обработчики вызовов ─────────────────────────────────────────────────── *
@@ -1228,6 +1648,82 @@ static uint8_t sys_net_handler(void *call, void **context, uint8_t *data, uint32
     return 0;
 }
 
+static uint8_t sys_mac_handler(void *call, void **context, uint8_t *data, uint32_t data_len) {
+    if (!call) return 0;
+    const sys_service_t *svc = svc_of(context);
+    if (!svc) return 0;
+    resp_begin();
+    handle_mac(svc, data, data_len);
+    send_response(call);
+    return 0;
+}
+
+/* Сервис сканирования — единственный здесь, кто живёт НЕСКОЛЬКО тактов: скан
+ * идёт в драйвере, а вызов ждёт его окончания. Поэтому у него есть своё
+ * состояние вызова, а не только контекст регистрации:
+ *   data != NULL и метки нет — первичный вызов, запускаем скан;
+ *   метка стоит              — такт работы: проверяем готовность и таймаут;
+ *   call == NULL             — вызов сняли: гасим скан, читателя у результата
+ *                              больше нет.
+ * Ответ отправляется ровно один раз за вызов, а *context возвращается в
+ * исходное состояние (у этой регистрации он пустой) перед завершением. */
+static uint8_t sys_scan_handler(void *call, void **context, uint8_t *data, uint32_t data_len) {
+    (void)data; (void)data_len;
+
+    if (!call) {
+        if (*context == &scan_token) {
+            if (wifi_scan_busy()) wifi_scan_cancel();
+            *context = NULL;
+        }
+        return 0;
+    }
+
+    if (*context != &scan_token) {
+        /* Первичный вызов: чужой скан не перебиваем — клиенту честнее отказать. */
+        if (wifi_scan_busy() || wifi_scan_ready()) {
+            resp_begin();
+            resp_error(SYS_BUSY, "BUSY", "Another scan is already running, try again in a second");
+            send_response(call);
+            return 0;
+        }
+        *context = &scan_token;
+        scan_req.starting = 1;
+        scan_req.asked_ms = (uint32_t)(esp_timer_get_time() / 1000);
+        scan_req.deadline = xTaskGetTickCount() + pdMS_TO_TICKS(SCAN_TIMEOUT_MS);
+        scan_req.retry_at = xTaskGetTickCount();
+        ESP_LOGI(TAG, "wifi.scan: запрос принят");
+    }
+
+    TickType_t now = xTaskGetTickCount();
+
+    if (scan_req.starting && (int32_t)(now - scan_req.retry_at) >= 0) {
+        if (wifi_scan_start())
+            scan_req.starting = 0;
+        else
+            scan_req.retry_at = now + pdMS_TO_TICKS(SCAN_RETRY_MS);
+    }
+
+    if (!scan_req.starting && wifi_scan_ready()) {
+        resp_begin();
+        scan_respond();
+        *context = NULL;
+        send_response(call);
+        return 0;
+    }
+
+    if ((int32_t)(now - scan_req.deadline) >= 0) {
+        ESP_LOGW(TAG, "wifi.scan: драйвер не ответил за %d мс", SCAN_TIMEOUT_MS);
+        if (wifi_scan_busy()) wifi_scan_cancel();
+        resp_begin();
+        resp_error(SYS_TIMEOUT, "TIMEOUT", "The scan did not finish in time");
+        *context = NULL;
+        send_response(call);
+        return 0;
+    }
+
+    return 1;
+}
+
 /* ── Регистрация сервисов ────────────────────────────────────────────────── */
 
 /* Регистрация экземпляра сервиса: что за метод, каким интерфейсам он оказан и с
@@ -1266,6 +1762,12 @@ esp_err_t api_sys_run(app_context_t *app) {
     ok &= register_service(sys_ap_handler,   ESP_WS_API_SYS_WIFI_AP,  GW_IFACE_MASK_ANY, &sys_svc_ro);
     ok &= register_service(sys_net_handler,  ESP_WS_API_SYS_NET,      ap_mask, &sys_svc_ap);
     ok &= register_service(sys_net_handler,  ESP_WS_API_SYS_NET,      GW_IFACE_MASK_ANY, &sys_svc_ro);
+    ok &= register_service(sys_mac_handler,  ESP_WS_API_SYS_WIFI_MAC, ap_mask, &sys_svc_ap);
+    ok &= register_service(sys_mac_handler,  ESP_WS_API_SYS_WIFI_MAC, GW_IFACE_MASK_ANY, &sys_svc_ro);
+
+    /* Скан эфира — чтение и вспомогательный инструмент: ни настроек, ни паролей
+     * он не трогает, поэтому оказывается любому интерфейсу. */
+    ok &= register_service(sys_scan_handler, ESP_WS_API_SYS_WIFI_SCAN, GW_IFACE_MASK_ANY, NULL);
 
     /* sys.info — чтение, но страница по нему решает, можно ли ей показывать
      * кнопки записи: FROM_AP и CAN_CONFIGURE берутся из контекста регистрации. */
@@ -1282,19 +1784,23 @@ esp_err_t api_sys_run(app_context_t *app) {
     ok &= register_service(sys_echo_handler,  ESP_WS_API_ECHO_ID,     GW_IFACE_MASK_ANY, NULL);
 
     /* Файловый менеджер — листинг, запись порциями, удаление, переименование:
-     * открыт только из точки доступа. Так же, как раньше, была ограничена пара
-     * HTTP-методов /upload/…, /delete/…, /rename/…, которую эти сервисы
-     * заменили (HTTP-методы убраны: файлы меняются только через WebSocket). */
-    ok &= register_service(sys_files_handler,       ESP_WS_API_SYS_FILES,       ap_mask, NULL);
-    ok &= register_service(sys_file_write_handler,  ESP_WS_API_SYS_FILE_WRITE,  ap_mask, NULL);
-    ok &= register_service(sys_file_delete_handler, ESP_WS_API_SYS_FILE_DELETE, ap_mask, NULL);
-    ok &= register_service(sys_file_rename_handler, ESP_WS_API_SYS_FILE_RENAME, ap_mask, NULL);
-    ok &= register_service(sys_file_mkdir_handler,  ESP_WS_API_SYS_FILE_MKDIR,  ap_mask, NULL);
-    ok &= register_service(sys_file_rmdir_handler,  ESP_WS_API_SYS_FILE_RMDIR,  ap_mask, NULL);
+     * доступен с ЛЮБОГО интерфейса, как и отдача файлов по HTTP. Открыт им не
+     * из-за невнимательности: страницы, карты регистров и прошивку кладут и
+     * правят как раз с рабочего места в сети, а не только с самой точки доступа
+     * (раньше это была пара HTTP-методов /upload/…, /delete/…, /rename/… —
+     * теперь те же действия идут вызовами по WebSocket). Перестройка самого
+     * шлюза по-прежнему только у администратора точки доступа: wifi.sta/ap и
+     * sys.net зарегистрированы с «только чтение» для остальных. */
+    ok &= register_service(sys_files_handler,       ESP_WS_API_SYS_FILES,       GW_IFACE_MASK_ANY, NULL);
+    ok &= register_service(sys_file_write_handler,  ESP_WS_API_SYS_FILE_WRITE,  GW_IFACE_MASK_ANY, NULL);
+    ok &= register_service(sys_file_delete_handler, ESP_WS_API_SYS_FILE_DELETE, GW_IFACE_MASK_ANY, NULL);
+    ok &= register_service(sys_file_rename_handler, ESP_WS_API_SYS_FILE_RENAME, GW_IFACE_MASK_ANY, NULL);
+    ok &= register_service(sys_file_mkdir_handler,  ESP_WS_API_SYS_FILE_MKDIR,  GW_IFACE_MASK_ANY, NULL);
+    ok &= register_service(sys_file_rmdir_handler,  ESP_WS_API_SYS_FILE_RMDIR,  GW_IFACE_MASK_ANY, NULL);
 
     if (!ok) return ESP_FAIL;
 
-    ESP_LOGI(TAG, "System API ready (echo, wifi.sta, wifi.ap, sys.info, sys.reboot, "
-                  "sys.files, sys.file.write/delete/rename, sys.net)");
+    ESP_LOGI(TAG, "System API ready (echo, wifi.sta, wifi.ap, wifi.mac, wifi.scan, "
+                  "sys.info, sys.reboot, sys.files, sys.file.write/delete/rename, sys.net)");
     return ESP_OK;
 }

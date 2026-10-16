@@ -66,6 +66,10 @@ int         ws_transport_stub_delivered(ws_transport_stub_conn_t *conn);
 void ws_transport_stub_set_deferred(ws_transport_stub_conn_t *conn, int on);
 int  ws_transport_stub_pending_count(ws_transport_stub_conn_t *conn);
 void ws_transport_stub_complete_pending(ws_transport_stub_conn_t *conn, ws_transport_result_t res);
+/* Адрес буфера, который ядро отдало в begin_send (в режиме deferred — по
+ * индексу). Тесту это нужно, чтобы проверить, что один и тот же буфер ушёл
+ * нескольким подписчикам, а не был собран каждому свой. */
+const void *ws_transport_stub_pending_data(ws_transport_stub_conn_t *conn, int idx);
 
 /* Отдать ядру CLOSED ещё раз, даже если соединение уже закрыто: транспорт вправе
  * сообщить о разрыве дважды, и ядро обязано пережить это без двойного

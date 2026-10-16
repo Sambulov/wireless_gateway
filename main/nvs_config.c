@@ -14,6 +14,11 @@
 #define NVS_KEY_STA_PASS "sta_pass"
 #define NVS_KEY_NET_STA "net_sta"
 #define NVS_KEY_NET_AP  "net_ap"
+/* Выбранная точка доступа (BSSID, 6 байт). Ключа нет — «любая с этим именем». */
+#define NVS_KEY_STA_BSSID "sta_bssid"
+/* Персональные MAC интерфейсов (6 байт). Ключа нет — MAC заводской. */
+#define NVS_KEY_MAC_STA "mac_sta"
+#define NVS_KEY_MAC_AP  "mac_ap"
 
 #define AP_MAX_CONNECTIONS 4
 
@@ -119,6 +124,80 @@ void net_save_config(const app_context_t *app) {
              app->net_ap.ip ? "static" : "default");
 }
 
+/* ── Выбранная точка доступа ─────────────────────────────────────────────── */
+
+void save_wifi_sta_bssid(const uint8_t *bssid) {
+    nvs_handle_t nvs_handle;
+    if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs_handle) != ESP_OK) {
+        ESP_LOGE(TAG, "Cannot open NVS to store the selected access point");
+        return;
+    }
+    if (bssid) {
+        esp_err_t err = nvs_set_blob(nvs_handle, NVS_KEY_STA_BSSID, bssid, 6);
+        if (err != ESP_OK) ESP_LOGE(TAG, "BSSID store failed: %s", esp_err_to_name(err));
+    } else {
+        esp_err_t err = nvs_erase_key(nvs_handle, NVS_KEY_STA_BSSID);
+        if (err != ESP_OK && err != ESP_ERR_NVS_NOT_FOUND)
+            ESP_LOGE(TAG, "BSSID erase failed: %s", esp_err_to_name(err));
+    }
+    nvs_commit(nvs_handle);
+    nvs_close(nvs_handle);
+    ESP_LOGI(TAG, "Selected access point %s", bssid ? "stored in NVS" : "cleared");
+}
+
+/* ── MAC адреса интерфейсов ──────────────────────────────────────────────── */
+
+/* Значение, которое драйвер примет: первый байт без бита групповой адресации
+ * (иначе esp_wifi_set_mac отвечает ESP_ERR_WIFI_MAC) и не все нули. */
+uint8_t wifi_mac_valid(const uint8_t *mac) {
+    static const uint8_t zero[6] = {0};
+    if (!mac) return 0;
+    if (mac[0] & 0x01) return 0;
+    return memcmp(mac, zero, sizeof(zero)) != 0;
+}
+
+void save_wifi_mac_config(uint8_t ap, const uint8_t *mac) {
+    nvs_handle_t nvs_handle;
+    if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs_handle) != ESP_OK) {
+        ESP_LOGE(TAG, "Cannot open NVS to store the MAC address");
+        return;
+    }
+    const char *key = ap ? NVS_KEY_MAC_AP : NVS_KEY_MAC_STA;
+
+    if (wifi_mac_valid(mac)) {
+        esp_err_t err = nvs_set_blob(nvs_handle, key, mac, 6);
+        if (err != ESP_OK) ESP_LOGE(TAG, "MAC store failed: %s", esp_err_to_name(err));
+    } else {
+        /* «Заводской» — это отсутствие записи, а не шесть нулей: так значение
+         * нельзя перепутать с настоящим адресом. */
+        esp_err_t err = nvs_erase_key(nvs_handle, key);
+        if (err != ESP_OK && err != ESP_ERR_NVS_NOT_FOUND)
+            ESP_LOGE(TAG, "MAC erase failed: %s", esp_err_to_name(err));
+    }
+    nvs_commit(nvs_handle);
+    nvs_close(nvs_handle);
+    ESP_LOGI(TAG, "%s MAC %s", ap ? "AP" : "STA",
+             wifi_mac_valid(mac) ? "stored in NVS (applied on reboot)" : "reset to the factory value");
+}
+
+/* Заводские MAC читаются из eFuse ДО первого esp_wifi_set_mac: после подмены
+ * адреса интерфейса взять их будет уже неоткуда. */
+static void _mac_factory_read(app_context_t *app) {
+    if (esp_read_mac(app->mac_sta_factory, ESP_MAC_WIFI_STA) != ESP_OK)
+        memset(app->mac_sta_factory, 0, sizeof(app->mac_sta_factory));
+    if (esp_read_mac(app->mac_ap_factory, ESP_MAC_WIFI_SOFTAP) != ESP_OK)
+        memset(app->mac_ap_factory, 0, sizeof(app->mac_ap_factory));
+}
+
+static void _mac_load(nvs_handle_t nvs_handle, const char *key, uint8_t *dst) {
+    uint8_t tmp[6];
+    size_t len = sizeof(tmp);
+    memset(dst, 0, 6);
+    if (nvs_get_blob(nvs_handle, key, tmp, &len) == ESP_OK && len == sizeof(tmp)
+        && wifi_mac_valid(tmp))
+        memcpy(dst, tmp, sizeof(tmp));
+}
+
 static void _fill_ap_default(app_context_t *app) {
 #if CONFIG_WIFI_AP_ENABLE
     char ssid[sizeof(app->ap_cnf.ap.ssid)];
@@ -146,6 +225,12 @@ static bool _load_config_default(app_context_t *app) {
 }
 
 bool load_config(app_context_t *app) {
+    /* Заводские MAC — первым делом: дальше их уже не восстановить (см.
+     * _mac_factory_read). Пустые mac_sta/mac_ap значат «заводские». */
+    _mac_factory_read(app);
+    memset(app->mac_sta, 0, sizeof(app->mac_sta));
+    memset(app->mac_ap, 0, sizeof(app->mac_ap));
+
     nvs_handle_t nvs_handle;
     if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs_handle) != ESP_OK)
         return _load_config_default(app);
@@ -155,6 +240,10 @@ bool load_config(app_context_t *app) {
     _net_defaults(&app->net_sta, &app->net_ap);
     _net_load(nvs_handle, NVS_KEY_NET_STA, &app->net_sta);
     _net_load(nvs_handle, NVS_KEY_NET_AP, &app->net_ap);
+
+    _mac_load(nvs_handle, NVS_KEY_MAC_STA, app->mac_sta);
+    _mac_load(nvs_handle, NVS_KEY_MAC_AP, app->mac_ap);
+    _mac_load(nvs_handle, NVS_KEY_STA_BSSID, app->sta_bssid);
 
 #if CONFIG_WIFI_AP_ENABLE
     _fill_ap_default(app);

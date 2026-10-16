@@ -37,6 +37,7 @@ C_SRCS := \
     apih_uart.c \
     web_iface_policy.c \
     fs_path.c \
+    uart_rxbuf.c \
     GwJson.c \
     jsmn.c \
     LinkedList.c \
@@ -53,7 +54,8 @@ CPP_SRCS := \
     WsServerTest.cpp \
     ApihUartTest.cpp \
     WebIfacePolicyTest.cpp \
-    FsPathTest.cpp
+    FsPathTest.cpp \
+    UartRxbufTest.cpp
 
 C_OBJS   := $(patsubst %.c,  $(BUILD)/%.o, $(C_SRCS))
 CPP_OBJS := $(patsubst %.cpp,$(BUILD)/%.o, $(CPP_SRCS))
@@ -76,11 +78,17 @@ $(OBJS): Makefile
 $(TARGET): $(OBJS) | $(BUILD)
 	g++ $^ $(LDFLAGS) -o $@
 
+# -MMD: рядом с объектом кладётся список заголовков, от которых он зависит.
+# Без этого правка uart.h/app.h не пересобирала объекты, и тесты падали на
+# старых объектах со старой раскладкой структур (проверено: три теста «падали»
+# из-за устаревшего gw_uart_stub.o после добавления поля в gw_uart_config_t).
 $(BUILD)/%.o: %.c | $(BUILD)
-	gcc $(CFLAGS) -c $< -o $@
+	gcc $(CFLAGS) -MMD -MP -c $< -o $@
 
 $(BUILD)/%.o: %.cpp | $(BUILD)
-	g++ $(CXXFLAGS) -c $< -o $@
+	g++ $(CXXFLAGS) -MMD -MP -c $< -o $@
+
+-include $(C_OBJS:.o=.d) $(CPP_OBJS:.o=.d)
 
 $(BUILD):
 	mkdir -p $@

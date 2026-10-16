@@ -40,7 +40,8 @@ void app_main(void)
 #ifdef CONFIG_QEMU_BUILD
     eth_init_openeth();
 #else
-    wifi_init_ap_sta(&app_context.ap_cnf, &app_context.sta_cnf);
+    wifi_init_ap_sta(&app_context.ap_cnf, &app_context.sta_cnf,
+                     app_context.mac_sta, app_context.mac_ap, app_context.sta_bssid);
 #endif
 
     /* Static addresses (when configured) must be in place before the servers

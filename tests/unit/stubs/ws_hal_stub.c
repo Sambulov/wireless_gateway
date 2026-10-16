@@ -50,6 +50,13 @@ void ws_hal_stub_advance_tick(uint32_t d) { stub_tick += d; }
 
 /* Tests treat 1 stub tick == 1 ms; no conversion needed. */
 uint32_t ws_hal_ms_to_ticks(uint32_t ms) { return ms; }
+uint32_t ws_hal_ticks_to_ms(uint32_t ticks) { return ticks; }
+
+/* Задержку не отбываем, а запоминаем: тесты проверяют, сколько сервис просил
+ * подождать (например, темп кадров приёма), и на этом же продолжают работу. */
+static uint32_t stub_last_delay;
+void ws_hal_delay_ms(uint32_t ms) { stub_last_delay += ms; }
+uint32_t ws_hal_stub_last_delay(void) { return stub_last_delay; }
 
 /* ── Mutex ────────────────────────────────────────────────────────────── */
 
@@ -160,6 +167,7 @@ uint32_t ws_hal_stub_log_w_count(void) { return stub_log_w_count; }
 /* ── Reset ────────────────────────────────────────────────────────────── */
 
 void ws_hal_stub_reset(void) {
+    stub_last_delay = 0;
     stub_free_all();
     stub_tick               = 0;
     stub_task_created_count = 0;

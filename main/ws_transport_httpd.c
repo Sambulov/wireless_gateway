@@ -2,6 +2,7 @@
 #include <string.h>
 
 #include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "esp_http_server.h"
 #include "esp_idf_version.h"
 #include "esp_log.h"
@@ -227,6 +228,8 @@ static void wsHttpdSendDone(esp_err_t err, int fd, void *arg) {
         ESP_LOGW(TAG, "Send failed (err %d), fd=%d", err, conn->fd);
     }
 
+    ESP_LOGD(TAG, "write fd=%d %lu Б: %s", conn->fd, (unsigned long)snd->length,
+             err ? esp_err_to_name(err) : "ок");
     free(snd);
     if(conn->ulSendsInFlight) conn->ulSendsInFlight--;
 
@@ -236,6 +239,12 @@ static void wsHttpdSendDone(esp_err_t err, int fd, void *arg) {
 
     if(conn->bDetached && !conn->ulSendsInFlight) free(conn);
 }
+
+/* Сколько ждать места в рабочей очереди httpd, прежде чем признать отправку
+ * неудавшейся. Очередь разбирается задачей httpd за единицы миллисекунд, поэтому
+ * ожидание короткое, а потерянных кадров не остаётся. */
+#define WS_TRANSPORT_SEND_RETRY_MAX 200
+#define WS_TRANSPORT_SEND_RETRY_MS  1
 
 static ws_transport_result_t wsHttpdBeginSend(const void *self, const void *data, uint32_t length) {
     ws_transport_httpd_conn_t *conn = (ws_transport_httpd_conn_t *)self;
@@ -257,16 +266,32 @@ static ws_transport_result_t wsHttpdBeginSend(const void *self, const void *data
         .len        = length,
     };
 
-    conn->ulSendsInFlight++;
-    esp_err_t err = httpd_ws_send_data_async(conn->hd, conn->fd, &f, wsHttpdSendDone, snd);
-    if(err != ESP_OK) {
+    /* Отправка идёт через рабочую очередь httpd, а она ограничена по глубине. На
+     * потоке мелких кадров (эхо набора в терминале — кадр на символ) очередь
+     * переполнялась, httpd_ws_send_data_async отвечал отказом, и кадр ПРОПАДАЛ:
+     * ядро считало отправку неудавшейся и освобождало буфер. Замерено на стенде:
+     * устройство отдало 38 кадров, клиент получил 5 — то есть «терминал теряет
+     * ввод» было потерей именно здесь. Ждём место в очереди, а не теряем данные. */
+    esp_err_t err = ESP_FAIL;
+    for(int attempt = 0; attempt <= WS_TRANSPORT_SEND_RETRY_MAX; attempt++) {
+        conn->ulSendsInFlight++;
+        err = httpd_ws_send_data_async(conn->hd, conn->fd, &f, wsHttpdSendDone, snd);
+        if(err == ESP_OK) return WS_TRANSPORT_OK;
         conn->ulSendsInFlight--;
-        free(snd);
-        /* Отправку не приняли: колбэка не будет, буфер освободит ядро. */
-        if(err == ESP_ERR_NO_MEM) return WS_TRANSPORT_FAULT;
-        return WS_TRANSPORT_BAD_CALL;
+
+        if(attempt < WS_TRANSPORT_SEND_RETRY_MAX)
+            vTaskDelay(pdMS_TO_TICKS(WS_TRANSPORT_SEND_RETRY_MS));
     }
-    return WS_TRANSPORT_OK;
+
+    /* Очередь так и не освободилась — об этом должно быть видно в логе, иначе
+     * «иногда теряется» останется загадкой. Колбэка не будет, буфер освободит
+     * ядро. */
+    ESP_LOGW(TAG, "Отправка не принята за %d мс (fd=%d, %lu Б): %s",
+             WS_TRANSPORT_SEND_RETRY_MAX * WS_TRANSPORT_SEND_RETRY_MS, conn->fd,
+             (unsigned long)length, esp_err_to_name(err));
+    free(snd);
+    if(err == ESP_ERR_NO_MEM) return WS_TRANSPORT_FAULT;
+    return WS_TRANSPORT_BAD_CALL;
 }
 
 static int32_t wsHttpdPeerId(const void *self) {

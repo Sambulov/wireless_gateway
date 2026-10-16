@@ -21,6 +21,10 @@ int        ws_hal_queue_receive(ws_queue_t q, void *item, uint32_t timeout_ms);
 /* Time — monotonic ticks; same unit as FreeRTOS xTaskGetTickCount() on target */
 uint32_t   ws_hal_tick(void);
 uint32_t   ws_hal_ms_to_ticks(uint32_t ms);
+uint32_t   ws_hal_ticks_to_ms(uint32_t ticks);
+/* Отдать процессор на ms миллисекунд (в хостовых тестах не спит, а только
+ * запоминает запрошенную задержку — см. ws_hal_stub_last_delay). */
+void       ws_hal_delay_ms(uint32_t ms);
 
 /* Task */
 void ws_hal_task_create(void (*fn)(void *), const char *name,

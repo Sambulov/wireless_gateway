@@ -11,7 +11,8 @@
     body { margin:0; background:var(--bg); color:var(--ink);
            font:14px/1.45 -apple-system, "Segoe UI", Roboto, Arial, sans-serif; }
     .header { background:linear-gradient(90deg,#1a1a2e,#0f3460); color:#e2e8f0;
-              padding:10px 16px; display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+              padding:10px 16px; display:flex; align-items:center; justify-content:center;
+              gap:10px; flex-wrap:wrap; }
     .header h1 { font-size:16px; margin:0 6px 0 0; font-weight:600; }
     .header a { color:#93c5fd; text-decoration:none; font-size:13px; }
     .header a:hover { text-decoration:underline; }
@@ -66,11 +67,54 @@
     /* Кнопка-значок: слова живут в подсказке, а не на кнопке */
     button.btn-icon { min-width:42px; padding:6px 10px; font-size:16px; line-height:1.1; }
     .row { display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap; }
-    .msg { margin-top:8px; font-size:13px; min-height:18px; }
+    /* Сообщение занимает место, только когда в нём есть текст: иначе под
+     * карточкой оставался пустой подвал высотой в строку. */
+    .msg { margin-top:8px; font-size:13px; }
+    .msg:empty { display:none; }
+    .hint:empty { display:none; }
     .msg.ok { color:var(--ok); } .msg.err { color:var(--err); } .msg.warn { color:var(--warn); }
     .hint { color:var(--dim); font-size:12px; margin-top:6px; }
     /* Значок «i»: подробности в подсказке, а не простынёй текста на странице */
     .hint-icon { display:flex; align-items:baseline; gap:6px; }
+    /* Поле пароля с глазом: кнопка внутри поля, справа */
+    .pass { position:relative; display:inline-block; width:100%; max-width:340px; }
+    .pass input { padding-right:34px; }
+    .eye { position:absolute; right:4px; top:50%; transform:translateY(-50%); padding:2px 6px;
+           background:none; border:0; color:var(--dim); cursor:pointer; line-height:1; }
+    .eye:hover { color:var(--ink); }
+    .eye .slash { display:block; }        /* перечёркнут, пока пароль скрыт */
+    .eye.shown .slash { display:none; }   /* показан — черта уходит */
+    /* Поле с кнопкой-значком внутри: так устроены глаз пароля, сброс MAC и
+     * поиск сетей — кнопка не съедает отдельную строку. */
+    .field-btn { position:absolute; right:4px; top:50%; transform:translateY(-50%); padding:2px 6px;
+                 background:none; border:0; color:var(--dim); cursor:pointer; line-height:1; font-size:15px; }
+    .field-btn:hover:not(:disabled) { color:var(--ink); background:none; }
+    .field-btn.busy { opacity:.45; }
+    .wide { position:relative; display:inline-block; width:100%; max-width:340px; }
+    .wide input { padding-right:34px; }
+    /* Список найденных сетей: своя прокрутка, чтобы карточка не росла */
+    .scan-box { margin-top:10px; border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+    .scan-box[hidden] { display:none; }
+    .scan-head { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:7px 10px;
+                 background:#f8fafc; border-bottom:1px solid var(--line); font-size:12px; color:var(--dim); }
+    .scan-head button { padding:2px 8px; }
+    .scan-table { max-height:230px; overflow:auto; }
+    .scan-table td { padding:5px 8px; }
+    .scan-table tbody tr { cursor:pointer; }
+    .scan-table tbody tr:hover td { background:#eff6ff; }
+    .scan-table .num { font-family:ui-monospace, Menlo, Consolas, monospace; white-space:nowrap; }
+    .scan-table .auth { color:var(--dim); font-size:12px; }
+    /* Заменённый MAC: о том, что он включится после перезагрузки, говорит эта
+     * приписка рядом с текущим адресом, а не отдельный абзац. */
+    /* Подпись поля MAC: слева имя, справа текущий адрес и что изменит
+     * перезагрузка — одной строкой, без абзаца под полем. */
+    .mac-label { display:flex; justify-content:space-between; align-items:baseline; gap:8px; flex-wrap:wrap; }
+    .mac-label .cur { font-family:ui-monospace, Menlo, Consolas, monospace; color:var(--ink); }
+    .mac-label .cur.warn { color:var(--warn); cursor:help; }
+    /* Крестик «отвязаться от точки»: слова в подсказке, значка в строке хватает */
+    .link-btn { background:none; border:0; padding:0 2px; color:var(--dim); cursor:pointer;
+                font-size:12px; line-height:1; }
+    .link-btn:hover:not(:disabled) { background:none; color:var(--err); }
     .info { cursor:help; font-size:13px; opacity:.8; }
     table { width:100%; border-collapse:collapse; font-size:13px; }
     th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); }
@@ -116,6 +160,9 @@
     .pick b { color:var(--ink); font-family:ui-monospace, Menlo, Consolas, monospace; }
     .hidden-file { position:absolute; width:1px; height:1px; opacity:0; pointer-events:none; }
     .grow { flex:1 1 180px; }
+    /* Кнопки карточки — в правом нижнем углу (панель файлов это не касается:
+     * у неё свои значки слева). */
+    .actions { display:flex; justify-content:flex-end; gap:10px; margin-top:12px; }
     /* Системная информация: две колонки и подписи без разрыва строки */
     .kv-grid { grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); }
     .kv-grid .kv span:first-child { white-space:nowrap; }
@@ -153,30 +200,18 @@
         <div class="grid kv-grid">
             <div class="kv"><span>Время работы</span><span id="i-uptime">—</span></div>
             <div class="kv"><span>Свободная память ОЗУ</span><span id="i-heap">—</span></div>
+            <div class="kv"><span>Прошивка</span><span id="fw-version">—</span></div>
         </div>
 
         <div class="iface">
-            <h3 class="sub">Обновление прошивки <small id="fw-version">—</small></h3>
-            <div class="hint" id="fw-line">образ <b id="fw-name">—</b>, сборка <b id="fw-date">—</b>,
-                ESP-IDF <b id="fw-idf">—</b>; работает раздел <b id="ota-running">—</b>,
-                для обновления доступен <b id="ota-next">—</b></div>
-            <div class="row" style="margin-top:8px">
-                <div class="grow">
-                    <label class="field" for="fw-file">Файл прошивки (.bin)</label>
-                    <input type="file" id="fw-file" accept=".bin,application/octet-stream">
-                </div>
-                <button class="primary" id="fw-upload">Обновить</button>
+            <div class="actions">
+                <button class="primary" id="fw-upload"
+                        title="Обновить прошивку: выбрать файл .bin и сразу залить. Прошивка пишется во второй раздел и включается перезагрузкой; при ошибке проверки образа остаётся рабочей прежняя.">Обновить прошивку</button>
+                <button class="danger" id="reboot" title="Перезагрузить устройство">Перезагрузить</button>
+                <input type="file" id="fw-file" class="hidden-file" accept=".bin,application/octet-stream">
             </div>
             <progress id="fw-progress" value="0" max="100" style="display:none"></progress>
             <div class="msg" id="fw-msg"></div>
-            <div class="hint hint-icon"><span class="info" role="img" tabindex="0" title="Прошивка пишется во второй раздел и включается перезагрузкой; при ошибке проверки образа остаётся рабочей прежняя. Обновление и перезагрузка доступны только с точки доступа при ровно одном клиенте. Файл — ws_echo_server.bin из каталога build/ .">ℹ️</span> обновление и перезагрузка — только с точки доступа при одном клиенте</div>
-        </div>
-
-        <div class="iface">
-            <h3 class="sub">Перезагрузка</h3>
-            <div class="row">
-                <button class="danger" id="reboot">Перезагрузить</button>
-            </div>
             <div class="msg" id="reboot-msg"></div>
         </div>
     </div>
@@ -189,21 +224,59 @@
             <b id="sta-state">—</b>
             <span class="hint" id="sta-state-hint">проверяем состояние…</span>
         </div>
-        <div class="kv"><span>MAC станции</span><span id="i-mac-sta">—</span></div>
-
+        <!-- MAC интерфейса. Пустое поле — заводской адрес; подмена действует со
+             следующей загрузки: драйвер принимает новый адрес только на
+             остановленном радио, а гасить его на время правки нельзя — по нему
+             идёт эта же страница. -->
         <div class="row" style="margin-top:8px">
             <div class="grow">
-                <label class="field" for="sta-ssid">Имя сети (SSID)</label>
-                <input type="text" id="sta-ssid" maxlength="31" autocomplete="off" spellcheck="false">
+                <label class="field mac-label" for="sta-mac">MAC станции
+                    <b class="cur" id="i-mac-sta" title="Действующий MAC станции">—</b>
+                </label>
+                <div class="wide">
+                    <input type="text" id="sta-mac" maxlength="17" autocomplete="off" spellcheck="false"
+                           title="Пусто — заводской MAC. Другой адрес включится после перезагрузки.">
+                    <button type="button" class="field-btn" id="sta-mac-factory"
+                            title="Очистить поле: вернётся заводской MAC. Применяется кнопкой «Сохранить»"
+                            aria-label="Очистить поле: вернётся заводской MAC">↺</button>
+                </div>
+            </div>
+            <div class="grow">
+                <!-- В подписи поля — точка, выбранная из таблицы: у двух точек
+                     имя сети одно, различает их только этот адрес. -->
+                <label class="field mac-label" for="sta-ssid">Имя сети (SSID)
+                    <span id="sta-pin" hidden><b class="cur" id="sta-pin-bssid">—</b><button
+                        type="button" class="link-btn" id="sta-pin-clear"
+                        title="Не привязываться к точке: подключаться к любой с этим именем (берётся сильнейшая)"
+                        aria-label="Отвязаться от выбранной точки">✕</button></span>
+                </label>
+                <div class="wide">
+                    <input type="text" id="sta-ssid" maxlength="31" autocomplete="off" spellcheck="false">
+                    <button type="button" class="field-btn" id="sta-scan"
+                            title="Найти сети вокруг и подставить имя из списка. Скан занимает несколько секунд, связь на это время может просесть."
+                            aria-label="Найти сети вокруг">📶</button>
+                </div>
             </div>
             <div class="grow">
                 <label class="field" for="sta-pass">Пароль</label>
-                <input type="password" id="sta-pass" maxlength="63" autocomplete="new-password">
+                <div class="pass"><input type="password" id="sta-pass" maxlength="63" autocomplete="new-password"><button type="button" class="eye" id="sta-eye" title="Показать пароль" aria-label="Показать пароль"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="2"/><line class="slash" x1="3" y1="21" x2="21" y2="3" stroke="currentColor" stroke-width="2"/></svg></button></div>
             </div>
-            <button class="primary" id="sta-save">Подключить</button>
-            <button id="sta-show" type="button">Показать пароль</button>
         </div>
-        <div class="msg" id="sta-msg"></div>
+
+        <!-- Список сетей: только подсказка для поля имени — пароль по-прежнему
+             вводится руками. Строка заполняет «Имя сети». -->
+        <div class="scan-box" id="scan-box" hidden>
+            <div class="scan-head">
+                <span id="scan-head">Поиск сетей…</span>
+                <button type="button" id="scan-close" title="Закрыть список" aria-label="Закрыть список">✕</button>
+            </div>
+            <div class="scan-table">
+                <table>
+                    <thead><tr><th>Сеть</th><th>Уровень</th><th>Канал</th><th>Защита</th></tr></thead>
+                    <tbody id="scan-body"></tbody>
+                </table>
+            </div>
+        </div>
 
         <div class="iface">
             <h3 class="sub">Адрес <small>как шлюз получает IP в вашей сети</small></h3>
@@ -224,10 +297,13 @@
                 <div><label class="field" for="net-sta-dns2">DNS 2</label>
                      <input type="text" id="net-sta-dns2" placeholder="не задан" autocomplete="off" spellcheck="false"></div>
             </div>
-            <button class="primary" id="net-sta-save">Применить настройки станции</button>
-            <div class="msg" id="net-sta-msg"></div>
         </div>
-        <div class="hint hint-icon"><span class="info" role="img" tabindex="0" title="Пароль можно оставить пустым для открытой сети (иначе 8–63 символа). Изменения применяются сразу: шлюз переподключится и получит новый адрес. Настройки меняются только с точки доступа при ровно одном клиенте.">ℹ️</span> пароль пустой — открытая сеть; изменения применяются сразу</div>
+
+        <!-- Одна кнопка на всю карточку, внизу: и имя сети с паролем, и адрес -->
+        <div class="actions">
+            <button class="primary" id="sta-save">Сохранить</button>
+        </div>
+        <div class="msg" id="sta-msg"></div>
     </div>
 
     <!-- Точка доступа самого шлюза: активность режима и число клиентов -->
@@ -238,21 +314,31 @@
             <b id="ap-state">—</b>
             <span class="hint">клиентов подключено: <b id="i-ap-clients">—</b></span>
         </div>
-        <div class="kv"><span>MAC точки доступа</span><span id="i-mac-ap">—</span></div>
-
+        <!-- MAC точки доступа: пустое поле — заводской адрес (см. карточку
+             «Подключение»). Смена адреса оборвёт связь с точкой доступа при
+             первой же перезагрузке, поэтому применяется только ею. -->
         <div class="row" style="margin-top:8px">
+            <div class="grow">
+                <label class="field mac-label" for="ap-mac">MAC точки доступа
+                    <b class="cur" id="i-mac-ap" title="Действующий MAC точки доступа">—</b>
+                </label>
+                <div class="wide">
+                    <input type="text" id="ap-mac" maxlength="17" autocomplete="off" spellcheck="false"
+                           title="Пусто — заводской MAC. Другой адрес включится после перезагрузки.">
+                    <button type="button" class="field-btn" id="ap-mac-factory"
+                            title="Очистить поле: вернётся заводской MAC. Применяется кнопкой «Сохранить»"
+                            aria-label="Очистить поле: вернётся заводской MAC">↺</button>
+                </div>
+            </div>
             <div class="grow">
                 <label class="field" for="ap-ssid">Имя точки доступа</label>
                 <input type="text" id="ap-ssid" maxlength="31" autocomplete="off" spellcheck="false">
             </div>
             <div class="grow">
                 <label class="field" for="ap-pass">Пароль</label>
-                <input type="password" id="ap-pass" maxlength="63" autocomplete="new-password">
+                <div class="pass"><input type="password" id="ap-pass" maxlength="63" autocomplete="new-password"><button type="button" class="eye" id="ap-eye" title="Показать пароль" aria-label="Показать пароль"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="2"/><line class="slash" x1="3" y1="21" x2="21" y2="3" stroke="currentColor" stroke-width="2"/></svg></button></div>
             </div>
-            <button class="primary" id="ap-save">Сохранить</button>
-            <button id="ap-show" type="button">Показать пароль</button>
         </div>
-        <div class="msg" id="ap-msg"></div>
 
         <div class="iface">
             <h3 class="sub">Адрес точки доступа <small>по нему к ней подключаются</small></h3>
@@ -263,15 +349,18 @@
                      <input type="text" id="net-ap-mask" placeholder="255.255.255.0" autocomplete="off" spellcheck="false"></div>
                 <span class="hint">сейчас: <b id="net-ap-addr">—</b></span>
             </div>
-            <button class="primary" id="net-ap-save">Применить настройки точки доступа</button>
-            <div class="msg" id="net-ap-msg"></div>
         </div>
-        <div class="hint hint-icon"><span class="info" role="img" tabindex="0" title="Смена имени и пароля разрешена только тогда, когда к точке доступа подключён ровно один клиент — вы (сейчас: — ), иначе пароль мог бы перехватить посторонний. После сохранения связь оборвётся — подключитесь заново с новым паролем. Заводские имя и пароль печатаются в консоли устройства при включении.">ℹ️</span> смена настроек — только при одном клиенте</div>
+
+        <!-- Одна кнопка на всю карточку, внизу: имя, пароль и адрес точки доступа -->
+        <div class="actions">
+            <button class="primary" id="ap-save">Сохранить</button>
+        </div>
+        <div class="msg" id="ap-msg"></div>
     </div>
 
     <!-- Файлы: место в файловой системе и файловый менеджер -->
     <div class="card">
-        <h2>Файлы <small>LittleFS</small></h2>
+        <h2>Файлы</h2>
 
         <!-- Место в файловой системе вместо строки в «Устройстве»: занято/всего -->
         <div class="fsbar">
@@ -296,7 +385,7 @@
         <div class="toolbar">
             <button class="btn-icon" id="dl-btn" title="Скачать отмеченные файлы"
                     aria-label="Скачать отмеченные файлы">⬇️</button>
-            <button class="btn-icon primary" id="up-btn" title="Загрузить файл: выбрать на компьютере и передать в текущий каталог"
+            <button class="btn-icon primary" id="up-btn" title="Загрузить файл: выбрать на компьютере и передать в текущий каталог порциями по 6 КБ. Имя берётся из имени файла; если такое имя занято, страница спросит подтверждение замены"
                     aria-label="Загрузить выбранный файл в текущий каталог">⬆️</button>
             <button class="btn-icon" id="mkdir-btn" title="Создать каталог в текущем каталоге"
                     aria-label="Создать каталог в текущем каталоге">📁</button>
@@ -319,8 +408,6 @@
             </tr></thead>
             <tbody id="files-body"><tr><td colspan="3" class="empty">список пуст</td></tr></tbody>
         </table>
-        <div class="hint hint-icon"><span class="info" role="img" tabindex="0" title="Кнопки панели — значки, их назначение в подсказке: скачать отмеченные файлы, выбрать файл на компьютере, загрузить выбранный, создать каталог, переименовать (ровно один отмеченный элемент), удалить отмеченное, обновить список. Имя загружаемого файла берётся из имени файла на компьютере как есть (до 63 символов); если файл с таким именем уже есть, страница спросит подтверждение — замена идёт целиком, а прежний файл живёт до последней порции. Передача идёт порциями по 6 КБ во временный файл, который встаёт на место цели лишь после последней порции: оборванная передача рабочий файл не портит. Предел — 500 КБ на файл.">ℹ️</span> назначение значков панели — в подсказке при наведении</div>
-        <div class="hint hint-icon"><span class="info" role="img" tabindex="0" title="Отмеченные каталоги удаляются рекурсивно: сначала файлы, затем пустые каталоги (предел обхода — 200 записей и 8 уровней вложенности). Имя файла в списке открывает его по HTTP, имя каталога — переход внутрь. Если каталог не удаляется как «не пустой», внутри мог остаться скрытый файл .имя.part от оборванной загрузки — в списке он не виден. При скачивании нескольких файлов браузер может спросить разрешение на несколько загрузок.">ℹ️</span> каталоги удаляются рекурсивно; загрузка идёт порциями по 6 КБ</div>
     </div>
 
 </div>
@@ -347,7 +434,7 @@
 const WS_PORT = 81;                         // CONFIG_WEB_SOCKET_SERVER_PORT
 /* Имена FID вместо кодов: подсистема.действие. */
 const FID = { STA:'wifi.sta', AP:'wifi.ap', INFO:'sys.info', REBOOT:'sys.reboot',
-              FILES:'sys.files', NET:'sys.net',
+              FILES:'sys.files', NET:'sys.net', MAC:'wifi.mac', SCAN:'wifi.scan',
               FILE_WRITE:'sys.file.write', FILE_DELETE:'sys.file.delete',
               FILE_RENAME:'sys.file.rename', FILE_MKDIR:'sys.file.mkdir',
               FILE_RMDIR:'sys.file.rmdir' };
@@ -368,6 +455,8 @@ const STATUS_TEXT = {
     0x80000003: 'Некорректные данные',
     0x80000006: 'Не хватило памяти',
     0x80000007: 'Отказано: нужен ровно один клиент точки доступа',
+    0x80000008: 'Устройство уже занято другим сканом',
+    0x80000009: 'Скан не завершился вовремя',
     0x8000000e: 'Обработчик не найден',
     0x8000000f: 'Внутренняя ошибка',
 };
@@ -389,11 +478,32 @@ const ERROR_TEXT = {
     SIZE: 'Файл больше 500 КБ',
     EXIST: 'Такое имя уже занято',
     NOTEMPTY: 'Каталог не пуст — возможно, внутри скрытый файл «.имя.part» от оборванной загрузки',
+    IF: 'Непонятно, для какого интерфейса адрес',
+    MAC: 'Недопустимый MAC-адрес',
+    SCAN: 'Скан не запустился',
+    TIMEOUT: 'Скан не завершился вовремя',
+    BUSY: 'Устройство уже сканирует эфир — повторите через пару секунд',
 };
 
 let ws = null, sid = 1, apClients = null, fromAp = false, canConfigure = false;
 let apSsid = '', apIp = '', macSta = '', macAp = '', staSsid = '', staIp = '', staConnected = false;
+let staApBssid = '', staApRssi = '', staApCh = '';
 let rebootPending = false;
+/* MAC: что заказано (пусто — заводской адрес) и что стоит с завода. Нужны, чтобы
+ * сохранять адрес только при настоящем изменении и показывать состояние поля. */
+const macWant = { STA: '', AP: '' };
+const macFactory = { STA: '', AP: '' };
+/* Выбранная из таблицы точка: {ssid, bssid, rssi, ch}. Пусто — привязки нет,
+ * подключаемся к любой точке с этим именем (устройство возьмёт сильнейшую).
+ * Привязка живёт вместе с именем сети: сменили имя — привязка снимается. */
+let staPin = null;
+/* Действует ли привязка сейчас: устройство снимает её, если выбранной точки нет
+ * в эфире, — чтобы не остаться без связи. */
+let staPinActive = false;
+/* Выбор сделан на странице, но ещё не сохранён: подсказка не должна рассказывать
+ * про откат от ПРЕЖНЕГО выбора. */
+let staPinDirty = false;
+let scanBusy = false;
 const pending = new Map();                  // SID -> callback
 
 const $ = id => document.getElementById(id);
@@ -479,6 +589,7 @@ function handleData(fid, arg) {
     if (fid === FID.AP)     return renderAp(arg);
     if (fid === FID.STA)    return renderSta(arg);
     if (fid === FID.NET)    return renderNet(arg);
+    if (fid === FID.MAC)    return renderMac(arg);
 }
 
 function send(fid, arg, cb) {
@@ -517,6 +628,7 @@ function refreshAll() {
     send(FID.STA);
     send(FID.AP);
     send(FID.NET);
+    send(FID.MAC);
 }
 
 /* ── device status ──────────────────────────────────────────────────────── */
@@ -535,31 +647,37 @@ function renderInfo(i) {
     staSsid = i.STA_SSID || '';
     staIp = i.STA_IP || '';
     staConnected = (typeof i.STA_CONNECTED === 'boolean') ? i.STA_CONNECTED : !!staIp;
+    staApBssid = i.STA_BSSID || '';
+    staApRssi = (typeof i.STA_RSSI === 'number') ? i.STA_RSSI : '';
+    staApCh = (typeof i.STA_CH === 'number') ? i.STA_CH : '';
     apIp = i.AP_IP || '';
 
     $('i-mac-sta').textContent = macSta || '—';
     $('i-mac-ap').textContent = macAp || '—';
     $('i-uptime').textContent = fmtUptime(i.UPTIME);
     $('i-heap').textContent = fmtBytes(i.HEAP);
-    $('fw-name').textContent = i.FW_NAME || '—';
-    $('fw-version').textContent = i.FW_VERSION || '—';
-    $('fw-date').textContent = i.FW_DATE || '—';
-    $('fw-idf').textContent = i.FW_IDF || '—';
-    $('ota-running').textContent = i.OTA_RUNNING || '—';
-    $('ota-next').textContent = i.OTA_NEXT
-        ? `${i.OTA_NEXT} (${fmtBytes(i.OTA_NEXT_SIZE)})` : '—';
+    setText('fw-version', i.FW_VERSION || '—');
     apSsid = i.AP_SSID || apSsid;
     if (typeof i.AP_CLIENTS === 'number') apClients = i.AP_CLIENTS;
     fromAp = !!i.FROM_AP;
     canConfigure = !!i.CAN_CONFIGURE;
 
     renderStaState();
+    showPin();
     renderApState();
     updateHeaderMac();
     applyAccess();
     updateFsBar(i.FS_USED, i.FS_TOTAL);
     if (!$('sta-ssid').value && i.STA_SSID) $('sta-ssid').value = i.STA_SSID;
     if (!$('ap-ssid').value && i.AP_SSID) $('ap-ssid').value = i.AP_SSID;
+}
+
+/* Пишем текст только в существующие элементы: часть полей из разметки убрана
+ * (например, рассказ про разделы прошивки), и прямое обращение к null роняло
+ * всю функцию обновления — так уже было с ключиком настройки. */
+function setText(id, value) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = value;
 }
 
 function fmtUptime(sec) {
@@ -600,15 +718,64 @@ function renderStaState() {
     const state = $('sta-state');
     state.textContent = on ? 'активен' : 'не активен';
     state.className = on ? '' : 'dim-text';
-    $('sta-state-hint').textContent = on
-        ? `подключено к сети ${staSsid || '—'}, адрес ${staIp}`
-        : (staSsid ? `к сети ${staSsid} подключения нет, адрес не получен`
-                   : 'сеть не задана — имя сети в поле ниже');
+
+    /* К КАКОЙ точке подключились: у точек с одним именем различается только
+     * BSSID, поэтому показываем его и уровень — иначе выбор не проверить. */
+    const ap = staApBssid
+        ? ` · точка ${staApBssid}, ${staApRssi} дБм, канал ${staApCh}`
+        : '';
+    if (on) {
+        $('sta-state-hint').textContent = `подключено к сети ${staSsid || '—'}${ap}`;
+        return;
+    }
+    $('sta-state-hint').textContent = staSsid
+        ? `к сети ${staSsid} подключения нет, адрес не получен`
+        : 'сеть не задана — имя сети в поле ниже';
+}
+
+/* Привязка к точке: адрес в подписи поля, слова — в подсказке. Оранжевым —
+ * когда действующая точка другая: переключимся при следующем переподключении. */
+function showPin() {
+    const box = $('sta-pin');
+    if (!staPin || !staPin.bssid) { box.hidden = true; return; }
+    box.hidden = false;
+    const b = $('sta-pin-bssid');
+    b.textContent = staPin.bssid;
+    const same = staApBssid && (staApBssid === staPin.bssid);
+    b.className = 'cur' + (staApBssid && !same ? ' warn' : '');
+    /* Уровень берём из строки таблицы, а после перезагрузки страницы его нет —
+     * тогда годится текущий уровень связи, если подключены к этой же точке. */
+    const lvl = staPin.level
+        || ((same && staApRssi !== '') ? `${staApRssi} дБм` : 'уровень неизвестен');
+    if (staPinDirty) {
+        b.title = `Выбрана эта точка (${lvl}). Нажмите «Сохранить» — шлюз подключится `
+                + 'именно к ней; если её не окажется в эфире, он подключится к любой '
+                + 'другой с этим именем, чтобы не остаться без связи.';
+    } else if (same && staPinActive) {
+        b.title = `Шлюз подключён именно к этой точке (${lvl})`;
+    } else if (!staPinActive && staApBssid) {
+        b.title = `Выбранной точки не было в эфире (${lvl}), шлюз снял привязку и подключился `
+                + `к ${staApBssid}, чтобы не остаться без связи. Выбор сохранён в памяти: `
+                + 'следующая перезагрузка снова поищет выбранную точку.';
+    } else if (staApBssid) {
+        b.title = `Выбрана эта точка (${lvl}); сейчас шлюз на ${staApBssid} — переключится `
+                + 'на выбранную при следующем переподключении';
+    } else {
+        b.title = `Выбрана эта точка (${lvl})`;
+    }
 }
 
 function renderSta(s) {
     if (!s) return;
     if (document.activeElement !== $('sta-ssid')) $('sta-ssid').value = s.SSID || '';
+    /* Устройство помнит выбор в NVS — восстанавливаем его, например после
+     * перезагрузки страницы. */
+    if (s.BSSID_SET && s.BSSID && (!staPin || staPin.bssid !== s.BSSID))
+        staPin = { ssid: s.SSID || '', bssid: s.BSSID, level: '' };
+    if (!s.BSSID_SET) staPin = null;
+    if (typeof s.BSSID_ACTIVE === 'boolean') staPinActive = s.BSSID_ACTIVE;
+    staPinDirty = false;                    /* прибор подтвердил состояние */
+    showPin();
     if (!s.PASS_HIDDEN && document.activeElement !== $('sta-pass')) $('sta-pass').value = s.PASS || '';
     $('sta-pass').placeholder = s.PASS_HIDDEN ? 'скрыт — доступен только с точки доступа' : '';
     if (typeof s.CLIENTS === 'number') apClients = s.CLIENTS;
@@ -617,22 +784,58 @@ function renderSta(s) {
     applyAccess();
 }
 
+/* Одна кнопка на карточку: сохраняем и имя сети с паролем, и способ получения
+ * адреса — раньше это были две отдельные кнопки в одной карточке. */
 $('sta-save').onclick = () => {
     const ssid = $('sta-ssid').value.trim();
     const pass = $('sta-pass').value;
     if (!ssid) { msg('sta-msg', 'Укажите имя сети', 'err'); return; }
-    msg('sta-msg', 'Отправлено, подключаемся…', 'warn');
-    send(FID.STA, { SSID: ssid, PASS: pass }, (resp, sta) => {
-        if (sta !== 0) {
-            msg('sta-msg', describe(resp, sta), 'err');
-        } else {
-            msg('sta-msg', `Настройки применены: ${ssid}. Ждём адрес…`, 'ok');
-            setTimeout(refreshAll, 1500);
-        }
+    const mode = staMode();
+    const net = { IF: 'STA', MODE: mode };
+    if (mode === 'static') {
+        Object.assign(net, {
+            IP: $('net-sta-ip').value.trim(),
+            MASK: $('net-sta-mask').value.trim(),
+            GW: $('net-sta-gw').value.trim(),
+            DNS1: $('net-sta-dns1').value.trim(),
+            DNS2: $('net-sta-dns2').value.trim(),
+        });
+        if (!net.IP || !net.MASK) { msg('sta-msg', 'Укажите IP-адрес и маску', 'err'); return; }
+    }
+    msg('sta-msg', 'Сохраняем…', 'warn');
+    /* Привязка действительна только для того имени сети, для которого выбрана. */
+    const pin = (staPin && staPin.bssid && staPin.ssid === ssid) ? staPin.bssid : '';
+    send(FID.STA, { SSID: ssid, PASS: pass, BSSID: pin }, (resp, sta) => {
+        if (sta !== 0) { msg('sta-msg', describe(resp, sta), 'err'); return; }
+        send(FID.NET, net, (resp2, sta2) => {
+            if (sta2 !== 0) { msg('sta-msg', describe(resp2, sta2), 'err'); return; }
+            /* MAC уходит третьим вызовом и только если его правили */
+            saveMac('STA', (rmac, smac) => {
+                if (smac !== 0) {
+                    msg('sta-msg', describe(rmac, smac), 'err');
+                    send(FID.MAC);
+                    return;
+                }
+                /* Смена имени/пароля переподключает станцию — об этом говорит
+                 * ответ устройства (CHANGED/RECONNECT), а не догадка страницы. */
+                const staTail = (resp && resp.RECONNECT)
+                    ? ' Сеть изменена, ждём подключения…' : '';
+                msg('sta-msg', `Сохранено: сеть ${ssid}, адрес — `
+                    + (mode === 'static' ? net.IP : 'автоматически') + '.'
+                    + staTail + macSaved(rmac, 'STA'), 'ok');
+                send(FID.MAC);
+                setTimeout(refreshAll, 2000);
+            });
+        });
     });
 };
 
-$('sta-show').onclick = () => togglePass('sta-pass', 'sta-show');
+$('sta-eye').onclick = () => togglePass('sta-pass', 'sta-eye');
+
+/* Имя сети правят руками — привязка к точке относится к прежнему имени. */
+$('sta-ssid').addEventListener('input', () => {
+    if (staPin && $('sta-ssid').value.trim() !== staPin.ssid) { staPin = null; showPin(); }
+});
 
 /* ── access point (AP) ──────────────────────────────────────────────────── */
 
@@ -669,14 +872,37 @@ function applyAccess() {
      * оставался в состоянии «проверяем». Пишем только в существующие элементы. */
     const hint = $('ap-clients-hint');
     if (hint) hint.textContent = (apClients === null) ? '—' : apClients;
-    for (const id of ['sta-save', 'ap-save', 'net-sta-save', 'net-ap-save', 'fw-upload']) {
+    /* Загрузка файла файлового менеджера доступна с любого интерфейса — как и
+     * остальные его действия (sys.files/sys.file.*). Настройки самого шлюза —
+     * только администратору точки доступа, поэтому в списке её нет. */
+    for (const id of ['sta-save', 'ap-save']) {
         const b = $(id);
         b.disabled = !canConfigure;
+        /* Причина недоступности — в подсказке самой кнопки, а не абзацем на странице. */
         b.title = canConfigure
-            ? 'Доступно: вы единственный клиент точки доступа'
-            : 'Доступно только с точки доступа при ровно одном клиенте';
+            ? (b.title.split('. Недоступно')[0] || '')
+            : 'Недоступно: менять настройки можно только с точки доступа при ровно одном клиенте';
         b.setAttribute('aria-label', b.title);
     }
+    /* То же для полей: пользователь видит, почему не может их править. */
+    for (const id of ['sta-ssid', 'sta-pass', 'ap-ssid', 'ap-pass',
+                      'net-sta-ip', 'net-sta-mask', 'net-sta-gw', 'net-sta-dns1', 'net-sta-dns2',
+                      'net-ap-ip', 'net-ap-mask', 'sta-mode-dhcp', 'sta-mode-static']) {
+        const f = $(id);
+        if (!f) continue;
+        f.disabled = !canConfigure;
+        f.title = canConfigure ? '' : 'Недоступно: менять настройки можно только с точки доступа при ровно одном клиенте';
+    }
+    /* Поля MAC — отдельно: у них своя постоянная подсказка, которую нельзя
+     * затирать пустой строкой. */
+    for (const id of ['sta-mac', 'ap-mac']) {
+        const f = $(id);
+        f.disabled = !canConfigure;
+        f.title = canConfigure
+            ? 'Пусто — заводской MAC. Другой адрес включится после перезагрузки.'
+            : 'Недоступно: менять настройки можно только с точки доступа при ровно одном клиенте';
+    }
+    for (const id of ['sta-mac-factory', 'ap-mac-factory']) $(id).disabled = !canConfigure;
     let text;
     if (canConfigure) {
         text = `Настройка разрешена: вы подключены к точке доступа ${apSsid}, клиентов — 1.`;
@@ -699,26 +925,213 @@ $('ap-save').onclick = () => {
         msg('ap-msg', 'Пароль должен быть 8–63 символа или пустым (открытая сеть)', 'err');
         return;
     }
+    const ip = $('net-ap-ip').value.trim();
+    const mask = $('net-ap-mask').value.trim();
+    if (!ip || !mask) { msg('ap-msg', 'Укажите IP-адрес и маску', 'err'); return; }
     msg('ap-msg', 'Сохраняем…', 'warn');
     send(FID.AP, { SSID: ssid, PASS: pass }, (resp, sta) => {
         if (sta !== 0) {
             const n = (resp && typeof resp.CLIENTS === 'number') ? resp.CLIENTS : apClients;
             msg('ap-msg', describe(resp, sta) + (n !== null ? ` (клиентов на AP: ${n})` : ''), 'err');
-        } else {
-            msg('ap-msg', 'Сохранено. Точка доступа перезапущена — подключитесь заново с новым паролем.',
-                'ok');
+            return;
         }
+        send(FID.NET, { IF: 'AP', IP: ip, MASK: mask }, (resp2, sta2) => {
+            if (sta2 !== 0) { msg('ap-msg', describe(resp2, sta2), 'err'); return; }
+            saveMac('AP', (rmac, smac) => {
+                if (smac !== 0) {
+                    msg('ap-msg', describe(rmac, smac), 'err');
+                    send(FID.MAC);
+                    return;
+                }
+                msg('ap-msg', `Сохранено: точка доступа ${ssid}, адрес ${ip}.`
+                    + macSaved(rmac, 'AP') + ' Связь оборвётся — подключитесь заново.', 'ok');
+                send(FID.MAC);
+            });
+        });
     });
 };
 
-$('ap-show').onclick = () => togglePass('ap-pass', 'ap-show');
+$('ap-eye').onclick = () => togglePass('ap-pass', 'ap-eye');
 
+/* Глаз внутри поля пароля: перечёркнутый — пароль скрыт, обычный — показан. */
 function togglePass(inputId, btnId) {
     const inp = $(inputId);
     const on = inp.type === 'password';
     inp.type = on ? 'text' : 'password';
-    $(btnId).textContent = on ? 'Скрыть пароль' : 'Показать пароль';
+    const btn = $(btnId);
+    btn.classList.toggle('shown', on);
+    const hint = on ? 'Скрыть пароль' : 'Показать пароль';
+    btn.title = hint;
+    btn.setAttribute('aria-label', hint);
 }
+
+/* ── MAC интерфейсов (wifi.mac) ────────────────────────────────────────────── *
+ *
+ * Пустое поле — заводской адрес: состояние видно без слов, а в подсказке поля
+ * стоит сам заводской адрес. Новый адрес драйвер принимает только на
+ * ОСТАНОВЛЕННОМ радио, а гасить его на время правки нельзя — по нему идёт эта
+ * же страница, поэтому адрес применяется со следующей загрузки, и о переносе
+ * говорит приписка рядом с текущим адресом. */
+
+function normMac(s) {
+    return (s || '').replace(/[^0-9a-fA-F]/g, '').toLowerCase();
+}
+
+function renderMac(m) {
+    if (!m) return;
+    macFactory.STA = m.FACTORY_STA || '';
+    macFactory.AP  = m.FACTORY_AP  || '';
+    macWant.STA = m.CUSTOM_STA ? (m.WANT_STA || '') : '';
+    macWant.AP  = m.CUSTOM_AP  ? (m.WANT_AP  || '') : '';
+
+    for (const iface of ['STA', 'AP']) {
+        const low = iface.toLowerCase();
+        const inp = $(low + '-mac');
+        if (document.activeElement !== inp) inp.value = macWant[iface];
+        inp.placeholder = macFactory[iface] || 'заводской';
+
+        /* Действующий адрес: он же показывает, ждёт ли прибор перезагрузки —
+         * цветом и подсказкой, без лишней строки текста в карточке. */
+        const cur = $('i-mac-' + low);
+        const now = m['MAC_' + iface] || '';
+        const pending = !!m['PENDING_' + iface];
+        cur.textContent = now || '—';
+        cur.className = 'cur' + (pending ? ' warn' : '');
+        cur.title = !pending
+            ? `Действующий MAC ${iface === 'STA' ? 'станции' : 'точки доступа'}`
+              + (macWant[iface] ? ' (заменён на этот же адрес)' : ' (заводской)')
+            : (macWant[iface]
+                ? `Сейчас ${now}, после перезагрузки станет ${macWant[iface]}`
+                : `Сейчас ${now}, после перезагрузки вернётся заводской ${macFactory[iface]}`);
+        cur.setAttribute('aria-label', cur.title);
+    }
+    applyAccess();
+}
+
+/* Текст о смене адреса — по ответу устройства: в нём есть и новый (MAC), и
+ * действующий (CURRENT). Само устройство не перезагружается: адрес ждёт ручной
+ * перезагрузки, о ней и говорим пользователю. */
+function macSaved(resp, iface) {
+    const name = iface === 'STA' ? 'MAC станции' : 'MAC точки доступа';
+    if (!resp) return '';
+    if (!resp.RESTART) return ` ${name} не изменён.`;
+    const what = resp.FACTORY
+        ? `${name} вернётся к заводскому ${resp.MAC}`
+        : `новый ${name}: ${resp.MAC}`;
+    return ` ${what} (сейчас ${resp.CURRENT}). Перезагрузите устройство — адрес включится после загрузки.`;
+}
+
+/* Адрес уходит отдельным вызовом и только когда поле действительно изменили:
+ * пустая строка — «верни заводской». */
+function saveMac(iface, done) {
+    const value = $(iface.toLowerCase() + '-mac').value.trim();
+    if (normMac(value) === normMac(macWant[iface])) { done(null, 0); return; }
+    if (value && normMac(value).length !== 12) {
+        done({ ERR: 'MAC', MSG: 'MAC — двенадцать шестнадцатеричных цифр, например 94:51:dc:31:01:85' }, 1);
+        return;
+    }
+    msg(iface === 'STA' ? 'sta-msg' : 'ap-msg', 'Сохраняем MAC…', 'warn');
+    send(FID.MAC, { IF: iface, MAC: value }, (resp, sta) => done(resp, sta));
+}
+
+/* Кнопка в поле только очищает его: применение — общей кнопкой «Сохранить». */
+$('sta-mac-factory').onclick = () => { $('sta-mac').value = ''; };
+$('ap-mac-factory').onclick  = () => { $('ap-mac').value  = ''; };
+
+/* ── поиск сетей вокруг (wifi.scan) ────────────────────────────────────────── *
+ *
+ * Инструмент вспомогательный: скан ничего не меняет, поэтому доступен с любого
+ * интерфейса и не зависит от права настройки. Он лишь заполняет имя сети —
+ * пароль пользователь вводит сам. */
+
+const AUTH_TEXT = { open: 'открытая', wep: 'WEP', wpa: 'WPA', wpa2: 'WPA2',
+                    'wpa/wpa2': 'WPA/WPA2', 'wpa2-ent': 'WPA2-Enterprise',
+                    wpa3: 'WPA3', 'wpa2/wpa3': 'WPA2/WPA3', wapi: 'WAPI', '?': 'неизвестно' };
+
+function rssiBars(v) {
+    const n = (v >= -55) ? 4 : (v >= -67) ? 3 : (v >= -78) ? 2 : 1;
+    return '▮'.repeat(n) + '▯'.repeat(4 - n);
+}
+
+function renderScan(r) {
+    const nets = (r && Array.isArray(r.NETS)) ? r.NETS : [];
+    const head = $('scan-head');
+    const body = $('scan-body');
+    body.innerHTML = '';
+    if (!nets.length) { head.textContent = 'Сетей не найдено'; return; }
+
+    head.textContent = `Найдено сетей: ${r.COUNT}`
+        + (r.COUNT > nets.length ? `, показаны первые ${nets.length}` : '')
+        + ' — щёлкните строку, чтобы подставить имя';
+
+    for (const n of nets) {
+        const ssid = n.SSID || '(без имени)';
+        const tr = document.createElement('tr');
+        tr.title = `Подставить «${ssid}» в поле «Имя сети»` + (n.BSSID ? ` · ${n.BSSID}` : '');
+        tr.onclick = () => pickSsid(n);
+        const cells = [[ssid, ''], [`${rssiBars(n.RSSI)} ${n.RSSI} дБм`, 'num'],
+                       [String(n.CH), 'num'], [AUTH_TEXT[n.AUTH] || n.AUTH || '—', 'auth']];
+        for (const [text, cls] of cells) {
+            const td = document.createElement('td');
+            if (cls) td.className = cls;
+            td.textContent = text;
+            tr.appendChild(td);
+        }
+        body.appendChild(tr);
+    }
+}
+
+function pickSsid(n) {
+    const ssid = n.SSID || '';
+    if (!ssid) return;
+    if ($('sta-ssid').disabled) {
+        $('scan-head').textContent = 'Имя подставить нельзя: настройки меняются только '
+                                   + 'с точки доступа при ровно одном клиенте';
+        return;
+    }
+    $('sta-ssid').value = ssid;
+    /* Запоминаем не только имя, но и САМУ точку: у сетей с одинаковым именем
+     * выбор иначе был бы отдан драйверу. */
+    staPin = { ssid, bssid: n.BSSID || '', level: `${n.RSSI} дБм, канал ${n.CH}` };
+    staPinDirty = true;
+    showPin();
+    $('scan-box').hidden = true;
+    msg('sta-msg', `Выбрана точка ${n.BSSID} (${n.RSSI} дБм, канал ${n.CH}). `
+        + 'Осталось ввести пароль и сохранить.', 'ok');
+}
+
+/* Крестик в подписи: отказаться от привязки — подключаться к любой точке с этим
+ * именем (устройство возьмёт сильнейшую). */
+$('sta-pin-clear').onclick = () => {
+    staPin = null;
+    staPinDirty = true;
+    showPin();
+    msg('sta-msg', 'Точка не выбрана: шлюз подключится к любой с этим именем, выбрав сильнейшую. '
+        + 'Сохраните настройки.', 'warn');
+};
+
+$('sta-scan').onclick = async () => {
+    if (scanBusy) return;
+    scanBusy = true;
+    const btn = $('sta-scan');
+    btn.disabled = true;
+    btn.classList.add('busy');
+    $('scan-box').hidden = false;
+    $('scan-head').textContent = 'Ищем сети… это занимает несколько секунд';
+    $('scan-body').innerHTML = '';
+
+    /* Свой предел ожидания: скан по 13 каналам занимает до нескольких секунд,
+     * а общий предел запроса — 15 с. */
+    const { resp, sta } = await request(FID.SCAN, {}, 20000);
+
+    scanBusy = false;
+    btn.disabled = false;
+    btn.classList.remove('busy');
+    if (sta !== 0) { $('scan-head').textContent = describe(resp, sta); return; }
+    renderScan(resp);
+};
+
+$('scan-close').onclick = () => { $('scan-box').hidden = true; };
 
 /* ── модальное окно страницы (вместо prompt и confirm) ──────────────────── */
 
@@ -851,48 +1264,14 @@ function renderNet(n) {
     applyAccess();
 }
 
-$('net-sta-save').onclick = () => {
-    const mode = staMode();
-    const arg = { IF: 'STA', MODE: mode };
-    if (mode === 'static') {
-        Object.assign(arg, {
-            IP: $('net-sta-ip').value.trim(),
-            MASK: $('net-sta-mask').value.trim(),
-            GW: $('net-sta-gw').value.trim(),
-            DNS1: $('net-sta-dns1').value.trim(),
-            DNS2: $('net-sta-dns2').value.trim(),
-        });
-    }
-    msg('net-sta-msg', 'Применяем…', 'warn');
-    send(FID.NET, arg, (resp, sta) => {
-        if (sta !== 0) { msg('net-sta-msg', describe(resp, sta), 'err'); return; }
-        msg('net-sta-msg', mode === 'static'
-            ? 'Статический адрес применён.'
-            : 'Станция снова получает адрес автоматически.', 'ok');
-        setTimeout(() => send(FID.NET), 1500);
-    });
-};
-
-$('net-ap-save').onclick = () => {
-    const arg = {
-        IF: 'AP',
-        IP: $('net-ap-ip').value.trim(),
-        MASK: $('net-ap-mask').value.trim(),
-    };
-    if (!arg.IP || !arg.MASK) { msg('net-ap-msg', 'Укажите IP-адрес и маску', 'err'); return; }
-    msg('net-ap-msg', 'Применяем… связь прервётся через секунду', 'warn');
-    send(FID.NET, arg, (resp, sta) => {
-        if (sta !== 0) { msg('net-ap-msg', describe(resp, sta), 'err'); return; }
-        msg('net-ap-msg', `Адрес точки доступа изменён на ${arg.IP}. `
-            + `Переподключитесь к сети и откройте http://${arg.IP}/config`, 'ok');
-    });
-};
-
 /* ── firmware update ───────────────────────────────────────────────────── */
 
-$('fw-upload').onclick = async () => {
+/* Как и загрузка файла: кнопка открывает выбор, а выбранный образ сразу
+ * уходит на устройство (с подтверждением). */
+$('fw-upload').onclick = () => $('fw-file').click();
+$('fw-file').onchange = async () => {
     const file = $('fw-file').files[0];
-    if (!file) { msg('fw-msg', 'Выберите файл прошивки (.bin)', 'err'); return; }
+    if (!file) return;
     const ok = await askModal({
         title: 'Прошить устройство?',
         text: `Файл: ${file.name} (${fmtBytes(file.size)}). Устройство запишет образ во второй `
@@ -970,7 +1349,9 @@ function renderCrumb(f) {
     let acc = '';
     for (const part of (f.PATH || '/').split('/').filter(Boolean)) {
         acc += '/' + part;
-        crumb.appendChild(document.createTextNode(' / '));
+        /* Разделитель — только между сегментами: корень уже показан слешем,
+         * иначе получалось «/ / maps». */
+        if (crumb.childNodes.length > 1) crumb.appendChild(document.createTextNode('/'));
         const link = document.createElement('a');
         link.href = '#';
         link.textContent = part;
@@ -995,13 +1376,13 @@ function updateToolbar() {
     $('ren-btn').disabled = items.length !== 1;
     $('del-btn').disabled = items.length === 0;
     setTitle('dl-btn', files
-        ? `Скачать отмеченные файлы (${files})`
+        ? `Скачать отмеченные файлы (${files}): файлы сохраняются на компьютер`
         : 'Скачать отмеченные файлы: отметьте хотя бы один файл (каталоги не скачиваются)');
     setTitle('ren-btn', items.length === 1
         ? `Переименовать «${items[0].NAME}»`
         : 'Переименовать: отметьте ровно один файл или каталог');
     setTitle('del-btn', items.length
-        ? `Удалить отмеченное (${items.length})`
+        ? `Удалить отмеченное (${items.length}); каталоги удаляются рекурсивно вместе с содержимым`
         : 'Удалить отмеченное: сначала отметьте файлы или каталоги');
 }
 
