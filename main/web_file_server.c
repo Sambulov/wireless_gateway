@@ -150,9 +150,12 @@ static esp_err_t common_http_handler(httpd_req_t *req)
 /* Reserved addresses for the built-in configuration page. The page lives in
  * the application image (gzip, generated at build time by tools/pack_web.py),
  * so formatting or emptying the filesystem cannot take it away — the page is
- * what lets the files be put back. It must stay registered ahead of the
- * catch-all file_server handler below, which would otherwise look for a file
- * named "config" on the filesystem. */
+ * what lets the files be put back. It is registered only in the access
+ * point's web server object (main/app.c): on the other interfaces these
+ * addresses are not registered at all, so a request for them is an ordinary
+ * filesystem path served by the catch-all handler below. Where the page IS
+ * registered it must stay ahead of that catch-all handler, which would
+ * otherwise look for a file named "config" on the filesystem. */
 static esp_err_t config_page_handler(httpd_req_t *req)
 {
     extern const uint8_t config_page_gz_start[] asm("_binary_config_page_html_gz_start");
@@ -168,10 +171,9 @@ static esp_err_t config_page_handler(httpd_req_t *req)
 }
 
 /* URI handler for reading files from the filesystem. Файлы ИЗМЕНЯЮТСЯ только
- * через WebSocket-сервисы sys.file.write/delete/rename (см. apih_sys.c): HTTP-
- * методы /upload/…, /delete/… и /rename/… убраны вместе со своими обработчиками.
- * Отдача файлов по HTTP GET остаётся — именно так браузер получает страницы,
- * карты регистров и прочие файлы LittleFS. */
+ * через WebSocket-сервисы sys.file.write/delete/rename (см. apih_sys.c).
+ * Отдача файлов по HTTP GET — так браузер получает страницы, карты регистров и
+ * прочие файлы LittleFS. */
 httpd_uri_t file_server = {
     .uri       = "/*",  // Match all URIs of type /path/to/file
     .method    = HTTP_GET,
@@ -199,7 +201,8 @@ httpd_uri_t modbus_alias = {
     .is_websocket = false
 };
 
-/* Built-in configuration page, reachable as /config and /config.html */
+/* Built-in configuration page, reachable as /config and /config.html. Only the
+ * access point's web server object offers these addresses (main/app.c). */
 httpd_uri_t config_page = {
     .uri       = "/config",
     .method    = HTTP_GET,

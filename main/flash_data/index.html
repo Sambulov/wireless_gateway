@@ -393,7 +393,7 @@
     // ── WebSocket ─────────────────────────────────────────────────────────────
     const WS_PORT = 81; // must match Kconfig CONFIG_WEB_SOCKET_SERVER_PORT
     function connect() {
-        ws = new WebSocket(`ws://${window.location.hostname}:${WS_PORT}/ws`);
+        ws = new WebSocket(`ws://${window.location.hostname}:${WS_PORT}/api`);
         ws.onopen    = onOpen;
         ws.onclose   = onClose;
         ws.onerror   = () => {};

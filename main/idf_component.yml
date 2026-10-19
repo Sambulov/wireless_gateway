@@ -4,7 +4,9 @@ dependencies:
     path: ../json
   CodeLibrary:
     path: ../CodeLibrary
-  ws_server:
-    path: ../ws_server
-  ws_api:
-    path: ../ws_api
+  transport:
+    path: ../transport
+  api:
+    path: ../api
+  platform:
+    path: ../platform

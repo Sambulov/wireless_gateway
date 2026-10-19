@@ -221,7 +221,7 @@ class ESP32Terminal {
     async connect() {
         /* Адрес не спрашиваем: страница открыта с прибора, значит и WebSocket
          * на нём же (порт 81 — CONFIG_WEB_SOCKET_SERVER_PORT). */
-        const url = `ws://${location.hostname}:81/ws`;
+        const url = `ws://${location.hostname}:81/api`;
 
         this.setState('подключаемся…', '');
         this.setCfgState('');

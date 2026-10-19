@@ -8,8 +8,8 @@
 #include <stdlib.h>
 #include "CodeLib.h"
 #include "uart.h"
-#include "web_api.h"
-#include "ws_hal.h"
+#include "api.h"
+#include "platform.h"
 
 typedef int esp_err_t;
 #define ESP_OK   0
@@ -30,6 +30,10 @@ typedef int esp_err_t;
 #define ESP_WS_API_UART2_ECHO        "uart2.echo"
 
 typedef struct {
+    /* Ядра API теста: сервис берёт их отсюда, как и в прошивке (app.c).
+     * Второе (станция) может быть NULL — тестам UART достаточно одного ядра. */
+    api_t *api_ap;
+    api_t *api_sta;
     struct {
         uint32_t raw_sent_ts;
         struct app_uart_t {
@@ -40,4 +44,6 @@ typedef struct {
     } uart;
 } app_context_t;
 
-void *get_ws_worker_queue(void);
+/* Очередей у ядра нет: запрос приходит вызовом обработчика, ответ уходит по
+ * дескриптору вызова, а рассылка — публичным вызовом api_broadcast (ядро
+ * берётся из app.api_ap/app.api_sta). */

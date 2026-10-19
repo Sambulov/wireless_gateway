@@ -10,8 +10,11 @@
  *   op              аргументы                событие
  *   --------------  -----------------------  ---------------------------------
  *   OP_TEXT         conn, len, len байт      клиент прислал текстовый кадр
- *   OP_STEP         -                        одна итерация задачи ядра
- *   OP_PERIPH       mode                     устройство отвечает на запрос
+ *   OP_STEP         -                        один такт ядра (api_worker)
+ *   OP_PERIPH       mode                     устройство отвечает на забранный
+ *                                            вызов (api_reply), отказывает
+ *                                            без вызова или рассылает кадр по FID
+ *                                            (api_broadcast)
  *   OP_TICK         n                        время идёт
  *   OP_SEND_RESULT  conn, err                следующие отправки в conn не проходят
  *   OP_CONNECT      conn                     соединение поднять/закрыть
@@ -34,16 +37,14 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "web_api.h"
-#include "ws_hal.h"
-#include "ws_transport.h"
-#include "ws_transport_stub.h"
-#include "ws_hal_stub.h"
+#include "api.h"
+#include "platform.h"
+#include "transport.h"
+#include "transport_stub.h"
+#include "system_stub.h"
 
-extern void ws_server_init(void);
-extern void ws_server_test_worker_step(void);
-extern void ws_server_test_reset(void);
-extern void *get_ws_worker_queue(void);
+/* Такт ядра — публичный api_worker: в прошивке его зовёт задача приложения, а
+ * здесь — харнесс (задачи в хосте нет). Ядро у харнесса своё: дескриптор ниже. */
 
 #define FUZZ_FID_FULL   "fuzz.full"
 #define FUZZ_FID_ALIVE  "fuzz.alive"
@@ -66,16 +67,18 @@ enum {
 
 /* Как фальшивое устройство отвечает на запрос, который забрало (аргумент OP_PERIPH). */
 enum {
-    PERIPH_ECHO,        /* тот же id, полезная нагрузка возвращается как есть */
-    PERIPH_EMPTY,       /* тот же id, без данных                             */
-    PERIPH_WRONG_ID,    /* id, которого не может быть ни у одного вызова     */
-    PERIPH_BROADCAST,   /* id 0 — рассылка всем подписчикам сервиса           */
+    PERIPH_ECHO,        /* ответ по дескриптору вызова, полезная нагрузка как есть */
+    PERIPH_EMPTY,       /* ответ по дескриптору вызова без данных               */
+    PERIPH_NO_CALL,     /* отвечать нечему: пустой дескриптор вызова            */
+    PERIPH_BROADCAST,   /* рассылка всем подписчикам имени FID                  */
     PERIPH_MODE_COUNT
 };
 
 static ws_transport_stub_conn_t *conns[CONN_COUNT];
+/* Ядро харнесса: дескриптор создаёт api_init и освобождает api_deinit — так
+ * каждый вход получает чистое ядро, а статического состояния у ядра нет. */
+static api_t *api;
 static int connected[CONN_COUNT];
-static ws_queue_t periph_queue;
 
 /* ── Чтение входа ─────────────────────────────────────────────────────── */
 
@@ -104,63 +107,113 @@ static uint8_t *rd_bytes(reader_t *r, size_t want, size_t *out_len) {
 
 static uint8_t fuzz_done_handler(void *call, void **ctx, uint8_t *data, uint32_t len) {
     (void)ctx; (void)data; (void)len;
-    uint32_t id;
-    bApiCallGetId(call, &id);
-    bApiCallSendStatus(call, API_CALL_STATUS_EXECUTING);
+    if (!call) return 0;
+    const uint8_t body[] = "{\"OK\":1}";
+    api_reply(call, body, sizeof(body) - 1);
     return 0;
 }
 
 static int fuzz_alive_rounds;
 static uint8_t fuzz_alive_handler(void *call, void **ctx, uint8_t *data, uint32_t len) {
     (void)ctx; (void)data; (void)len;
-    uint32_t id;
-    bApiCallGetId(call, &id);
-    bApiCallSendStatus(call, API_CALL_STATUS_EXECUTING);
+    if (!call) return 0;
+    const uint8_t body[] = "{\"ALIVE\":1}";
+    api_reply(call, body, sizeof(body) - 1);
     return (++fuzz_alive_rounds % 8) != 0;
 }
 
-static void register_test_endpoints(void) {
-    bApiCallRegister(fuzz_done_handler,  FUZZ_FID_FULL,  GW_IFACE_MASK_ANY, NULL);
-    ws_server_register_fid_queue(FUZZ_FID_FULL, GW_IFACE_MASK_ANY, periph_queue);
-    bApiCallRegister(fuzz_alive_handler, FUZZ_FID_ALIVE, GW_IFACE_MASK_ANY, NULL);
-    ws_server_register_fid_queue(FUZZ_FID_QUEUE, GW_IFACE_MASK_ANY, periph_queue);
+/* ── Фальшивое устройство ────────────────────────────────────────────────
+ *
+ * Очередь запросов — ВНУТРЕННЕЕ дело сервиса: ядро о ней не знает и просто
+ * зовёт обработчик. Здесь это массив вызовов, которые обработчик забрал и ещё не
+ * завершил; место вызова в массиве лежит в контексте вызова (+1, чтобы 0
+ * означало «слота нет»). */
+static void *periph_calls[PERIPH_QUEUE_DEPTH];
+static uint8_t periph_answered[PERIPH_QUEUE_DEPTH];
+static int periph_n;
+
+static void periph_reset(void) {
+    memset(periph_calls, 0, sizeof(periph_calls));
+    memset(periph_answered, 0, sizeof(periph_answered));
+    periph_n = 0;
 }
 
-static void periph_answer(uint8_t mode) {
-    webapi_msg_t *req;
-    if (!ws_hal_queue_receive(periph_queue, &req, WS_HAL_WAIT_NONE))
-        return;
+static uint8_t fuzz_periph_handler(void *call, void **ctx, uint8_t *data, uint32_t len) {
+    (void)data; (void)len;
+    int idx = (int)(intptr_t)*ctx - 1;
 
-    webapi_msg_t resp = {0};
-    memcpy(resp.fid, req->fid, sizeof(resp.fid));
-    resp.id = req->id;
-    switch (mode % PERIPH_MODE_COUNT) {
-    case PERIPH_WRONG_ID:  resp.id = 0x10000 | req->id; break;
-    case PERIPH_BROADCAST: resp.id = 0;                 break;
-    default:                                            break;
-    }
-    if ((mode % PERIPH_MODE_COUNT) != PERIPH_EMPTY && req->data && req->len) {
-        resp.data = malloc(req->len);
-        if (resp.data) {
-            memcpy(resp.data, req->data, req->len);
-            resp.len = req->len;
+    if (!call) {                                /* снятие: освобождаем слот */
+        if (idx >= 0 && idx < PERIPH_QUEUE_DEPTH) {
+            periph_calls[idx]    = NULL;
+            periph_answered[idx] = 0;
         }
+        *ctx = NULL;
+        return 0;
     }
-    if (!ws_hal_queue_send(get_ws_worker_queue(), &resp, WS_HAL_WAIT_NONE))
-        free(resp.data);
-    free(req->data);
-    free(req);
+
+    if (idx >= 0 && idx < PERIPH_QUEUE_DEPTH) {
+        if (!periph_answered[idx])
+            return 1;                           /* устройство ещё думает */
+        periph_calls[idx]    = NULL;
+        periph_answered[idx] = 0;
+        *ctx = NULL;
+        return 0;                               /* ответ ушёл — вызов закрыт */
+    }
+
+    if (periph_n >= PERIPH_QUEUE_DEPTH) {
+        const uint8_t busy[] = "{\"STA\":\"0x80000008\"}";
+        api_reply(call, busy, sizeof(busy) - 1);
+        return 0;
+    }
+    periph_calls[periph_n++] = call;
+    *ctx = (void *)(intptr_t)periph_n;
+    return 1;
 }
 
-static void drain_queues(void) {
-    webapi_msg_t *req;
-    while (ws_hal_queue_receive(periph_queue, &req, WS_HAL_WAIT_NONE)) {
-        free(req->data);
-        free(req);
+static void register_test_endpoints(void) {
+    api_register_handler(api, fuzz_done_handler,   FUZZ_FID_FULL,  NULL);
+    api_register_handler(api, fuzz_alive_handler,  FUZZ_FID_ALIVE, NULL);
+    api_register_handler(api, fuzz_periph_handler, FUZZ_FID_QUEUE, NULL);
+}
+
+/* Устройство отвечает на первый забранный вызов. Ответ на КОНКРЕТНЫЙ вызов идёт
+ * через его дескриптор (api_reply) — так делает любой сервис; оставшиеся
+ * ветки — отказ без вызова и рассылка по имени FID (api_broadcast). */
+static void periph_answer(uint8_t mode) {
+    void *call = NULL;
+    int    idx = -1;
+    for (int i = 0; i < periph_n; i++) {
+        if (periph_calls[i] && !periph_answered[i]) { call = periph_calls[i]; idx = i; break; }
     }
-    webapi_msg_t resp;
-    while (ws_hal_queue_receive(get_ws_worker_queue(), &resp, WS_HAL_WAIT_NONE))
-        free(resp.data);
+    const uint8_t body[] = "{\"V\":1}";
+
+    if (!call) {
+        /* Забранных вызовов нет — проверяем оба отказа: рассылка без подписчиков
+         * и ответ без дескриптора вызова. */
+        switch (mode % PERIPH_MODE_COUNT) {
+        case PERIPH_BROADCAST: api_broadcast(api, FUZZ_FID_ALIVE, body, sizeof(body) - 1); break;
+        default:               api_reply(NULL, body, sizeof(body) - 1); break;
+        }
+        return;
+    }
+
+    switch (mode % PERIPH_MODE_COUNT) {
+    case PERIPH_NO_CALL:
+        /* Отвечать нечему: дескриптор вызова пуст. */
+        api_reply(NULL, body, sizeof(body) - 1);
+        return;
+    case PERIPH_BROADCAST:
+        /* Рассылка по имени FID: адресована подписчикам, а не этому вызову. */
+        api_broadcast(api, FUZZ_FID_ALIVE, body, sizeof(body) - 1);
+        return;
+    case PERIPH_EMPTY:
+        api_reply(call, (const uint8_t *)"", 0);
+        break;
+    default:
+        api_reply(call, body, sizeof(body) - 1);
+        break;
+    }
+    periph_answered[idx] = 1;               /* закроется следующим тактом */
 }
 
 /* Типы кадров уровня WebSocket, которые может подать вход. */
@@ -182,9 +235,13 @@ static void connect_conn(int c, int up) {
 }
 
 static void rearm(void) {
-    ws_server_test_reset();
+    /* Транспорт снимаем раньше ядра: он доводит до конца отложенные отправки, и
+     * ядро освобождает свои буферы ответов. Затем ядро снимается целиком
+     * (api_deinit отписывает его от транспорта) и заводится заново. */
     ws_transport_stub_reset();
-    ws_transport_stub_attach();
+    api_deinit(api);
+    periph_reset();
+    api = ws_transport_stub_init();
     for (int i = 0; i < CONN_COUNT; i++) {
         conns[i] = ws_transport_stub_connect(i + 1);
         ws_transport_stub_set_deferred(conns[i], 1);
@@ -198,8 +255,6 @@ static void rearm(void) {
 int LLVMFuzzerInitialize(int *argc, char ***argv) {
     (void)argc;
     (void)argv;
-    ws_server_init();
-    periph_queue = ws_hal_queue_create(PERIPH_QUEUE_DEPTH, sizeof(webapi_msg_t *));
     rearm();
     return 0;
 }
@@ -222,18 +277,18 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t len) {
             break;
         }
         case OP_STEP:
-            ws_server_test_worker_step();
+            api_worker(api);
             break;
         case OP_PERIPH:
             periph_answer(rd_u8(&r));
             break;
         case OP_TICK:
-            ws_hal_stub_advance_tick((uint32_t)rd_u8(&r) * 16);
+            system_stub_advance_time((uint32_t)rd_u8(&r) * 16);
             break;
         case OP_SEND_RESULT: {
             int c = rd_u8(&r) % CONN_COUNT;
             ws_transport_stub_set_send_result(conns[c],
-                (rd_u8(&r) & 1) ? WS_TRANSPORT_FAULT : WS_TRANSPORT_OK);
+                (rd_u8(&r) & 1) ? TRANSPORT_FAULT : TRANSPORT_OK);
             break;
         }
         case OP_CONNECT: {
@@ -253,7 +308,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t len) {
         case OP_COMPLETE: {
             int c = rd_u8(&r) % CONN_COUNT;
             ws_transport_stub_complete_pending(conns[c],
-                (rd_u8(&r) & 1) ? WS_TRANSPORT_FAULT : WS_TRANSPORT_OK);
+                (rd_u8(&r) & 1) ? TRANSPORT_FAULT : TRANSPORT_OK);
             break;
         }
         default:
@@ -261,7 +316,6 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t len) {
         }
     }
 
-    drain_queues();
     rearm();
     return 0;
 }

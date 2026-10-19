@@ -1,4 +1,4 @@
-#include "ws_hal.h"
+#include "platform.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -7,65 +7,65 @@
 #include "freertos/task.h"
 #include <esp_log.h>
 
-ws_mutex_t ws_hal_mutex_create(void) {
+platform_mutex_t platform_mutex_create(void) {
     return xSemaphoreCreateRecursiveMutex();
 }
 
-int ws_hal_mutex_take(ws_mutex_t m, uint32_t timeout_ms) {
-    TickType_t ticks = (timeout_ms == WS_HAL_WAIT_FOREVER)
+int platform_mutex_take(platform_mutex_t m, uint32_t timeout_ms) {
+    TickType_t ticks = (timeout_ms == PLATFORM_WAIT_FOREVER)
                        ? portMAX_DELAY
                        : pdMS_TO_TICKS(timeout_ms);
     return (xSemaphoreTakeRecursive((SemaphoreHandle_t)m, ticks) == pdTRUE) ? 1 : 0;
 }
 
-void ws_hal_mutex_give(ws_mutex_t m) {
+void platform_mutex_give(platform_mutex_t m) {
     xSemaphoreGiveRecursive((SemaphoreHandle_t)m);
 }
 
-ws_queue_t ws_hal_queue_create(uint32_t depth, uint32_t item_size) {
+platform_queue_t platform_queue_create(uint32_t depth, uint32_t item_size) {
     return xQueueCreate(depth, item_size);
 }
 
-int ws_hal_queue_send(ws_queue_t q, const void *item, uint32_t timeout_ms) {
-    TickType_t ticks = (timeout_ms == WS_HAL_WAIT_FOREVER)
+int platform_queue_send(platform_queue_t q, const void *item, uint32_t timeout_ms) {
+    TickType_t ticks = (timeout_ms == PLATFORM_WAIT_FOREVER)
                        ? portMAX_DELAY
                        : pdMS_TO_TICKS(timeout_ms);
     return (xQueueSend((QueueHandle_t)q, item, ticks) == pdPASS) ? 1 : 0;
 }
 
-int ws_hal_queue_receive(ws_queue_t q, void *item, uint32_t timeout_ms) {
-    TickType_t ticks = (timeout_ms == WS_HAL_WAIT_FOREVER)
+int platform_queue_receive(platform_queue_t q, void *item, uint32_t timeout_ms) {
+    TickType_t ticks = (timeout_ms == PLATFORM_WAIT_FOREVER)
                        ? portMAX_DELAY
                        : pdMS_TO_TICKS(timeout_ms);
     return (xQueueReceive((QueueHandle_t)q, item, ticks) == pdPASS) ? 1 : 0;
 }
 
-uint32_t ws_hal_tick(void) {
+uint32_t platform_tick(void) {
     return (uint32_t)xTaskGetTickCount();
 }
 
-uint32_t ws_hal_ms_to_ticks(uint32_t ms) {
+uint32_t platform_ms_to_ticks(uint32_t ms) {
     return (uint32_t)pdMS_TO_TICKS(ms);
 }
 
-uint32_t ws_hal_ticks_to_ms(uint32_t ticks) {
+uint32_t platform_ticks_to_ms(uint32_t ticks) {
     return (uint32_t)(ticks * portTICK_PERIOD_MS);
 }
 
-void ws_hal_delay_ms(uint32_t ms) {
+void platform_delay_ms(uint32_t ms) {
     vTaskDelay(pdMS_TO_TICKS(ms));
 }
 
-void ws_hal_task_create(void (*fn)(void *), const char *name,
+void platform_task_create(void (*fn)(void *), const char *name,
                         uint32_t stack_words, void *arg, int priority) {
     xTaskCreate(fn, name, stack_words, arg, priority, NULL);
 }
 
-void ws_hal_task_self_delete(void) {
+void platform_task_self_delete(void) {
     vTaskDelete(NULL);
 }
 
-static void ws_hal_log_write(esp_log_level_t level, const char *tag, const char *fmt, va_list args) {
+static void platform_log_write(esp_log_level_t level, const char *tag, const char *fmt, va_list args) {
     char buf[160];
     int len = vsnprintf(buf, sizeof(buf), fmt, args);
     if(len < 0) return;
@@ -76,23 +76,23 @@ static void ws_hal_log_write(esp_log_level_t level, const char *tag, const char 
     esp_log_write(level, tag, "%s", buf);
 }
 
-void ws_hal_log_i(const char *tag, const char *fmt, ...) {
+void platform_log_i(const char *tag, const char *fmt, ...) {
     va_list args;
     va_start(args, fmt);
-    ws_hal_log_write(ESP_LOG_INFO, tag, fmt, args);
+    platform_log_write(ESP_LOG_INFO, tag, fmt, args);
     va_end(args);
 }
 
-void ws_hal_log_d(const char *tag, const char *fmt, ...) {
+void platform_log_d(const char *tag, const char *fmt, ...) {
     va_list args;
     va_start(args, fmt);
-    ws_hal_log_write(ESP_LOG_DEBUG, tag, fmt, args);
+    platform_log_write(ESP_LOG_DEBUG, tag, fmt, args);
     va_end(args);
 }
 
-void ws_hal_log_w(const char *tag, const char *fmt, ...) {
+void platform_log_w(const char *tag, const char *fmt, ...) {
     va_list args;
     va_start(args, fmt);
-    ws_hal_log_write(ESP_LOG_WARN, tag, fmt, args);
+    platform_log_write(ESP_LOG_WARN, tag, fmt, args);
     va_end(args);
 }

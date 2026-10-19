@@ -1,395 +1,450 @@
-#include <esp_log.h>
-#include "esp_littlefs.h"
-#include <esp_http_server.h>
-#include <esp_wifi.h>
-#include <errno.h>
+/* web_server.c — объект веб-сервера на сетевой интерфейс: пути, политика, сессии. */
+
 #include <stdlib.h>
-#include <sys/socket.h>
-#include <lwip/sockets.h>
+#include <string.h>
+#include "net_iface.h"
 
-#include "app.h"
+#include "esp_log.h"
+
+#include "web_httpd.h"
+#include "web_server.h"
 #include "web_iface_policy.h"
+/* Транспорт интерфейса порождает объект (web_server_open_websocket): реализация
+ * и её контекст живут в main/ws_transport.c, а работа с соединениями идёт через
+ * этот объект. */
+#include "ws_transport.h"
 
-httpd_handle_t server = NULL;
+static const char *TAG = "web_server";
 
-/* ── Отправка без бесконечного ожидания ───────────────────────────────────────
- *
- * esp_http_server обслуживает все сессии одного экземпляра ОДНОЙ задачей, а её
- * штатная отправка блокирующая: если клиент запросил файл и перестал читать,
- * буфер отправки забивается, задача залипает в send() и перестаёт обслуживать
- * всех остальных — сервер замолкает на десятки секунд (замерено: ≥45 с на
- * карте 122 КБ, до бесконечности при заполненном пуле сокетов).
- *
- * Поэтому у одного вызова отправки есть бюджет WEB_SEND_BUDGET_MS: как только
- * байты пошли, вызов сразу возвращается, и бюджет начинается заново. Живая
- * передача по Wi-Fi может замереть на секунды, пока полон буфер отправки
- * (здесь он 5760 байт), поэтому бюджет должен быть заметно больше таких
- * заминок — иначе клиент получает обрезанный файл. Нечитающий клиент не
- * отдаёт ничего вообще, и его сессия закрывается по этому же бюджету.
- *
- * Состояние по сессиям здесь не храним: дескрипторы в ESP-IDF выдаёт VFS, а не
- * lwIP, и они не ограничены CONFIG_LWIP_MAX_SOCKETS (в логах встречается fd=36),
- * поэтому таблица по fd была бы и неверной, и опасной.
- */
-#define WEB_SEND_BUDGET_MS 5000
-#define WEB_SEND_STEP_MS 10
+/* Сколько путей может предложить один объект: страницы, файлы, прошивка и
+ * WebSocket-точка своего интерфейса. */
+#define WEB_SERVER_ROUTES_MAX    12
 
-/* Момент последнего успеха по каждой сессии. Ключ — дескриптор, но хранить это
- * массивом по дескриптору нельзя: в ESP-IDF его выдаёт VFS, а не lwIP, поэтому
- * он не ограничен CONFIG_LWIP_MAX_SOCKETS (в логах встречаются fd=36 и fd=56).
- * Поэтому таблица с проверкой ключа; нулевой дескриптор означает пустой слот. */
-#define SESS_SLOTS 32
-typedef struct {
-    int fd;
-    TickType_t last_ok;
-} sess_progress_t;
+/* Сколько транспортов может породить один объект. Их столько, сколько
+ * WebSocket-точек оказано интерфейсу; в прошивке — одна.
+ * Список нужен для владения: порождённое объектом освобождает объект. */
+#define WEB_SERVER_TRANSPORTS_MAX 4
 
-static sess_progress_t sess_tab[SESS_SLOTS];
+/* Сколько соединений интерфейса объект может учитывать одновременно (страницы и
+ * WebSocket вместе). Предел больше суммы слотов портов, чтобы «нет места» не
+ * наступало раньше, чем у httpd кончатся сокеты. */
+#define WEB_SERVER_SESSIONS_MAX  24
 
-static sess_progress_t *sess_slot(int fd)
-{
-    if (fd <= 0) return NULL;
-    unsigned h = ((unsigned)fd * 2654435761u) % SESS_SLOTS;
-    sess_progress_t *free_slot = NULL;
-    for (unsigned i = 0; i < SESS_SLOTS; i++) {
-        sess_progress_t *e = &sess_tab[(h + i) % SESS_SLOTS];
-        if (e->fd == fd) return e;
-        if (e->fd == 0 && free_slot == NULL) free_slot = e;
+struct web_server {
+    uint32_t iface;                  /* какой интерфейс обслуживает объект */
+    web_route_t routes[WEB_SERVER_ROUTES_MAX];  /* uri принадлежит объекту */
+    uint16_t route_count;
+    /* Порты сокетного слоя, в которые объект регистрирует свои пути: страницы и
+     * WebSocket. NULL — порт не поднят, пути этого назначения не регистрируются. */
+    web_httpd_t *ports[WEB_ROUTE_KINDS];
+    /* Транспорты, порождённые объектом (web_server_open_websocket). */
+    transport_t *transports[WEB_SERVER_TRANSPORTS_MAX];
+    uint8_t transport_count;
+    /* Учтённые соединения интерфейса: дескриптор 0 — слот свободен. */
+    int sessions[WEB_SERVER_SESSIONS_MAX];
+    uint16_t session_count;
+};
+
+uint32_t web_server_iface(const web_server_t *srv) {
+    return (srv != NULL) ? srv->iface : GW_IFACE_NONE;
+}
+
+/* ── Таблица путей ────────────────────────────────────────────────────────── */
+
+/* Запись уже занята этим путём назначения (активная или заявленная). NULL —
+ * такой записи нет. */
+static web_route_t *route_reserved(web_server_t *srv, web_route_kind_t kind,
+                                   const char *uri) {
+    if ((srv == NULL) || (uri == NULL)) return NULL;
+    for (uint16_t i = 0; i < srv->route_count; i++) {
+        web_route_t *route = &srv->routes[i];
+        if ((route->kind != kind) || (route->uri == NULL)) continue;
+        if (strcmp(route->uri, uri) == 0) return route;
     }
-    if (free_slot) {
-        free_slot->fd = fd;
-        free_slot->last_ok = xTaskGetTickCount();
-    }
-    return free_slot;                 /* таблица полна — работаем по вызову */
-}
-
-/* Бюджет отправки — сколько ждём, пока сокет примет данные. Общая задача
- * обслуживает все сессии по очереди, поэтому медленный клиент задерживает
- * остальных: отсюда и бюджет, вместо бесконечного ожидания.
- *
- * У WebSocket бюджет был 1 с, и этого НЕ ХВАТАЛО: во время перезагрузки
- * подключённого прибора (на порту валится поток лога загрузки) страница-
- * терминал занята отрисовкой и перестаёт читать сокет, окно TCP закрывается,
- * send() не укладывается в секунду — httpd отдаёт ошибку, и ядро закрывает
- * сессию: пользователь видел «Ошибка WebSocket: undefined» и «Соединение
- * закрыто». Теперь бюджет как у отдачи файлов (5 с), а поток кадров с порта
- * ограничен темпом 75 мс, поэтому очередь не растёт бесконечно. */
-#define WEB_SEND_BUDGET_FILE_MS 5000
-#define WEB_SEND_BUDGET_WS_MS   5000
-
-static int send_bounded(int fd, const char *buf, size_t len, int flags, uint32_t budget_ms)
-{
-    sess_progress_t *s = sess_slot(fd);
-    TickType_t call_start = xTaskGetTickCount();
-    /* Сессия могла просто простоять (keep-alive у браузера — до 30 с), и тогда
-     * «последний успех» у неё старый. Это не залипание: окно отсчёта должно
-     * начинаться заново, иначе первый же запрос после паузы будет убит как
-     * нечитающий. Настоящее залипание до этой точки не доживает — его сессия
-     * закрывается по бюджету прямо в вызове. */
-    if (s && (call_start - s->last_ok) > pdMS_TO_TICKS(WEB_SEND_BUDGET_MS))
-        s->last_ok = call_start;
-    for (;;) {
-        int ret = send(fd, buf, len, (flags & ~MSG_WAITALL) | MSG_DONTWAIT);
-        if (ret > 0) {
-            if (s) s->last_ok = xTaskGetTickCount();
-            return ret;
-        }
-        /* ret == 0 при закрытом окне — не ошибка, но и не прогресс */
-        if (ret < 0 && errno != EAGAIN && errno != EWOULDBLOCK &&
-            errno != EINTR && errno != ENOMEM && errno != ENOBUFS)
-            return -1;
-        TickType_t base = s ? s->last_ok : call_start;
-        if ((xTaskGetTickCount() - base) > pdMS_TO_TICKS(budget_ms)) {
-            ESP_LOGW(TAG, "fd=%d не принимает данные %lu мс, закрываю сессию",
-                     fd, (unsigned long)budget_ms);
-            if (s) s->fd = 0;         /* сессия закрывается — освобождаем слот */
-            return -1;
-        }
-        vTaskDelay(pdMS_TO_TICKS(WEB_SEND_STEP_MS));
-    }
-}
-
-static int socket_send_file(httpd_handle_t hd, int fd,
-                            const char *buf, size_t len, int flags)
-{
-    (void)hd;
-    return send_bounded(fd, buf, len, flags, WEB_SEND_BUDGET_FILE_MS);
-}
-
-static int socket_send_ws(httpd_handle_t hd, int fd,
-                          const char *buf, size_t len, int flags)
-{
-    (void)hd;
-    return send_bounded(fd, buf, len, flags, WEB_SEND_BUDGET_WS_MS);
-}
-
-/* Закрытие сессии: освобождаем её слот в таблице прогресса, иначе таблица
- * забьётся закрытыми дескрипторами и учёт прогресса перестанет работать. */
-static void session_close(httpd_handle_t hd, int sockfd)
-{
-    (void)hd;
-    sess_progress_t *e = sess_slot(sockfd);
-    if (e && e->fd == sockfd) e->fd = 0;
-    /* ВАЖНО: при заданном close_fn httpd НЕ закрывает сокет сам — он просто
-     * вызывает этот обработчик вместо close() (см. httpd_sess_delete в
-     * httpd_sess.c). Если здесь не закрыть, каждый завершённый сеанс теряет
-     * сокет: пул LWIP исчерпывается, accept() возвращает ENFILE, и сервер
-     * начинает отвечать сбросом на все запросы. */
-    close(sockfd);
-}
-
-/* Настройка каждой новой сессии: без задержек на подтверждениях и со своей
- * отправкой. */
-static esp_err_t session_open_common(httpd_handle_t hd, int sockfd,
-                                    httpd_send_func_t send_fn)
-{
-    /* TCP_NODELAY. Без него мелкие ответы (а их тут большинство: ответы JSON
-     * API и кадры WebSocket) ждут подтверждения по алгоритму Нейгла вместе с
-     * задержанным ACK, и ЛЮБОЙ запрос стоит 100-250 мс независимо от объёма —
-     * замерено: 1 регистр 250 мс, 16 регистров 112 мс, тогда как сама передача
-     * по 9600 бод занимает десятки миллисекунд. Именно это и ощущается как
-     * «контроллер еле дышит». esp_http_server включает TCP_NODELAY только для
-     * сообщений об ошибках (и лишь при CONFIG_HTTPD_ERR_RESP_NO_DELAY),
-     * обычные ответы и кадры WS идут через Нейгла. Ставим один раз на сессию. */
-    int one = 1;
-    if (setsockopt(sockfd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one)) < 0)
-        ESP_LOGW(TAG, "TCP_NODELAY для fd=%d не включился (%d)", sockfd, errno);
-    return httpd_sess_set_send_override(hd, sockfd, send_fn);
-}
-
-static esp_err_t session_open(httpd_handle_t hd, int sockfd)
-{
-    return session_open_common(hd, sockfd, socket_send_file);
-}
-
-static esp_err_t session_open_ws(httpd_handle_t hd, int sockfd)
-{
-    return session_open_common(hd, sockfd, socket_send_ws);
-}
-
-//static uint32_t ws_connections_left = CONFIG_WEB_SERVER_MAX_CLIENTS;
-/* start_ws_server()'s httpd instance has max_open_sockets=5, and httpd
- * reserves 3 of those for itself (listen + ctrl + spare) -> only 2 WS
- * clients actually fit; a 3rd connection overflows the instance's socket
- * pool (httpd_queue_work failures cascading into NIC buffer exhaustion). */
-static uint32_t ws_connections_left = 2; /* internally limited */
-
-static void httpd_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data) {
-    switch (event_id) {
-        case HTTP_SERVER_EVENT_ERROR : //httpd_err_code_t
-          ESP_LOGW(TAG, "error: '%08lx'", (uint32_t)event_data);
-          break;
-        case HTTP_SERVER_EVENT_START : //NULL
-          ESP_LOGW(TAG, "started");
-          break;
-        case HTTP_SERVER_EVENT_ON_CONNECTED : //int
-          if (ws_connections_left > 0)
-              ws_connections_left--;
-          ESP_LOGD(TAG, "new connection: '%08x'; connections left %lu", *(int *)event_data, ws_connections_left);
-          break;
-        case HTTP_SERVER_EVENT_ON_HEADER : //int
-          ESP_LOGD(TAG, "on header: '%08lx'", (uint32_t)event_data);
-          break;
-        case HTTP_SERVER_EVENT_HEADERS_SENT : //int
-          ESP_LOGD(TAG, "headers sent: '%08lx'", (uint32_t)event_data);
-          break;
-        /* Эти два события приходят НА КАЖДУЮ порцию данных в обе стороны.
-         * Логировать их на уровне WARN нельзя: вывод на консоль синхронный,
-         * 115200 бод, и на файл в 122 КБ (30 порций по 4096) уходило больше
-         * двухсот миллисекунд блокировки задачи httpd прямо посреди отдачи.
-         * Для отладки включаются уровнем verbose. */
-        case HTTP_SERVER_EVENT_ON_DATA :
-          ESP_LOGD(TAG, "on data: fd: '%u' len:'%u'",
-            ((esp_http_server_event_data *)event_data)->fd,
-            ((esp_http_server_event_data *)event_data)->data_len);
-          break;
-        case HTTP_SERVER_EVENT_SENT_DATA :
-          ESP_LOGD(TAG, "data sent: fd: '%u' len:'%u'",
-            ((esp_http_server_event_data *)event_data)->fd,
-            ((esp_http_server_event_data *)event_data)->data_len);
-          break;
-        case HTTP_SERVER_EVENT_DISCONNECTED : //int
-          ws_connections_left++;
-          ESP_LOGW(TAG, "disconnected: '%08x'", *(int *)event_data);
-          break;
-        case HTTP_SERVER_EVENT_STOP : //NULL
-          ESP_LOGW(TAG, "stopped");
-            break;
-        default:
-            break;
-    }
-}
-
-httpd_handle_t start_webserver(void)
-{
-    httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-
-    config.uri_match_fn = httpd_uri_match_wildcard;
-    config.max_uri_handlers = 20;
-    config.server_port = CONFIG_WEB_SERVER_PORT;
-    config.keep_alive_enable = true;
-    /* Брошенное соединение держит сокет из общего пула: браузер, ушедший со
-     * страницы, оставлял его на 30 с, а сокетов всего CONFIG_LWIP_MAX_SOCKETS.
-     * Когда пул кончался, httpd писал "error in accept (23)" (ENFILE) и отвечал
-     * сбросом на всё подряд. 10 секунд — достаточно для догрузки ресурсов
-     * страницы и заметно быстрее освобождает пул. */
-    config.keep_alive_idle = 10;
-    config.keep_alive_interval = 5;
-    config.keep_alive_count = 3;
-
-    /* Сокеты берутся из общего пула CONFIG_LWIP_MAX_SOCKETS (32) вместе с
-     * экземпляром WS-сервера, слушающими и служебными сокетами.
-     *
-     * Шести сессий не хватало: браузер открывает до шести соединений на узел,
-     * а страница тянет ещё и карту прибора в сотню килобайт. Четыре вкладки
-     * выбирали пул целиком, и следующая страница не могла загрузиться, пока не
-     * истечёт keep-alive у брошенных соединений. */
-    config.max_open_sockets = 12;
-
-    /* Вытеснение по LRU здесь ОТКЛЮЧЕНО: оно закрывает уже принятые сессии,
-     * чтобы впустить новую, и при быстром клиенте с keep-alive это рвёт живые
-     * соединения (замерено: с ним 2 из 25 запросов, без него 22 из 25). Вместо
-     * него пул сокетов увеличен, а брошенные соединения отпускаются быстрее
-     * (keep_alive_idle). */
-    config.lru_purge_enable = false;
-
-    /* Своя отправка с дедлайном: одна нечитающая сессия не должна держать
-     * задачу, общую для всех клиентов. */
-    config.open_fn = session_open;
-    config.close_fn = session_close;
-
-    esp_event_handler_register(ESP_HTTP_SERVER_EVENT ,ESP_EVENT_ANY_ID, &httpd_event_handler, NULL);
-
-    // Start the httpd server
-    ESP_LOGI(TAG, "Starting server on port: '%d'", config.server_port);
-    if (httpd_start(&server, &config) == ESP_OK) return server;
-    ESP_LOGI(TAG, "Error starting server!");
     return NULL;
 }
 
-/* Own httpd instance (own FreeRTOS task + select() loop) for the WebSocket
- * API, kept off the HTTP file server's port. esp_http_server processes all
- * sessions of one instance serially in a single task, so a slow file
- * transfer on start_webserver()'s instance would otherwise starve WS
- * handshakes/frames queued on the same task. */
-httpd_handle_t start_ws_server(void)
-{
-    httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+/* Занять место под путь в таблице объекта. Путь при этом ещё НЕ отдан httpd:
+ * публикует его route_publish, и делает это либо регистрация страницы
+ * (web_server_register_uri), либо активация WebSocket-точки
+ * (web_server_activate_ws). Политика интерфейса применяется сразу — она следует
+ * за путём, а не за моментом публикации. */
+static web_route_t *route_claim(web_server_t *srv, const char *uri,
+                                web_route_kind_t kind) {
+    if ((srv == NULL) || (uri == NULL)) return NULL;
 
-    config.server_port = CONFIG_WEB_SOCKET_SERVER_PORT;
-    config.keep_alive_enable = true;
-    /* Брошенная вкладка не должна держать слот WebSocket дольше нужного:
-     * слотов немного, а страница при перезагрузке подключается заново. */
-    config.keep_alive_idle = 10;
-    config.keep_alive_interval = 5;
-    config.keep_alive_count = 3;
+    if (srv->ports[kind] == NULL) {
+        ESP_LOGE(TAG, "Порт назначения %lu не поднят, путь '%s' не оказан",
+                 (unsigned long)kind, uri);
+        return NULL;
+    }
+    /* Одна запись на путь: вторая заявка на тот же URI означала бы два
+     * обработчика для одного пути, и запросы достались бы только первому. */
+    if (route_reserved(srv, kind, uri) != NULL) {
+        ESP_LOGW(TAG, "Путь '%s' уже закреплён за интерфейсом %lu", uri,
+                 (unsigned long)srv->iface);
+        return NULL;
+    }
+    if (srv->route_count >= WEB_SERVER_ROUTES_MAX) {
+        ESP_LOGE(TAG, "Таблица путей интерфейса %lu полна", (unsigned long)srv->iface);
+        return NULL;
+    }
 
-    /* Столько страниц может быть подключено одновременно. Пять слотов давали
-     * всего четыре рабочие вкладки — пятая (или перезагруженная) не
-     * подключалась вовсе. Вместе с файловым сервером это 12+8=20 сессий, в пул
-     * из 32 сокетов укладывается с запасом на слушающие и служебные. */
-    config.max_open_sockets = 8;
+    web_route_t *route = &srv->routes[srv->route_count];
+    memset(route, 0, sizeof(*route));
+    route->uri = strdup(uri);  /* шаблон может прийти из временной структуры */
+    if (route->uri == NULL) return NULL;
+    route->kind       = kind;
+    route->method     = HTTP_GET;
+    route->iface_mask = web_iface_service_mask(uri);
+    srv->route_count++;
+    return route;
+}
 
-    /* Короткий бюджет отправки: кадр API — это сотни байт, и клиент, который не
-     * принимает их за секунду, просто не успевает. Иначе он задерживал ответы
-     * всем остальным (общая задача). Вытеснение по LRU сюда не ставим —
-     * соединения здесь долгие и предназначенные. */
-    config.open_fn = session_open_ws;
-    config.close_fn = session_close;
+/* Снять заявку: путь уходит из httpd (если был там) и из таблицы объекта. */
+static void route_drop(web_server_t *srv, web_route_t *route) {
+    if ((srv == NULL) || (route == NULL)) return;
 
-    /* Every httpd instance defaults to the SAME ctrl_port (internal UDP
-     * control channel for cross-task signalling); two instances sharing
-     * one ctrl_port would cross-talk. Give this instance its own. */
-    config.ctrl_port = ESP_HTTPD_DEF_CTRL_PORT + 1;
+    if ((route->handler != NULL) && (srv->ports[route->kind] != NULL))
+        web_httpd_unregister(srv->ports[route->kind], route->uri, route->method);
+    free((char *)route->uri);
 
-    /* Event handler for ESP_HTTP_SERVER_EVENT is already registered in
-     * start_webserver() above; that registration is instance-agnostic and
-     * picks up events from this server too, so it must not be repeated
-     * here (esp_event_handler_register is not idempotent). */
+    /* Таблица плоская: место снимается переносом последней записи. */
+    const uint16_t idx = (uint16_t)(route - srv->routes);
+    if (idx < srv->route_count) {
+        srv->route_count--;
+        if (idx != srv->route_count) srv->routes[idx] = srv->routes[srv->route_count];
+        memset(&srv->routes[srv->route_count], 0, sizeof(srv->routes[0]));
+    }
+}
 
-    ESP_LOGI(TAG, "Starting WS server on port: '%d'", config.server_port);
-    httpd_handle_t ws_server = NULL;
-    if (httpd_start(&ws_server, &config) == ESP_OK) return ws_server;
-    ESP_LOGI(TAG, "Error starting WS server!");
+/* Отдать путь httpd. Пишется в запись до регистрации: httpd может прислать
+ * запрос сразу после того, как узнал путь. */
+static uint8_t route_publish(web_server_t *srv, web_route_t *route) {
+    if ((route == NULL) || (srv->ports[route->kind] == NULL)) return 0;
+    if (!web_httpd_register(srv->ports[route->kind], route)) return 0;
+    return 1;
+}
+
+/* Путь, которым httpd выбрал этот запрос. Шаблон приходит от сокетного слоя:
+ * сопоставление с путём запроса уже сделал httpd (httpd_uri_match_wildcard).
+ *
+ * Метод сверяется только у обычных маршрутов: рукопожатие WebSocket httpd
+ * отвечает сам, а каждый следующий кадр приходит запросом с method == 0 (не GET),
+ * и путь у него тот же, что у точки.
+ *
+ * Заявка без обработчика (WS-точка, закреплённая, но ещё не активированная)
+ * не находится: клиенту нечего на неё ответить. */
+static web_route_t *route_find(web_server_t *srv, web_route_kind_t kind,
+                               const char *uri, httpd_method_t method) {
+    if ((srv == NULL) || (uri == NULL)) return NULL;
+    for (uint16_t i = 0; i < srv->route_count; i++) {
+        web_route_t *route = &srv->routes[i];
+        if (route->kind != kind) continue;
+        if (route->handler == NULL) continue;
+        if ((kind != WEB_ROUTE_WS) && (route->method != method)) continue;
+        if (strcmp(route->uri, uri) == 0) return route;
+    }
     return NULL;
 }
 
-/* ── Сервис оказывается интерфейсам, а не «вообще всем» ──────────────────────
+/* ── Регистрация сервисов ───────────────────────────────────────────────────
  *
- * httpd различает только «URI → обработчик»: масок сетевых интерфейсов у него
- * нет, поэтому доступ решает наш слой. Точка решения — здесь, в единственном
- * месте регистрации URI: обработчик сервиса, оказанного не всем, оборачивается
- * в обёртку, которая узнаёт у соединения его интерфейс (gw_iface_of_socket) и
- * сверяет с маской сервиса из таблицы (web_iface_policy.c). Так политика одна
- * на все URI и её нельзя забыть в отдельном обработчике.
+ * Политика «какой сервис каким интерфейсам оказан» живёт в одной таблице
+ * (web_iface_policy.c): здесь она лишь применяется к маршруту, чтобы отказ не
+ * расползался проверками по обработчикам и его нельзя было забыть в отдельном
+ * обработчике. Масок интерфейсов у httpd нет, поэтому решение остаётся за нами.
  *
- * Что считается отказом: сервис, не оказанный этому интерфейсу, отвечает
- * 404 Not Found — так же, как несуществующий путь. Клиенту нечего знать о том,
- * что путь на устройстве есть; он есть, но не для него.
- *
- * Оговорка: WebSocket-рукопожатие httpd отвечает сам, не вызывая обработчик
- * (см. ws_transport_httpd.c), поэтому /ws в таблице открыт всем, а свои вызовы
- * он различает регистрацией сервисов по маскам в ядре API.
- */
-typedef struct {
-    esp_err_t (*handler)(httpd_req_t *req);
-    void *user_ctx;         /* контекст, с которым обработчик регистрировали */
-    uint32_t iface_mask;    /* кому оказан сервис этого URI */
-} web_uri_service_t;
+ * Отказ — 404 Not Found, как у несуществующего пути: клиенту нечего знать о том,
+ * что путь на устройстве есть; он есть, но не для него. */
+uint8_t web_server_register_uri(web_server_t *srv, const httpd_uri_t *uri) {
+    if ((srv == NULL) || (uri == NULL) || (uri->uri == NULL) ||
+        (uri->handler == NULL)) return 0;
 
-static esp_err_t web_uri_guard_handler(httpd_req_t *req) {
-    const web_uri_service_t *svc = (const web_uri_service_t *)req->user_ctx;
-    if (svc == NULL || svc->handler == NULL) return ESP_FAIL;
+    web_route_t *route = route_claim(srv, uri->uri, WEB_ROUTE_HTTP);
+    if (route == NULL) return 0;
 
-    const uint32_t iface = gw_iface_of_socket(httpd_req_to_sockfd(req));
-    if (!web_iface_mask_allows(svc->iface_mask, iface)) {
-        ESP_LOGW(TAG, "URI '%s' не обслуживается на интерфейсе %u (маска 0x%08lx) — 404",
-                 req->uri, (unsigned)iface, (unsigned long)svc->iface_mask);
-        return httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Not found");
+    route->method     = uri->method;
+    route->handler    = uri->handler;
+    route->user_ctx   = uri->user_ctx;
+    route->is_websocket = 0;
+    if (!route_publish(srv, route)) {
+        route_drop(srv, route);
+        return 0;
     }
 
-    /* Обработчик должен получить контекст, с которым его регистрировали: в
-     * user_ctx на время запроса лежит наша обёртка. Возвращаем как было — httpd
-     * заполняет это поле заново на каждый запрос. */
-    void *policy_ctx = req->user_ctx;
-    req->user_ctx = svc->user_ctx;
-    const esp_err_t err = svc->handler(req);
-    req->user_ctx = policy_ctx;
-    return err;
-}
-
-uint8_t webserver_register_handler(httpd_handle_t server, httpd_uri_t *uri_handler) {
-    if (server == NULL || uri_handler == NULL || uri_handler->handler == NULL) return 0;
-
-    const uint32_t iface_mask = web_iface_service_mask(uri_handler->uri);
     /* Сервис, оказанный любому интерфейсу, регистрируется как есть: проверять
      * нечего, и на горячем пути (кадры WebSocket, страницы, файлы) не
      * появляется ни одного лишнего вызова. */
-    if (iface_mask == GW_IFACE_MASK_ANY)
-        return httpd_register_uri_handler(server, uri_handler) == ESP_OK;
-
-    web_uri_service_t *svc = calloc(1, sizeof(*svc));
-    if (svc == NULL) {
-        /* Регистрировать без политики нельзя: это молча открыло бы сервис
-         * всем — хуже, чем не оказать его вовсе. */
-        ESP_LOGE(TAG, "Нет памяти под политику доступа для '%s'", uri_handler->uri);
-        return 0;
-    }
-    svc->handler    = uri_handler->handler;
-    svc->user_ctx   = uri_handler->user_ctx;
-    svc->iface_mask = iface_mask;
-
-    /* Шаблон копируем: httpd копирует его себе, а исходную структуру (она
-     * статическая и принадлежит своему модулю) не трогаем. */
-    httpd_uri_t guarded = *uri_handler;
-    guarded.handler  = web_uri_guard_handler;
-    guarded.user_ctx = svc;
-
-    if (httpd_register_uri_handler(server, &guarded) != ESP_OK) {
-        free(svc);
-        return 0;
-    }
-    ESP_LOGI(TAG, "Сервис '%s' оказан интерфейсам 0x%08lx; прочим — 404",
-             uri_handler->uri, (unsigned long)iface_mask);
+    if (route->iface_mask != GW_IFACE_MASK_ANY)
+        ESP_LOGI(TAG, "Сервис '%s' оказан интерфейсам 0x%08lx; прочим — 404",
+                 uri->uri, (unsigned long)route->iface_mask);
     return 1;
+}
+
+/* ── Транспорт интерфейса ───────────────────────────────────────────────────
+ *
+ * Транспорт порождает объект, а не приходит со стороны: интерфейс уже задан
+ * объектом, и «какой транспорт обслуживает какой интерфейс» отдельно не
+ * спрашивается — другой интерфейс порождает другой объект. Ни реестра, ни
+ * таблицы «интерфейс → транспорт» здесь нет: экземпляр помнит сам себя.
+ *
+ * URI закрепляется за объектом здесь и сразу — вместе с политикой интерфейса, —
+ * но в httpd он попадает только при активации (web_server_activate_ws): между
+ * порождением и активацией вызывающий назначает транспорту обработчик. Так
+ * соединение, пришедшее раньше подписчика, не попадает в «висящую» сессию, а
+ * просто не находит пути. */
+transport_t *web_server_open_websocket(web_server_t *srv, const char *uri) {
+    if ((srv == NULL) || (uri == NULL)) return NULL;
+
+    if (srv->transport_count >= WEB_SERVER_TRANSPORTS_MAX) {
+        ESP_LOGE(TAG, "Объект интерфейса %lu уже породил %u транспортов",
+                 (unsigned long)srv->iface, (unsigned)srv->transport_count);
+        return NULL;
+    }
+
+    /* 1. Путь за интерфейсом объекта: назначение — порт WebSocket. */
+    web_route_t *route = route_claim(srv, uri, WEB_ROUTE_WS);
+    if (route == NULL) return NULL;
+    route->is_websocket = 1;
+
+    /* 2. Сам транспорт: реализацию и её контекст поднимает ws_transport.c, а
+     *    объект сервера уходит в этот контекст — через него транспорт работает с
+     *    соединениями (закрывает сессии, отправляет кадры). */
+    transport_t *transport = ws_transport_create(srv, uri);
+    if (transport == NULL) {
+        route_drop(srv, route);
+        ESP_LOGE(TAG, "Транспорт на '%s' не порождён (интерфейс %lu)", uri,
+                 (unsigned long)srv->iface);
+        return NULL;
+    }
+
+    /* 3. Порождённое принадлежит объекту: web_server_close его освободит. */
+    srv->transports[srv->transport_count++] = transport;
+
+    ESP_LOGI(TAG, "Транспорт на '%s' порождён для интерфейса %lu: URI ждёт активации",
+             uri, (unsigned long)srv->iface);
+    return transport;
+}
+
+uint8_t web_server_activate_ws(web_server_t *srv, const char *uri,
+                               const web_ws_callbacks_t *callbacks, void *context) {
+    if ((srv == NULL) || (uri == NULL) || (callbacks == NULL) ||
+        (callbacks->handler == NULL)) return 0;
+
+    web_route_t *route = route_reserved(srv, WEB_ROUTE_WS, uri);
+    if ((route == NULL) || (route->handler != NULL)) {
+        ESP_LOGE(TAG, "URI '%s' не закреплён за интерфейсом %lu или уже активирован",
+                 uri, (unsigned long)srv->iface);
+        return 0;
+    }
+
+    /* Колбэки и контекст экземпляра — в запись пути: с ними веб-сервер зовёт
+     * обработчик, и по контексту тот узнаёт свой транспорт. */
+    route->handler                   = callbacks->handler;
+    route->post_handshake            = callbacks->post_handshake;
+    route->handle_ws_control_frames  = callbacks->handle_control_frames;
+    route->user_ctx                  = context;
+
+    /* Отказ публикации — это отказ активации: точка снова становится заявкой, а
+     * о причине скажет тот, кто её активировал (транспорт). */
+    if (!route_publish(srv, route)) {
+        route->handler  = NULL;
+        route->user_ctx = NULL;
+        return 0;
+    }
+
+    ESP_LOGI(TAG, "WebSocket-точка '%s' активна на интерфейсе %lu", uri,
+             (unsigned long)srv->iface);
+    return 1;
+}
+
+/* ── Поиск маршрута по пути запроса ──────────────────────────────────────────
+ *
+ * httpd выбирает обработчик по своей таблице, а она одна на порт: путь мог
+ * зарегистрировать объект ДРУГОГО интерфейса. Так устроена вшитая страница
+ * конфигурации — её маршрут есть только у точки доступа, а в таблице порта 80 он
+ * один на всех. Поэтому объект, не найдя у себя шаблон, которым httpd выбрал
+ * запрос, ищет по СВОЕЙ таблице и уже по пути запроса, в порядке регистрации —
+ * как это делает httpd. Общий обработчик файлов (шаблон «звёздочка») есть у
+ * каждого объекта, поэтому запрос с интерфейса, которому путь не оказан,
+ * означает обычный путь файловой системы. */
+static web_route_t *route_find_request(web_server_t *srv, web_route_kind_t kind,
+                                       const char *path, httpd_method_t method) {
+    if ((path == NULL) || (path[0] != '/')) return NULL;
+
+    for (uint16_t i = 0; i < srv->route_count; i++) {
+        web_route_t *route = &srv->routes[i];
+        if (route->kind != kind) continue;
+        if (route->handler == NULL) continue;
+        if (route->uri == NULL) continue;
+        if ((kind != WEB_ROUTE_WS) && (route->method != method)) continue;
+        if (web_iface_path_matches(route->uri, path)) return route;
+    }
+    return NULL;
+}
+
+/* ── Диспетчеризация запроса ──────────────────────────────────────────────── */
+
+/* Вызвать обработчик маршрута с контекстом, с которым его регистрировали: в
+ * req->user_ctx на время вызова лежит то, что положил сокетный слой. Возвращаем
+ * исходное значение — httpd заполняет поле заново на каждый запрос. */
+static esp_err_t route_call(web_route_t *route, httpd_req_t *req) {
+    if ((route == NULL) || (req == NULL)) return ESP_FAIL;
+
+    void *dispatch_ctx = req->user_ctx;
+    req->user_ctx = route->user_ctx;
+    const esp_err_t err = route->handler(req);
+    req->user_ctx = dispatch_ctx;
+    return err;
+}
+
+esp_err_t web_server_handle(web_server_t *srv, web_route_kind_t kind,
+                            const char *uri, httpd_req_t *req) {
+    if ((srv == NULL) || (req == NULL)) return ESP_FAIL;
+
+    web_route_t *route = route_find(srv, kind, uri, req->method);
+    /* Шаблон, которым httpd выбрал запрос, мог принадлежать другому объекту:
+     * тогда решает своя таблица, по пути запроса (см. route_find_request). */
+    if (route == NULL) {
+        route = route_find_request(srv, kind, req->uri, req->method);
+        if (route != NULL)
+            ESP_LOGD(TAG, "URI '%s' найден по таблице интерфейса %lu, а не по '%s'",
+                     req->uri, (unsigned long)srv->iface, uri);
+    }
+    if (route == NULL) {
+        ESP_LOGW(TAG, "URI '%s' не оказан интерфейсу %lu — 404", uri,
+                 (unsigned long)srv->iface);
+        return httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Not found");
+    }
+
+    if (!web_iface_mask_allows(route->iface_mask, srv->iface)) {
+        ESP_LOGW(TAG, "URI '%s' не обслуживается на интерфейсе %lu (маска 0x%08lx) — 404",
+                 uri, (unsigned long)srv->iface, (unsigned long)route->iface_mask);
+        return httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Not found");
+    }
+
+    return route_call(route, req);
+}
+
+esp_err_t web_server_handshake(web_server_t *srv, web_route_kind_t kind,
+                               const char *uri, httpd_req_t *req) {
+    if ((srv == NULL) || (uri == NULL) || (req == NULL)) return ESP_FAIL;
+
+    web_route_t *route = route_find(srv, kind, uri, HTTP_GET);
+    if ((route == NULL) || (route->post_handshake == NULL)) {
+        ESP_LOGW(TAG, "Рукопожатие '%s' не оказано интерфейсу %lu", uri,
+                 (unsigned long)srv->iface);
+        return ESP_FAIL;
+    }
+    /* Ответ рукопожатия httpd уже отправил, поэтому отказать «страницей» нельзя —
+     * только закрыть соединение. */
+    if (!web_iface_mask_allows(route->iface_mask, srv->iface)) return ESP_FAIL;
+
+    void *dispatch_ctx = req->user_ctx;
+    req->user_ctx = route->user_ctx;
+    const esp_err_t err = route->post_handshake(req);
+    req->user_ctx = dispatch_ctx;
+    return err;
+}
+
+/* ── Учёт сессий ──────────────────────────────────────────────────────────── */
+
+uint8_t web_server_session_open(web_server_t *srv, int fd) {
+    if ((srv == NULL) || (fd <= 0)) return 0;
+    for (uint16_t i = 0; i < srv->session_count; i++)      /* уже учтено */
+        if (srv->sessions[i] == fd) return 1;
+    if (srv->session_count >= WEB_SERVER_SESSIONS_MAX) return 0;
+
+    srv->sessions[srv->session_count++] = fd;
+    ESP_LOGD(TAG, "Сессия интерфейса %lu: fd=%d (открыто %u)", (unsigned long)srv->iface,
+             fd, (unsigned)srv->session_count);
+    return 1;
+}
+
+void web_server_session_release(web_server_t *srv, int fd) {
+    if ((srv == NULL) || (fd <= 0)) return;
+    for (uint16_t i = 0; i < srv->session_count; i++) {
+        if (srv->sessions[i] != fd) continue;
+        srv->session_count--;
+        srv->sessions[i] = srv->sessions[srv->session_count];
+        srv->sessions[srv->session_count] = 0;
+        ESP_LOGD(TAG, "Сессия интерфейса %lu: fd=%d закрыта (осталось %u)",
+                 (unsigned long)srv->iface, fd, (unsigned)srv->session_count);
+        return;
+    }
+}
+
+uint16_t web_server_session_count(const web_server_t *srv) {
+    return (srv != NULL) ? srv->session_count : 0;
+}
+
+uint8_t web_server_session_close(web_server_t *srv, int fd) {
+    if ((srv == NULL) || (fd <= 0)) return 0;
+    uint8_t closed = 0;
+    for (uint32_t kind = 0; kind < WEB_ROUTE_KINDS; kind++)
+        closed |= web_httpd_kick(srv->ports[kind], fd);
+    return closed;
+}
+
+esp_err_t web_server_send_ws(web_server_t *srv, int fd, httpd_ws_frame_t *frame,
+                             transfer_complete_cb done, void *arg) {
+    if ((srv == NULL) || (srv->ports[WEB_ROUTE_WS] == NULL))
+        return ESP_ERR_INVALID_STATE;
+    return web_httpd_send_ws(srv->ports[WEB_ROUTE_WS], fd, frame, done, arg);
+}
+
+/* ── Подъём и гашение ─────────────────────────────────────────────────────── */
+
+web_server_t *web_server_open(uint32_t iface) {
+    if ((iface == GW_IFACE_NONE) || (iface > GW_IFACE_LAST)) return NULL;
+
+    web_server_t *srv = calloc(1, sizeof(web_server_t));
+    if (srv == NULL) return NULL;
+    srv->iface = iface;
+
+    /* Объект приходит к каждому поднятому порту сам: порт не разыскивает
+     * объекты, а помнит, чей он, — иначе появился бы скрытый реестр серверов. */
+    for (uint32_t kind = 0; kind < WEB_ROUTE_KINDS; kind++) {
+        web_httpd_t *port = web_httpd_port((web_route_kind_t)kind);
+        if (port == NULL) {
+            ESP_LOGW(TAG, "Порт назначения %lu не поднят: интерфейс %lu его не получит",
+                     (unsigned long)kind, (unsigned long)iface);
+            continue;
+        }
+        if (!web_httpd_attach(port, srv)) {
+            for (uint32_t prev = 0; prev < kind; prev++)
+                if (srv->ports[prev] != NULL) web_httpd_detach(srv->ports[prev], srv);
+            free(srv);
+            return NULL;
+        }
+        srv->ports[kind] = port;
+    }
+
+    ESP_LOGI(TAG, "Веб-сервер интерфейса %lu поднят", (unsigned long)iface);
+    return srv;
+}
+
+void web_server_close(web_server_t *srv) {
+    if (srv == NULL) return;
+
+    /* Сначала отвязываемся: соединения интерфейса перестают попадать в объект, а
+     * записи портов перестают ссылаться на его память. Открытые сессии остаются
+     * за сокетным слоем — он их и закрывает; сервер живёт до перезагрузки, так
+     * что закрывать его вместе с соединениями не требуется. */
+    for (uint32_t kind = 0; kind < WEB_ROUTE_KINDS; kind++)
+        if (srv->ports[kind] != NULL) web_httpd_detach(srv->ports[kind], srv);
+
+    while (srv->route_count > 0)
+        route_drop(srv, &srv->routes[0]);
+
+    /* Транспорты породил этот объект — он же их и освобождает: их контекст
+     * ссылается на объект (через него они работают с соединениями), и после
+     * free(srv) этой ссылке жить негде. */
+    for (uint8_t i = 0; i < srv->transport_count; i++)
+        ws_transport_destroy(srv->transports[i]);
+    srv->transport_count = 0;
+
+    ESP_LOGI(TAG, "Веб-сервер интерфейса %lu погашен", (unsigned long)srv->iface);
+    free(srv);
 }

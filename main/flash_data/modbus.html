@@ -404,7 +404,7 @@ const PORT_FID = {
 /* ── WebSocket к шлюзу ───────────────────────────────────────────────────── */
 
 function wsConnect() {
-    ws = new WebSocket(`ws://${location.hostname}:${WS_PORT}/ws`);
+    ws = new WebSocket(`ws://${location.hostname}:${WS_PORT}/api`);
     ws.onopen = () => {
         setWs(true);
         /* Карту перечитываем только когда её ещё нет: на неровной связи

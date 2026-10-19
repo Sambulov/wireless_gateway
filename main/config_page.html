@@ -437,7 +437,8 @@ const FID = { STA:'wifi.sta', AP:'wifi.ap', INFO:'sys.info', REBOOT:'sys.reboot'
               FILES:'sys.files', NET:'sys.net', MAC:'wifi.mac', SCAN:'wifi.scan',
               FILE_WRITE:'sys.file.write', FILE_DELETE:'sys.file.delete',
               FILE_RENAME:'sys.file.rename', FILE_MKDIR:'sys.file.mkdir',
-              FILE_RMDIR:'sys.file.rmdir' };
+              FILE_RMDIR:'sys.file.rmdir', FW_BEGIN:'sys.fw.begin',
+              FW_WRITE:'sys.fw.write', FW_END:'sys.fw.end', FW_ABORT:'sys.fw.abort' };
 const MAX_UPLOAD = 500 * 1024;
 /* Сколько данных уходит в одной порции: 6 КБ — это 8 КБ base64, и запрос вместе
  * с путём и обёрткой влезает в предел сообщения транспорта (16 КБ). */
@@ -474,8 +475,12 @@ const ERROR_TEXT = {
     FROM: 'Исходный файл не найден',
     TO: 'Недопустимое новое имя',
     OFFSET: 'Порядок порций нарушен — загрузка не завершена',
-    DATA: 'Порция файла повреждена при передаче',
+    DATA: 'Порция данных повреждена при передаче — передайте файл заново',
     SIZE: 'Файл больше 500 КБ',
+    SESSION: 'Заливка прошивки не идёт — начните передачу заново',
+    SEQ: 'Порядок порций прошивки нарушен — передайте файл заново',
+    MD5: 'Контрольная сумма образа не совпала — передайте файл заново',
+    IMAGE: 'Это не прошивка для этого прибора',
     EXIST: 'Такое имя уже занято',
     NOTEMPTY: 'Каталог не пуст — возможно, внутри скрытый файл «.имя.part» от оборванной загрузки',
     IF: 'Непонятно, для какого интерфейса адрес',
@@ -559,7 +564,7 @@ function updateHeaderMac() {
 
 function connect() {
     setWsStatus('wait');
-    ws = new WebSocket(`ws://${location.hostname}:${WS_PORT}/ws`);
+    ws = new WebSocket(`ws://${location.hostname}:${WS_PORT}/api`);
     ws.onopen = () => { setWsStatus('ok'); refreshAll(); };
     ws.onclose = () => {
         setWsStatus('err');
@@ -883,6 +888,21 @@ function applyAccess() {
             ? (b.title.split('. Недоступно')[0] || '')
             : 'Недоступно: менять настройки можно только с точки доступа при ровно одном клиенте';
         b.setAttribute('aria-label', b.title);
+    }
+    /* Прошивка — только администратору точки доступа. Так же решает и прибор:
+     * служба sys.fw.* зарегистрирована только на AP-ядре и принимает порции,
+     * пока на точке доступа ровно один клиент (apih_fw.c). Кнопка, которая
+     * заведомо получит отказ, доступной выглядеть не должна. Пока идёт передача,
+     * кнопка — «Отмена»: её вид и подсказку держит setFwBusy, трогать их нельзя.
+     * Перезагрузку это НЕ касается: она доступна с любого интерфейса
+     * (sys.reboot), её кнопка остаётся всегда. */
+    const fwUpload = $('fw-upload');
+    if (fwUpload && !fwBusy) {
+        fwUpload.disabled = !canConfigure;
+        fwUpload.title = canConfigure
+            ? (fwUpload.title.split('. Недоступно')[0] || '')
+            : 'Недоступно: прошивку можно обновить только с точки доступа при ровно одном клиенте';
+        fwUpload.setAttribute('aria-label', fwUpload.title);
     }
     /* То же для полей: пользователь видит, почему не может их править. */
     for (const id of ['sta-ssid', 'sta-pass', 'ap-ssid', 'ap-pass',
@@ -1266,9 +1286,38 @@ function renderNet(n) {
 
 /* ── firmware update ───────────────────────────────────────────────────── */
 
-/* Как и загрузка файла: кнопка открывает выбор, а выбранный образ сразу
- * уходит на устройство (с подтверждением). */
-$('fw-upload').onclick = () => $('fw-file').click();
+/* Прошивка идёт службой sys.fw.* (apih_fw.c) по WebSocket — так же, как файловый
+ * менеджер: begin называет размер образа, write приносит порции по 8 КБ (base64),
+ * end проверяет образ и перезагружает прибор в него. Кнопка открывает выбор
+ * файла; пока идёт передача, она же становится «Отменой» и просит службу забыть
+ * заливку (sys.fw.abort) — тогда OTA-раздел освобождается сразу, а не по сроку
+ * на приборе. */
+const FW_CHUNK = 8 * 1024;   /* срез файла на порцию: 8 КБ — это ~11 КБ base64 */
+let fwBusy = false;          /* идёт передача: кнопка прошивки — «Отмена» */
+let fwCancel = false;        /* пользователь нажал «Отмену» */
+
+const FW_BUTTON_TEXT = 'Обновить прошивку';
+const FW_BUTTON_HINT = 'Обновить прошивку: выбрать файл .bin и сразу залить. Прошивка '
+    + 'пишется во второй раздел и включается перезагрузкой; при ошибке проверки '
+    + 'образа остаётся рабочей прежняя.';
+
+function setFwBusy(on) {
+    fwBusy = on;
+    const btn = $('fw-upload');
+    btn.textContent = on ? 'Отмена' : FW_BUTTON_TEXT;
+    btn.title = on
+        ? 'Прервать передачу прошивки: прибор забудет принятые порции, прежняя прошивка останется рабочей'
+        : FW_BUTTON_HINT;
+    btn.setAttribute('aria-label', btn.title);
+}
+
+$('fw-upload').onclick = () => {
+    if (!fwBusy) { $('fw-file').click(); return; }
+    fwCancel = true;
+    send(FID.FW_ABORT, {}, () => {});
+    msg('fw-msg', 'Передача отменена…', 'warn');
+};
+
 $('fw-file').onchange = async () => {
     const file = $('fw-file').files[0];
     if (!file) return;
@@ -1278,40 +1327,90 @@ $('fw-file').onchange = async () => {
             + 'раздел и перезагрузится в него.',
         ok: 'Прошить', danger: true,
     });
-    if (!ok) return;
+    if (!ok) { $('fw-file').value = ''; return; }
+    await uploadFirmware(file);
+};
 
-    const xhr = new XMLHttpRequest();
-    xhr.open('POST', '/update', true);
-    xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+/* Порция за порцией: следующую можно слать только после ответа на предыдущую —
+ * прибор сверяет SEQ и без этого записал бы образ со сдвигом. Прогресс считается
+ * по WRITTEN из ответа прибора, а не по тому, что страница отправила. */
+async function uploadFirmware(file) {
     const bar = $('fw-progress');
     bar.style.display = 'block';
     bar.value = 0;
-    msg('fw-msg', 'Передаём прошивку…', 'warn');
+    fwCancel = false;
+    msg('fw-msg', `Передаём ${file.name} (${fmtBytes(file.size)})…`, 'warn');
+    /* Пока идёт передача, страница не переподключается: обрыв WebSocket здесь —
+     * ошибка передачи, а не перезагрузка прибора. */
     rebootPending = true;
 
-    xhr.upload.onprogress = e => {
-        if (!e.lengthComputable) return;
-        bar.value = e.loaded / e.total * 100;
-        if (e.loaded >= e.total) msg('fw-msg', 'Файл передан, устройство проверяет образ…', 'warn');
-    };
-    xhr.onload = () => {
-        bar.style.display = 'none';
-        if (xhr.status === 200) {
-            msg('fw-msg', 'Прошивка принята, устройство перезагружается в неё. '
-                        + 'Связь восстановится через ~15 секунд.', 'ok');
-            setTimeout(() => { rebootPending = false; connect(); setTimeout(refreshAll, 3000); }, 15000);
-        } else {
-            rebootPending = false;
-            msg('fw-msg', `Ошибка ${xhr.status}: ${xhr.responseText}`, 'err');
-        }
-    };
-    xhr.onerror = () => {
+    const fail = text => {
+        msg('fw-msg', text, 'err');
         bar.style.display = 'none';
         rebootPending = false;
-        msg('fw-msg', 'Сбой передачи. Проверьте, что файл — прошивка от этого проекта.', 'err');
+        setFwBusy(false);
+        $('fw-file').value = '';
     };
-    xhr.send(file);
-};
+
+    const begin = await request(FID.FW_BEGIN, { SIZE: file.size }, 20000);
+    if (begin.sta !== 0) {
+        fail(`Прошивка не принята: ${describe(begin.resp, begin.sta)}. Прежняя прошивка не тронута.`);
+        return;
+    }
+    setFwBusy(true);
+
+    let seq = 1;         /* первая порция — номер 1, дальше строго по порядку */
+    let written = 0;
+    try {
+        while (written < file.size) {
+            if (fwCancel) {
+                fail('Передача отменена — прежняя прошивка не тронута.');
+                return;
+            }
+            const end = Math.min(written + FW_CHUNK, file.size);
+            const chunk = await readSlice(file, written, end);
+            const { resp, sta } = await request(FID.FW_WRITE,
+                { SEQ: seq, DATA: toBase64(chunk) }, 20000);
+            if (sta !== 0) {
+                send(FID.FW_ABORT, {}, () => {});
+                if (fwCancel) {
+                    fail('Передача отменена — прежняя прошивка не тронута.');
+                    return;
+                }
+                fail(`Передача прервана: ${describe(resp, sta)}. Прежняя прошивка не тронута.`);
+                return;
+            }
+            const accepted = (resp && typeof resp.WRITTEN === 'number') ? resp.WRITTEN : end;
+            written = (accepted > end) ? end : accepted;
+            seq++;
+            bar.value = file.size ? Math.min(100, written / file.size * 100) : 100;
+        }
+    } catch (e) {
+        send(FID.FW_ABORT, {}, () => {});
+        fail(`Передача прервана: ${e}. Прежняя прошивка не тронута.`);
+        return;
+    }
+
+    msg('fw-msg', 'Образ передан, устройство проверяет его и перезагружается…', 'warn');
+    const done = await request(FID.FW_END, {}, 30000);
+    if (done.sta !== 0 || !(done.resp && done.resp.REBOOT)) {
+        send(FID.FW_ABORT, {}, () => {});
+        fail(`Прошивка не принята: ${describe(done.resp, done.sta)}. Прежняя прошивка не тронута.`);
+        return;
+    }
+    bar.style.display = 'none';
+    fwCancel = false;
+    setFwBusy(false);
+    $('fw-file').value = '';
+    msg('fw-msg', 'Прошивка принята, устройство перезагружается в неё. '
+        + 'Связь восстановится через ~15 секунд.', 'ok');
+    /* Переподключение — только после перезагрузки: раньше прибор ещё не поднялся. */
+    setTimeout(() => {
+        rebootPending = false;
+        connect();
+        setTimeout(refreshAll, 3000);
+    }, 15000);
+}
 
 /* ── files ──────────────────────────────────────────────────────────────── */
 
@@ -1562,12 +1661,7 @@ $('dl-btn').onclick = async () => {
 /* ── передача файла порциями ────────────────────────────────────────────── */
 
 function readSlice(file, start, end) {
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result);
-        reader.onerror = () => reject(reader.error || new Error('файл не прочитан'));
-        reader.readAsArrayBuffer(file.slice(start, end));
-    });
+    return file.slice(start, end).arrayBuffer();
 }
 
 /* Двоичные данные → base64: btoa принимает «строку байт», поэтому переводим

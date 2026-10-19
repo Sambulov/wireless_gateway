@@ -8,8 +8,8 @@
 
 /* Токенов на разбор ARG UART: WL/BR/PAR/SB/MODE (или E) — с большим запасом. */
 #define UART_ARG_MAX_TOKENS 16
-#include "web_api.h"
-#include "ws_hal.h"
+#include "api.h"
+#include "platform.h"
 #include "uart_rxbuf.h"
 
 typedef struct {
@@ -27,20 +27,67 @@ typedef struct {
             wl       : 2,
             par      : 2,
             sb       : 2,
-            /* Режимов три (обычный UART, RS-485, однопроводный) — одного бита
-             * на них уже не хватало: значение 2 превращалось в 0. */
+            /* Режимов три (обычный UART, RS-485, однопроводный), поэтому под
+             * них два бита: на одном бите значение 2 превращалось бы в 0. */
             mode     : 2,
             /* Порог простоя линии, знаков (1..255) */
             idle     : 8;
     uint32_t boud;
 } api_cmd_uart_t;
 
-ws_queue_t cmd_queue;
+/* Ядра API, чьи подписчики получают кадры порта. Сервис UART зарегистрирован на
+ * ОБОИХ ядрах (точка доступа и станция), поэтому кадр приёма и смена настроек
+ * рассылаются по имени FID на каждом из них — публичным вызовом рассылки
+ * (api_broadcast), а ядра для этого сервис хранит сам. Ответ на запрос уходит
+ * тому вызову, который его принёс, — по дескриптору вызова. */
+#define UART_API_MAX 2
+static api_t *uart_apis[UART_API_MAX];
+static uint8_t uart_api_num;
 
-ws_queue_t get_uart_worker_queue(void)
+static void uart_apis_set(api_t *first, api_t *second)
 {
-	return cmd_queue;
+	uart_api_num = 0;
+	uart_apis[uart_api_num++] = first;
+	if (second != NULL)
+		uart_apis[uart_api_num++] = second;
 }
+
+/* ── Обработчики FID ────────────────────────────────────────────────────────
+ *
+ * Запрос сервису ядро доставляет ВЫЗОВОМ ОБРАБОТЧИКА (очередей у ядра больше
+ * нет): обработчик либо отвечает сразу и возвращает FALSE, либо возвращает TRUE
+ * и получает вызов заново на следующем такте. Своей задачи у сервиса нет:
+ * такт ему даёт задача приложения, которая крутит api_worker.
+ *
+ * Действие известно по РЕГИСТРАЦИИ, а не по разбору имени: обработчик получает
+ * контекст регистрации, а в нём — порт, действие и имя FID (имя нужно для
+ * рассылки, у вызова его не спросить: ядро имени не выдаёт, ответ и так уходит
+ * с тем же FID, что прислал клиент). */
+typedef enum {
+	UART_ACT_CNF = 0,
+	UART_ACT_RX,
+	UART_ACT_TX,
+	UART_ACT_ECHO,
+	UART_ACT_COUNT
+} uart_act_t;
+
+typedef struct {
+	app_context_t *app;
+	const char    *fid;   /* имя FID этой регистрации (строковый литерал app.h) */
+	uint8_t        port;  /* 0 — "uart1.*", 1 — "uart2.*" */
+	uint8_t        act;   /* uart_act_t */
+} uart_handler_ctx_t;
+
+/* По контексту на каждую пару «порт × действие». Контексты общие для обоих ядер:
+ * обработчик их только читает, а состояние порта (кольцо приёма) и так общее. */
+static uart_handler_ctx_t uart_handler_ctx[2][UART_ACT_COUNT];
+
+/* Замок СБОРКИ КАДРА — один на оба порта: буферы base64, снимок куска и буфер
+ * кадра статические и общие. Собирать кадр могут две задачи: задача приложения
+ * (обработчик FID в такте ядра) и задача событий UART (приём пришёл сам).
+ * Прядок захвата везде один — сначала этот замок, потом замок порта, — поэтому
+ * двойного захвата в обратном порядке не бывает. */
+static platform_mutex_t uart_frame_lock;
 
 typedef struct {
     /* Кольцо приёма: куски [метка][данные] с границами передач (см. uart_rxbuf.h).
@@ -48,16 +95,11 @@ typedef struct {
     gw_uart_rxbuf_t rxbuf;
     uint8_t *storage;
     uint16_t storage_size;
-    ws_mutex_t lock;
-    /* Принятое уходит клиенту СРАЗУ по приходу, а не по опросу подписки: флаг
-     * говорит, что кадр уже заказан, чтобы не будить задачу на те же байты
-     * второй раз (иначе поток данных порождал бы по сообщению на байт). */
-    volatile uint8_t pending;
-    char fid[API_FID_NAME_MAX];
+    platform_mutex_t lock;
+    uint8_t port;               /* 0 — "uart1", 1 — "uart2" */
+    /* Ядро — не здесь, а в uart_apis: сервис зарегистрирован на обоих ядрах, и
+     * кадр приёма рассылается подписчикам каждого из них. */
 } uart_subscription_context_t;
-
-
-#define UART_API_SEND_DELAY   20
 
 /* ── Темп кадров приёма ──────────────────────────────────────────────────────
  *
@@ -73,28 +115,21 @@ typedef struct {
 #define UART_RX_ACC_SIZE      4096
 #define UART_B64_MAX          (4 * ((UART_RX_ACC_SIZE + 2) / 3))
 
-/* Заказать задаче кадр: неблокирующая посылка в очередь. Делегат зовётся из
- * задачи событий UART, поэтому отправлять данные оттуда нельзя — только будить. */
-static void uart_rx_wake(uart_subscription_context_t *ctx) {
-    if (ctx->pending)
-        return;
-    webapi_msg_t *wake = calloc(1, sizeof(webapi_msg_t));
-    if (!wake)
-        return;
-    bApiFidSet(wake->fid, ctx->fid);
-    wake->id = 0;                  /* 0 — рассылка подписчикам FID */
-    wake->fd = -1;                 /* сообщение периферии, не клиента */
-    ctx->pending = 1;
-    if (!ws_hal_queue_send(get_uart_worker_queue(), &wake, WS_HAL_WAIT_NONE)) {
-        ctx->pending = 0;
-        free(wake);
-    }
-}
+/* Кадр приёма собирает и отдаёт подписчикам САМА задача приёма порта: это
+ * внутреннее дело сервиса, и ядру для этого ничего не нужно — рассылка
+ * api_broadcast публичная. Такт ядра тоже может собрать кадр (клиент
+ * спросил порт вызовом), поэтому сборка защищена замком сборки — см. uart_rx_flush.
+ *
+ * Возврат: TRUE — вызов надо повторить (темп кадров ещё не вышел), FALSE —
+ * отдавать больше нечего. */
+static uint8_t uart_rx_flush(uart_handler_ctx_t *hc);
 
 static void uart_event_on_rx(void *event_trigger, void *sender, void *context) {
     (void)sender;
     uart_subscription_context_t *buf_desc = (uart_subscription_context_t *)context;
     gw_uart_event_data_t *data = (gw_uart_event_data_t *)event_trigger;
+    if (!buf_desc || !data || !data->buf || !data->size)
+        return;
 
     /* Кусок кладём в кольцо вместе с признаком «линия замолчала» — по нему
      * читатель видит конец передачи. Признак и границы передач пишутся здесь,
@@ -102,23 +137,24 @@ static void uart_event_on_rx(void *event_trigger, void *sender, void *context) {
      * кусков в одно сообщение и ничего при этом не склеивает. */
     size_t sz = data->size;
     if (sz > 0xFFFF) sz = 0xFFFF;
-    ws_hal_mutex_take(buf_desc->lock, WS_HAL_WAIT_FOREVER);
-    uint16_t taken = gw_uart_rxbuf_push(&buf_desc->rxbuf, data->buf, (uint16_t)sz,
-                                        data->b_end ? 1 : 0);
-    ws_hal_mutex_give(buf_desc->lock);
+    uint16_t taken;
+    platform_mutex_take(uart_frame_lock, PLATFORM_WAIT_FOREVER);
+    platform_mutex_take(buf_desc->lock, PLATFORM_WAIT_FOREVER);
+    taken = gw_uart_rxbuf_push(&buf_desc->rxbuf, data->buf, (uint16_t)sz,
+                               data->b_end ? 1 : 0);
+    platform_mutex_give(buf_desc->lock);
+    /* Кадр уходит сразу, не дожидаясь опроса подписки: иначе вывод упирался бы
+     * в период переспроса (страница просит 50 мс). Ожиданий здесь нет: если темп
+     * кадров ещё не вышел, данные останутся в кольце до следующего куска или
+     * опроса. */
+    (void)uart_rx_flush(&uart_handler_ctx[buf_desc->port][UART_ACT_RX]);
+    platform_mutex_give(uart_frame_lock);
 
     /* Потеря приёма — не молчаливая: о ней должно быть видно в логе, иначе
      * «терминал иногда теряет вывод» выглядит как загадка. */
     if(taken < sz)
-        ws_hal_log_w(TAG, "UART rx: кольцо полно, потеряно %u байт\n",
+        platform_log_w(TAG, "UART rx: кольцо полно, потеряно %u байт\n",
                      (unsigned)(sz - taken));
-
-    /* Будим задачу: она отправит принятое кадром сразу, не дожидаясь опроса
-     * подписки. Раньше данные лежали в накопителе до следующего опроса, и
-     * задержка вывода упиралась в период переспроса (страница просила 50 мс).
-     * Делегат зовётся из задачи событий UART, поэтому здесь только неблокирующая
-     * посылка в очередь — без ожиданий и без отправки из чужой задачи. */
-    uart_rx_wake(buf_desc);
 }
 
 
@@ -135,10 +171,13 @@ static char uart_resp_buf[UART_RESP_MAX];
  * Буферы СТАТИЧЕСКИЕ, а не на стеке задачи: принятого бывает до 4 КБ, то есть
  * base64 — больше 5 КБ, и такой буфер на стеке (4 КБ) ронял задачу. */
 #define UART_RAW_OVERHEAD 64
+/* Запас +4 — под разделитель '#' и '\0': кусок в кадр идёт только целиком, и
+ * самое большое содержимое кольца обязано влезть в ОДИН кадр, иначе данные
+ * застряли бы в накопителе навсегда. */
 static char uart_raw_buf[UART_B64_MAX + UART_RAW_OVERHEAD];
-static char uart_b64_buf[UART_B64_MAX + 1];
-/* Кусок, забранный из кольца: копируем под замком, кодируем уже без него —
- * делегат приёма (из задачи событий UART) ждать base64 не должен. */
+static char uart_b64_buf[UART_B64_MAX + 4];
+/* Кусок, забранный из кольца: копируем под замком порта, кодируем уже без него —
+ * приём (задача событий UART) ждать base64 не должен. */
 static uint8_t uart_rx_snapshot[UART_RX_ACC_SIZE];
 
 static void format_uart_resp(gw_jsonw_t *w, const gw_uart_config_t *cnf)
@@ -170,6 +209,7 @@ static delegate_t uart2_delegate;
  * чтение незачем. */
 static gw_uart_config_t uart_config(struct app_uart_t *uart, void *new_cfg, size_t new_cfg_len)
 {
+    (void)new_cfg_len;
     api_cmd_uart_t *cfg = (api_cmd_uart_t *)new_cfg;
     gw_uart_config_t gw_cfg = {0};
 
@@ -195,42 +235,59 @@ static gw_uart_config_t uart_config(struct app_uart_t *uart, void *new_cfg, size
     return gw_cfg;
 }
 
-/* w == NULL — отвечать нечем (пустой опрос RAW_RX): уходит пустой ответ, как и
- * раньше, когда дерева не было вовсе. */
-static void send_uart_response(int id, const char *fid, gw_jsonw_t *w)
+/* ── Ответы ─────────────────────────────────────────────────────────────────
+ *
+ * Ответ на ЗАПРОС уходит тому вызову, который его принёс: api_reply сам
+ * оборачивает данные в конверт {"FID":<то же имя>,"SID":<SID клиента>} и
+ * отправляет в соединение этого вызова (ядро берётся из самого вызова). Ждать
+ * ничего не надо — отправка ставится в очередь транспорта.
+ *
+ * РАССЫЛКА (кадр приёма порта, смена настроек) адресована не вызову, а всем
+ * подписчикам имени, и у каждого ядра свои. Это публичный вызов ядра
+ * api_broadcast: он находит подписчиков ЭТОГО ядра и отправляет им
+ * ОДИН общий буфер — копии на каждого не собираются. Ядро сервис передаёт сам
+ * (см. uart_apis): рассылающего обработчика ядро не знает.
+ *
+ * Оба пути неблокирующие: обработчик, вызванный тактом ядра, не имеет права
+ * ждать, а рассылка из задачи приёма UART — тем более. */
+
+/* Собранный JSON — вызову (call != NULL) или рассылкой (call == NULL: по всем
+ * ядрам сервиса). */
+static void uart_send_to(void *call, const char *fid, gw_jsonw_t *w)
 {
-	/* Peripheral-originated answer: no client socket of its own */
-	webapi_msg_t msg = { .fd = -1 };
+	const char *json = NULL;
+	size_t      len  = 0;
 
 	if (w) {
 		uint8_t room = gw_jsonw_ok(w);
-		size_t  len  = gw_jsonw_finish(w);
-		if (room && len) {
-			/* +1 и ноль на конце — как было у прежнего сборщика */
-			msg.data = malloc(len + 1);
-			if (msg.data) {
-				mem_cpy(msg.data, w->buf, len);
-				msg.data[len] = '\0';
-				msg.len = len;
-			}
+		size_t  done = gw_jsonw_finish(w);
+		if (room && done) {
+			json = w->buf;
+			len  = done;
 		}
 	}
+	if (!json || !len)
+		return;                 /* отвечать нечем — и кадра нет */
 
-	msg.id  = id;
-	bApiFidSet(msg.fid, fid);
-	ws_hal_queue_send(get_ws_worker_queue(), &msg, WS_HAL_WAIT_NONE);
+	if (call != NULL) {
+		api_reply(call, (const uint8_t *)json, len);
+		return;
+	}
+	for (uint8_t i = 0; i < uart_api_num; i++)
+		api_broadcast(uart_apis[i], fid, (const uint8_t *)json, len);
 }
 
 /* Отвечает тем, что стоит на порту сейчас. Нужен там, где применять нечего:
  * вызов без ARG — это чтение, а неразобранный ARG применять нельзя. */
-static void send_uart_state(int id, const char *fid, struct app_uart_t *app_uart)
+static void send_uart_state(void *call, const char *fid,
+			    struct app_uart_t *app_uart)
 {
 	gw_uart_config_t cur = {0};
 	gw_jsonw_t w;
 
 	gw_uart_get(&app_uart->desc, &cur);
 	format_uart_resp(&w, &cur);
-	send_uart_response(id, fid, &w);
+	uart_send_to(call, fid, &w);
 }
 
 static uint8_t parse_uart_params(const uint8_t *data, size_t len,
@@ -246,8 +303,9 @@ static uint8_t parse_uart_params(const uint8_t *data, size_t len,
 	cmd->wl_set = gw_json_int(&json, "WL", &val);
 	if (cmd->wl_set) {
 		/* Принимаем и число бит (7/8), и значение перечисления (0/1):
-		 * в структуре поле всего двухбитное, поэтому 8 превращалось в 0
-		 * и устройство молча переключалось на 7 бит данных. */
+		 * поле в структуре двухбитное, поэтому 8 надо перевести в
+		 * перечисление, иначе оно превратится в 0 и порт молча
+		 * переключится на 7 бит данных. */
 		if (val == 7 || val == 0)
 			cmd->wl = GW_UART_WORD_7BIT;
 		else if (val == 8 || val == 1)
@@ -258,9 +316,9 @@ static uint8_t parse_uart_params(const uint8_t *data, size_t len,
 	cmd->boud_set = gw_json_int(&json, "BR", &val);
 	if (cmd->boud_set) {
 		/* Скорость вне диапазона драйвер не примет — отвергаем сразу, чтобы не
-		 * отвечать «применено», когда на порту осталось прежнее значение. */
+		 * отвечать «применено», когда на порту значение не изменилось. */
 		if (val < 50 || (uint32_t)val > UART_MAX_SPEED) {
-			ws_hal_log_i(TAG, "UART boud %d out of range, ignored\n", (int)val);
+			platform_log_i(TAG, "UART boud %d out of range, ignored\n", (int)val);
 			cmd->boud_set = 0;
 		} else {
 			cmd->boud = val;
@@ -296,126 +354,57 @@ static uint8_t parse_uart_params(const uint8_t *data, size_t len,
 	return 1;
 }
 
-/* Порт из имени FID: "uart1.*" → 0, "uart2.*" → 1, иначе -1. Разбор строгий —
- * ровно "uart" + одна цифра + точка, чтобы "uart12.rx" не попал в первый порт. */
-static int uart_fid_port(const char *fid)
-{
-	if (!fid || strncmp(fid, "uart", 4) != 0)
-		return -1;
-	if (fid[4] != '1' && fid[4] != '2')
-		return -1;
-	if (fid[5] != '.')
-		return -1;
-	return (fid[4] == '2') ? 1 : 0;
-}
+/* ── Обработчик FID ─────────────────────────────────────────────────────────
+ *
+ * Контракт ядра: обработчик либо отвечает сразу и возвращает FALSE, либо
+ * возвращает TRUE — и ядро позовёт его снова на следующем такте. Ждать внутри
+ * нельзя: такт ядра один, и «подождать» для него значит вернуть управление.
+ * Поэтому все действия быстрые и делаются прямо здесь:
+ *   config — применить/прочитать настройки порта;
+ *   tx     — декодировать base64 и записать в порт;
+ *   echo   — включить/прочитать эхо;
+ *   rx     — забрать накопленное из кольца и разослать кадром (если темп кадров
+ *            ещё не вышел — вернуть TRUE, это и есть «подождать»).
+ *
+ * data == NULL — это такт работы, а не запрос клиента: делать по нему что-то
+ * есть смысл только приёму (накопленное ждёт темпа). */
 
-/* Действие из имени: хвост после "uartN.". */
-static const char *uart_fid_action(const char *fid)
+/* Кадр приёма: забрать из кольца столько кусков, сколько влезает в один кадр, и
+ * разослать подписчикам этого FID на всех ядрах. Мьютексы рекурсивные, поэтому
+ * вложенный захват замков (задача приёма уже держит их) безопасен. */
+static uint8_t uart_rx_flush_locked(uart_handler_ctx_t *hc)
 {
-	if (!fid)
-		return "";
-	const char *dot = strchr(fid, '.');
-	return dot ? (dot + 1) : "";
-}
+	uart_subscription_context_t *ctx = &uart_context[hc->port];
+	const int port = hc->port;
 
-static void handle_msg(app_context_t *app, webapi_msg_t *in_msg)
-{
-	struct app_uart_t *app_uart = NULL;
-	uart_subscription_context_t *ctx = NULL;
-	gw_uart_config_t new_cfg;
-	uint32_t amount = 0;
-	/* Имя разбирается на порт и действие: префикс "uartN." задаёт порт, хвост —
-	 * что делать. Сравнение полное: "uart2.rx" и "uart2.rx2" — разные вызовы. */
-	const char *fid  = in_msg->fid;
-	int         port = uart_fid_port(fid);
-	const char *act  = uart_fid_action(fid);
+	/* Есть ли что отдавать — спрашиваем, не дожидаясь: пустой опрос
+	 * (подписка без данных) должен отвечать сразу, а не держать темп. */
+	platform_mutex_take(ctx->lock, PLATFORM_WAIT_FOREVER);
+	uint8_t ready = gw_uart_rxbuf_peek(&ctx->rxbuf, NULL, NULL, NULL);
+	platform_mutex_give(ctx->lock);
+	if (!ready)
+		return 0;
 
-	if (port < 0) {
-		ws_hal_log_i(TAG, "UART have no FID (%s) handler\n", fid);
-		return;
+	/* Темп кадров: не чаще раза в UART_RX_FRAME_MS. Не вышел срок — НЕ ЖДЁМ
+	 * (обработчик не имеет права спать), а просим ещё такт: вызов останется
+	 * живым и вернётся сюда следующим тактом задачи приложения. */
+	if (uart_rx_frame_sent[port]) {
+		uint32_t gap  = platform_ms_to_ticks(UART_RX_FRAME_MS);
+		int32_t  left = (int32_t)(uart_rx_frame_tick[port] + gap - platform_tick());
+		if (left > 0)
+			return 1;
 	}
 
-	if (strcmp(act, "config") == 0) {
-		app_uart = &app->uart.port[port];
+	/* Забираем готовые куски и складываем их в ОДИН кадр. Кусок идёт в кадр
+	 * только целиком: забранный вернуть в кольцо нельзя, поэтому сначала
+	 * смотрим (peek), влезает ли, и лишь потом забираем. Не влезло — уйдёт
+	 * следующим кадром сразу же: это не «лишний» кадр, а выгрузка того, что не
+	 * поместилось, и темпа она не ждёт. */
+	for (;;) {
+		size_t  out_len = 0;
+		uint8_t lost = 0, dropped = 0;
+		int     pieces = 0;
 
-		if (!in_msg->data || in_msg->len == 0) {
-			/* Применять нечего: это чтение, и на него надо ответить.
-			 * Раньше такой вызов уходил без ответа и висел до таймаута клиента. */
-			send_uart_state(in_msg->id, fid, app_uart);
-			return;
-		}
-		api_cmd_uart_t cmd = {0};
-		if (!parse_uart_params(in_msg->data, in_msg->len, &cmd)) {
-			/* ARG не разобран — применять его нельзя, но и молчать нечем:
-			 * отвечаем текущим состоянием, о причине пишем в журнал. */
-			ws_hal_log_i(TAG, "UART config ARG not parsed (%s), state sent\n", fid);
-			send_uart_state(in_msg->id, fid, app_uart);
-			return;
-		}
-		{
-			/* Что стоит на порту ДО применения — чтобы отличить настоящую
-			 * смену настроек от записи тех же самых значений. */
-			gw_uart_config_t before = {0};
-			gw_uart_get(&app_uart->desc, &before);
-
-			new_cfg = uart_config(app_uart, &cmd, sizeof(cmd));
-			gw_jsonw_t w;
-			format_uart_resp(&w, &new_cfg);
-
-			/* Ответ тому, кто просил */
-			send_uart_response(in_msg->id, fid, &w);
-
-			/* И рассылка подписчикам — ТОЛЬКО если настройки действительно
-			 * изменились: смена режима или скорости обесценивает работу
-			 * остальных (данные пойдут на других настройках), поэтому узнать об
-			 * этом надо сразу, а не по переспросу. Запись тех же значений ничего
-			 * не меняет, и будить ею всех подписчиков незачем: терминал не должен
-			 * отключаться из-за чужого «применить то же самое».
-			 * Буфер один на всех — как и у данных порта. */
-			if (before.boud != new_cfg.boud || before.bits != new_cfg.bits
-			    || before.parity != new_cfg.parity || before.stop != new_cfg.stop
-			    || before.mode != new_cfg.mode || before.idle_ch != new_cfg.idle_ch)
-				send_uart_response(0, fid, &w);
-		}
-		return;
-	}
-
-	if (strcmp(act, "rx") == 0) {
-		ctx = &uart_context[port];
-
-		/* Флаг снимаем ДО отправки: если во время неё придут новые байты,
-		 * делегат закажет следующий кадр сам. */
-		ctx->pending = 0;
-
-		/* Есть ли что отдавать — спрашиваем, не дожидаясь: пустой опрос
-		 * (подписка без данных) должен отвечать сразу, а не держать темп. */
-		ws_hal_mutex_take(ctx->lock, WS_HAL_WAIT_FOREVER);
-		uint8_t ready = gw_uart_rxbuf_peek(&ctx->rxbuf, NULL, NULL, NULL);
-		ws_hal_mutex_give(ctx->lock);
-
-		if (!ready) {
-			/* id=0: пустой опрос — данных нет, ответа нет */
-			send_uart_response(0, fid, NULL);
-			return;
-		}
-
-		/* Держим темп кадров: если предыдущий ушёл только что, ждём до срока —
-		 * за это время накопится ещё, и всё уйдёт ОДНИМ сообщением. Границы
-		 * передач при этом не теряются: они уже лежат в кольце метками. */
-		if (uart_rx_frame_sent[port]) {
-			uint32_t gap  = ws_hal_ms_to_ticks(UART_RX_FRAME_MS);
-			int32_t  left = (int32_t)(uart_rx_frame_tick[port] + gap - ws_hal_tick());
-			if (left > 0)
-				ws_hal_delay_ms(ws_hal_ticks_to_ms((uint32_t)left));
-		}
-
-		/* Забираем готовые куски и складываем их в ОДНО сообщение. Кусок идёт в
-		 * сообщение только целиком: забранный вернуть в кольцо нельзя, поэтому
-		 * сначала смотрим (peek), влезает ли, и лишь потом забираем. Не влезло —
-		 * уйдёт следующим сообщением, его отправим сразу, не ожидая темпа. */
-		size_t out_len = 0;
-		uint8_t lost = 0, leftovers = 0;
-		int pieces = 0;
 		/* Разделители в данных — символы, которых не бывает в base64:
 		 * '#' — передача на линии закончилась (idle), '~' — здесь потеряли
 		 * часть данных. Ставятся прямо в поток, между кусками base64. */
@@ -424,26 +413,33 @@ static void handle_msg(app_context_t *app, webapi_msg_t *in_msg)
 			uint8_t  frame_end = 0, piece_lost = 0;
 			int32_t  b64_size;
 
-			ws_hal_mutex_take(ctx->lock, WS_HAL_WAIT_FOREVER);
+			platform_mutex_take(ctx->lock, PLATFORM_WAIT_FOREVER);
 			if (!gw_uart_rxbuf_peek(&ctx->rxbuf, &piece_len, &frame_end, &piece_lost)) {
-				ws_hal_mutex_give(ctx->lock);
+				platform_mutex_give(ctx->lock);
 				break;
 			}
 			b64_size = base64_encode_buffer_required(piece_len);
 			/* Запас на два разделителя: '~' перед куском и '#' после него. */
 			if (out_len + (size_t)b64_size + 3 > sizeof(uart_b64_buf)) {
-				leftovers = 1;               /* не влезло — следующим сообщением */
-				ws_hal_mutex_give(ctx->lock);
-				break;
+				/* Кусок не влезает в ПУСТОЙ кадр — такого быть не должно
+				 * (буфер рассчитан на всё кольцо), но застрять на нём навсегда
+				 * хуже, чем потерять его с записью в журнал. */
+				if (pieces == 0) {
+					gw_uart_rxbuf_piece_t big;
+					if (gw_uart_rxbuf_take(&ctx->rxbuf, (uint8_t *)uart_rx_snapshot,
+								sizeof(uart_rx_snapshot), &big))
+						dropped = 1;
+				}
+				platform_mutex_give(ctx->lock);
+				break;                       /* остальное — следующим кадром */
 			}
 			gw_uart_rxbuf_piece_t piece;
 			if (!gw_uart_rxbuf_take(&ctx->rxbuf, (uint8_t *)uart_rx_snapshot,
 						sizeof(uart_rx_snapshot), &piece)) {
-				leftovers = 1;               /* гонка с приёмом: попробуем ещё раз */
-				ws_hal_mutex_give(ctx->lock);
-				break;
+				platform_mutex_give(ctx->lock);
+				break;                       /* гонка с приёмом: попробуем позже */
 			}
-			ws_hal_mutex_give(ctx->lock);
+			platform_mutex_give(ctx->lock);
 
 			/* '~' — перед куском, следующим за потерей: он стоит ровно там,
 			 * где данные пропали. */
@@ -463,195 +459,315 @@ static void handle_msg(app_context_t *app, webapi_msg_t *in_msg)
 			pieces++;
 		}
 
-		if (pieces > 0) {
-			uart_b64_buf[out_len] = '\0';
-			uart_rx_frame_tick[port] = ws_hal_tick();
-			uart_rx_frame_sent[port] = 1;
+		if (dropped)
+			platform_log_w(TAG, "UART rx: кусок больше кадра, потерян\n");
 
-			/* Данные одним куском текста: '#' — конец передачи на линии, '~' —
-			 * потеря данных здесь. Кусок без разделителя — продолжение
-			 * предыдущего (длинный кадр выгружается частями). */
-			gw_jsonw_t w;
-			gw_jsonw_init(&w, uart_raw_buf, sizeof(uart_raw_buf));
-			gw_jsonw_obj(&w, NULL);
-			gw_jsonw_str(&w, "RX", uart_b64_buf);
-			/* id=0: broadcast to all subscribers of this FID */
-			send_uart_response(0, fid, &w);
+		if (pieces == 0)
+			break;                           /* отдавать больше нечего */
 
-			if (lost)
-				ws_hal_log_w(TAG, "UART rx: приём терялся, клиенту сообщено\n");
-		}
+		uart_b64_buf[out_len] = '\0';
+		uart_rx_frame_tick[port] = platform_tick();
+		uart_rx_frame_sent[port] = 1;
 
-		/* Осталось на потом — будим задачу сразу, не ожидая темпа: иначе данные
-		 * пролежат ещё кадр темпа без всякой причины. */
-		if (leftovers)
-			uart_rx_wake(ctx);
+		/* Данные одним куском текста: '#' — конец передачи на линии, '~' —
+		 * потеря данных здесь. Кусок без разделителя — продолжение
+		 * предыдущего (длинный кадр выгружается частями). Адресат — подписчики
+		 * этого FID на каждом ядре: кадр порта не принадлежит ни одному
+		 * конкретному вызову. */
+		gw_jsonw_t w;
+		gw_jsonw_init(&w, uart_raw_buf, sizeof(uart_raw_buf));
+		gw_jsonw_obj(&w, NULL);
+		gw_jsonw_str(&w, "RX", uart_b64_buf);
+		uart_send_to(NULL, hc->fid, &w);
 
-		return;
+		if (lost)
+			platform_log_w(TAG, "UART rx: приём терялся, клиенту сообщено\n");
+
+		/* Кольцо опустело — кадр был последним. */
+		platform_mutex_take(ctx->lock, PLATFORM_WAIT_FOREVER);
+		uint8_t more = gw_uart_rxbuf_peek(&ctx->rxbuf, NULL, NULL, NULL);
+		platform_mutex_give(ctx->lock);
+		if (!more)
+			break;
 	}
 
-	if (strcmp(act, "tx") == 0) {
-		ctx = &uart_context[port];
-
-		if (in_msg->data && in_msg->len > 2) {
-			/* ARG приходит срезом исходного JSON. jsmn отдаёт строку БЕЗ
-			 * кавычек, а прежний разбор отдавал вместе с ними — принимаем оба
-			 * вида. Раньше здесь безусловно срезались первый и последний
-			 * символ, поэтому на нынешнем разборе base64 портился, декодер
-			 * отвечал отказом и в порт не уходило НИЧЕГО: терминал молчал, а
-			 * ответ клиенту не отправлялся (проверено: TX не отвечал ни на
-			 * одну посылку). */
-			uint8_t *b64 = in_msg->data;
-			size_t   b64_len = in_msg->len;
-			if (b64_len >= 2 && b64[0] == '"' && b64[b64_len - 1] == '"') {
-				b64++;
-				b64_len -= 2;
-			}
-			int32_t buf_size = base64_decode_buffer_required(b64, b64_len);
-
-			if (buf_size > 0) {
-				/* Декодируем в КУЧУ: нагрузка вызова доходит до предела сообщения
-				 * транспорта (16 КБ), а буфер такого размера на стеке задачи (4 КБ)
-				 * её ронял — в логе платы при вставке 3 КБ в терминал:
-				 * «***ERROR*** A stack overflow in task ws_uart has been detected». */
-				uint8_t *buf = malloc((size_t)buf_size);
-				if (!buf) {
-					gw_jsonw_t w;
-					gw_jsonw_init(&w, uart_resp_buf, sizeof(uart_resp_buf));
-					gw_jsonw_obj(&w, NULL);
-					gw_jsonw_int(&w, "written", -1);
-					send_uart_response(in_msg->id, fid, &w);
-					return;
-				}
-				int32_t decoded = base64_decode(buf, buf_size, b64, b64_len);
-
-				if (decoded > 0) {
-					int32_t written = gw_uart_write(&app->uart.port[port].desc, buf, decoded);
-
-					gw_jsonw_t w;
-					gw_jsonw_init(&w, uart_resp_buf, sizeof(uart_resp_buf));
-					gw_jsonw_obj(&w, NULL);
-					gw_jsonw_int(&w, "written", written);
-					send_uart_response(in_msg->id, fid, &w);
-					free(buf);
-					return;
-				}
-				free(buf);
-				ws_hal_log_w(TAG, "UART tx: base64 broken, len %u\n", (unsigned)b64_len);
-			}
-			/* Данные не распознаны — всё равно отвечаем: молчание клиент ждёт
-			 * до своего таймаута и не понимает, что посылка не ушла. */
-			gw_jsonw_t w;
-			gw_jsonw_init(&w, uart_resp_buf, sizeof(uart_resp_buf));
-			gw_jsonw_obj(&w, NULL);
-			gw_jsonw_int(&w, "written", 0);
-			send_uart_response(in_msg->id, fid, &w);
-		}
-		return;
-	}
-
-	if (strcmp(act, "echo") == 0) {
-		app_uart = &app->uart.port[port];
-
-		if (in_msg->data && in_msg->len) {
-			GW_JSON_TOKENS(toks, UART_ARG_MAX_TOKENS);
-			gw_json_t json;
-			int32_t val;
-			if (gw_json_parse(&json, (const char *)in_msg->data, in_msg->len,
-					  toks, UART_ARG_MAX_TOKENS)
-			    && gw_json_int(&json, "E", &val))
-				gw_uart_set_echo(&app_uart->desc, val ? 1 : 0);
-		}
-		{
-			gw_jsonw_t w;
-			gw_jsonw_init(&w, uart_resp_buf, sizeof(uart_resp_buf));
-			gw_jsonw_obj(&w, NULL);
-			gw_jsonw_int(&w, "E", gw_uart_get_echo(&app_uart->desc));
-			send_uart_response(in_msg->id, fid, &w);
-		}
-		return;
-	}
-
-	ws_hal_log_i(TAG, "UART have no FID (%s) handler\n", fid);
+	return 0;
 }
 
-//void api_handler_uart_work(app_context_t *app) {
-void ws_uart_task(void *param) {
-    webapi_msg_t *in_msg = NULL;
-    app_context_t *app = param;
-
-    for (;;) {
-        if (ws_hal_queue_receive(cmd_queue, &in_msg, WS_HAL_WAIT_FOREVER) != 0) {
-            handle_msg(app, in_msg);
-            free(in_msg->data);
-            free(in_msg);
-            in_msg = NULL;
-        }
-    }
-}
-
-esp_err_t ws_uart_run(app_context_t *app)
+/* Обёртка: сборка кадра всегда идёт под замком сборки (см. uart_frame_lock) —
+ * так статические буферы не делят между собой задача приёма и задача приложения. */
+static uint8_t uart_rx_flush(uart_handler_ctx_t *hc)
 {
-        cmd_queue = ws_hal_queue_create(10, sizeof(void *));
-        /* Порт и его данные доступны с любого интерфейса: политики у UART нет,
-         * поэтому одна регистрация на маску «любой интерфейс». */
-        ws_server_register_fid_queue(ESP_WS_API_UART1_CNF,    GW_IFACE_MASK_ANY, cmd_queue);
-        ws_server_register_fid_queue(ESP_WS_API_UART1_RAW_RX, GW_IFACE_MASK_ANY, cmd_queue);
-        ws_server_register_fid_queue(ESP_WS_API_UART1_RAW_TX, GW_IFACE_MASK_ANY, cmd_queue);
-        ws_server_register_fid_queue(ESP_WS_API_UART1_ECHO,   GW_IFACE_MASK_ANY, cmd_queue);
-        ws_server_register_fid_queue(ESP_WS_API_UART2_CNF,    GW_IFACE_MASK_ANY, cmd_queue);
-        ws_server_register_fid_queue(ESP_WS_API_UART2_RAW_RX, GW_IFACE_MASK_ANY, cmd_queue);
-        ws_server_register_fid_queue(ESP_WS_API_UART2_RAW_TX, GW_IFACE_MASK_ANY, cmd_queue);
-        ws_server_register_fid_queue(ESP_WS_API_UART2_ECHO,   GW_IFACE_MASK_ANY, cmd_queue);
+	platform_mutex_take(uart_frame_lock, PLATFORM_WAIT_FOREVER);
+	uint8_t more = uart_rx_flush_locked(hc);
+	platform_mutex_give(uart_frame_lock);
+	return more;
+}
 
+/* Настройки порта: что просили — меняем, остальное (в том числе режим) оставляем
+ * как есть. Пустой ARG — это чтение, и на него надо ответить: молчание клиент
+ * ждёт до своего таймаута. */
+static uint8_t uart_cmd_config(uart_handler_ctx_t *hc, void *call,
+			       const uint8_t *data, uint32_t len)
+{
+	struct app_uart_t *app_uart = &hc->app->uart.port[hc->port];
+
+	if (!data || len == 0) {
+		send_uart_state(call, hc->fid, app_uart);
+		return 0;
+	}
+	api_cmd_uart_t cmd = {0};
+	if (!parse_uart_params(data, len, &cmd)) {
+		/* ARG не разобран — применять его нельзя, но и молчать нечем: отвечаем
+		 * текущим состоянием, о причине пишем в журнал. */
+		platform_log_i(TAG, "UART config ARG not parsed (%s), state sent\n", hc->fid);
+		send_uart_state(call, hc->fid, app_uart);
+		return 0;
+	}
+
+	/* Что стоит на порту ДО применения — чтобы отличить настоящую смену
+	 * настроек от записи тех же самых значений. */
+	gw_uart_config_t before = {0};
+	gw_uart_get(&app_uart->desc, &before);
+
+	gw_uart_config_t new_cfg = uart_config(app_uart, &cmd, sizeof(cmd));
+	gw_jsonw_t w;
+	format_uart_resp(&w, &new_cfg);
+
+	/* Ответ тому, кто просил */
+	uart_send_to(call, hc->fid, &w);
+
+	/* И рассылка подписчикам — ТОЛЬКО если настройки действительно изменились:
+	 * смена режима или скорости обесценивает работу остальных (данные пойдут на
+	 * других настройках), поэтому узнать об этом надо сразу, а не по переспросу.
+	 * Запись тех же значений ничего не меняет, и будить ею всех подписчиков
+	 * незачем: терминал не должен отключаться из-за чужого «применить то же
+	 * самое». Буфер один на всех — как и у данных порта. */
+	if (before.boud != new_cfg.boud || before.bits != new_cfg.bits
+	    || before.parity != new_cfg.parity || before.stop != new_cfg.stop
+	    || before.mode != new_cfg.mode || before.idle_ch != new_cfg.idle_ch)
+		uart_send_to(NULL, hc->fid, &w);
+	return 0;
+}
+
+/* Передача в порт: ARG — base64 одной строкой. */
+static uint8_t uart_cmd_tx(uart_handler_ctx_t *hc, void *call,
+			   const uint8_t *data, uint32_t len)
+{
+	if (!data || len <= 2)
+		return 0;
+
+	/* ARG приходит срезом исходного JSON: jsmn отдаёт строку БЕЗ кавычек.
+	 * Принимаем и вариант с кавычками — определяем его по первому и последнему
+	 * символу. Безусловно срезать крайние символы нельзя: на срезе без кавычек
+	 * base64 испортится, декодер ответит отказом и в порт не уйдёт ничего. */
+	const uint8_t *b64 = data;
+	size_t   b64_len = len;
+	if (b64_len >= 2 && b64[0] == '"' && b64[b64_len - 1] == '"') {
+		b64++;
+		b64_len -= 2;
+	}
+	int32_t buf_size = base64_decode_buffer_required(b64, b64_len);
+
+	if (buf_size > 0) {
+		/* Декодируем в КУЧУ: нагрузка вызова доходит до предела сообщения
+		 * транспорта (16 КБ), а буфер такого размера на стеке задачи (4 КБ) её
+		 * ронял — в логе платы при вставке 3 КБ в терминал:
+		 * «***ERROR*** A stack overflow in task ws_uart has been detected». */
+		uint8_t *buf = malloc((size_t)buf_size);
+		if (!buf) {
+			gw_jsonw_t w;
+			gw_jsonw_init(&w, uart_resp_buf, sizeof(uart_resp_buf));
+			gw_jsonw_obj(&w, NULL);
+			gw_jsonw_int(&w, "written", -1);
+			uart_send_to(call, hc->fid, &w);
+			return 0;
+		}
+		int32_t decoded = base64_decode(buf, buf_size, b64, b64_len);
+
+		if (decoded > 0) {
+			int32_t written = gw_uart_write(&hc->app->uart.port[hc->port].desc, buf, decoded);
+
+			gw_jsonw_t w;
+			gw_jsonw_init(&w, uart_resp_buf, sizeof(uart_resp_buf));
+			gw_jsonw_obj(&w, NULL);
+			gw_jsonw_int(&w, "written", written);
+			uart_send_to(call, hc->fid, &w);
+			free(buf);
+			return 0;
+		}
+		free(buf);
+		platform_log_w(TAG, "UART tx: base64 broken, len %u\n", (unsigned)b64_len);
+	}
+	/* Данные не распознаны — всё равно отвечаем: молчание клиент ждёт до своего
+	 * таймаута и не понимает, что посылка не ушла. */
+	gw_jsonw_t w;
+	gw_jsonw_init(&w, uart_resp_buf, sizeof(uart_resp_buf));
+	gw_jsonw_obj(&w, NULL);
+	gw_jsonw_int(&w, "written", 0);
+	uart_send_to(call, hc->fid, &w);
+	return 0;
+}
+
+/* Эхо порта: включить/выключить и ответить текущим состоянием. */
+static uint8_t uart_cmd_echo(uart_handler_ctx_t *hc, void *call,
+			     const uint8_t *data, uint32_t len)
+{
+	struct app_uart_t *app_uart = &hc->app->uart.port[hc->port];
+
+	if (data && len) {
+		GW_JSON_TOKENS(toks, UART_ARG_MAX_TOKENS);
+		gw_json_t json;
+		int32_t val;
+		if (gw_json_parse(&json, (const char *)data, len,
+				  toks, UART_ARG_MAX_TOKENS)
+		    && gw_json_int(&json, "E", &val))
+			gw_uart_set_echo(&app_uart->desc, val ? 1 : 0);
+	}
+	gw_jsonw_t w;
+	gw_jsonw_init(&w, uart_resp_buf, sizeof(uart_resp_buf));
+	gw_jsonw_obj(&w, NULL);
+	gw_jsonw_int(&w, "E", gw_uart_get_echo(&app_uart->desc));
+	uart_send_to(call, hc->fid, &w);
+	return 0;
+}
+
+static uint8_t uart_api_handler(void *call, void **context,
+				uint8_t *data, uint32_t data_len)
+{
+	uart_handler_ctx_t *hc = (uart_handler_ctx_t *)*context;
+	/* Между вызовами обработчик ничего не держит (накопитель приёма принадлежит
+	 * порту, а не вызову), поэтому снятие вызова — это просто FALSE: освобождать
+	 * нечего. */
+	if (call == NULL)
+		return 0;
+	if ((hc == NULL) || (hc->app == NULL))
+		return 0;
+
+	if (hc->act == UART_ACT_RX)
+		return uart_rx_flush(hc);          /* и такт, и опрос — одно и то же */
+
+	if (data == NULL)
+		return 0;                          /* такт: остальным делать нечего */
+
+	switch (hc->act) {
+	case UART_ACT_CNF:  return uart_cmd_config(hc, call, data, data_len);
+	case UART_ACT_TX:   return uart_cmd_tx(hc, call, data, data_len);
+	case UART_ACT_ECHO: return uart_cmd_echo(hc, call, data, data_len);
+	default:            return 0;
+	}
+}
+
+/* Регистрация одного FID на одном ядре: контекст — порт и действие, поэтому
+ * обработчику не нужно разбирать имя (а имя нужно только для рассылки). */
+static uint8_t uart_register(api_t *api, uart_handler_ctx_t *hc, app_context_t *app,
+			     uint8_t port, const char *fid, uart_act_t act)
+{
+	hc->app  = app;
+	hc->port = port;
+	hc->act  = act;
+	hc->fid  = fid;
+	return api_register_handler(api, uart_api_handler, fid, hc);
+}
+
+/* Готовит состояние портов: накопитель приёма, замок и подписка на события
+ * драйвера. Общее для прошивки и хостовых тестов — чтобы тест проверял ровно
+ * ту же подготовку, что и цель. */
+static void uart_ports_init(app_context_t *app)
+{
+        uart_apis_set(app->api_ap, app->api_sta);
+        uart_frame_lock = platform_mutex_create();
+
+        uart_context[0].port         = 0;
         uart_context[0].storage      = uart1_buf;
         uart_context[0].storage_size = sizeof(uart1_buf);
         gw_uart_rxbuf_init(&uart_context[0].rxbuf, uart_context[0].storage,
                            uart_context[0].storage_size);
-        uart_context[0].lock = ws_hal_mutex_create();
-        bApiFidSet(uart_context[0].fid, ESP_WS_API_UART1_RAW_RX);
+        uart_context[0].lock = platform_mutex_create();
         uart1_delegate.handler = &uart_event_on_rx;
         uart1_delegate.context = &uart_context[0];
 
+        uart_context[1].port         = 1;
         uart_context[1].storage      = uart2_buf;
         uart_context[1].storage_size = sizeof(uart2_buf);
         gw_uart_rxbuf_init(&uart_context[1].rxbuf, uart_context[1].storage,
                            uart_context[1].storage_size);
-        uart_context[1].lock = ws_hal_mutex_create();
-        bApiFidSet(uart_context[1].fid, ESP_WS_API_UART2_RAW_RX);
+        uart_context[1].lock = platform_mutex_create();
         uart2_delegate.context = &uart_context[1];
         uart2_delegate.handler = &uart_event_on_rx;
 
         gw_uart_on_receive_subscribe(&app->uart.port[0].desc, &uart1_delegate);
         gw_uart_on_receive_subscribe(&app->uart.port[1].desc, &uart2_delegate);
+}
 
-        /* Стек с запасом: раньше здесь стояли буферы приёма и декодирования
-         * (до 4 КБ каждый), из-за чего задача падала на длинной посылке. Сами
-         * буферы теперь статические, но base64 и сборщик ответа тоже едят стек. */
-        ws_hal_task_create(ws_uart_task, "ws_uart", 5120, app, 5);
+/* Регистрирует обработчики всех FID портов на переданных ядрах. NULL-ядро
+ * пропускается: в тестах бывает одно. */
+static uint8_t uart_fids_register(app_context_t *app, api_t *api_ap, api_t *api_sta)
+{
+        static const char *const fids[2][UART_ACT_COUNT] = {
+                { ESP_WS_API_UART1_CNF, ESP_WS_API_UART1_RAW_RX,
+                  ESP_WS_API_UART1_RAW_TX, ESP_WS_API_UART1_ECHO },
+                { ESP_WS_API_UART2_CNF, ESP_WS_API_UART2_RAW_RX,
+                  ESP_WS_API_UART2_RAW_TX, ESP_WS_API_UART2_ECHO },
+        };
+        api_t *cores[2] = { api_ap, api_sta };
+
+        for (uint8_t port = 0; port < 2; port++) {
+                for (uint8_t act = 0; act < UART_ACT_COUNT; act++) {
+                        for (uint8_t c = 0; c < 2; c++) {
+                                if (cores[c] == NULL)
+                                        continue;
+                                if (!uart_register(cores[c], &uart_handler_ctx[port][act], app,
+                                                   port, fids[port][act], (uart_act_t)act))
+                                        return 0;
+                        }
+                }
+        }
+        return 1;
+}
+
+esp_err_t ws_uart_run(app_context_t *app)
+{
+        /* Порт и его данные доступны с любого интерфейса: политики у UART нет,
+         * поэтому обработчики FID регистрируются на ОБОИХ ядрах — вызов
+         * приходит в то ядро, через чей транспорт пришёл клиент, а ответ уходит
+         * по дескриптору вызова, то есть обратно туда же. */
+        uart_ports_init(app);
+
+        /* Своей задачи у сервиса нет: и приём (делегат драйвера), и запросы
+         * клиентов (обработчики FID в такте ядра) обслуживаются без очередей
+         * ядра и без ожиданий. */
+        if (!uart_fids_register(app, app->api_ap, app->api_sta)) {
+                platform_log_w(TAG, "UART: не удалось зарегистрировать FID\n");
+                return ESP_FAIL;
+        }
         return ESP_OK;
 }
 
 #ifdef APIH_UART_TEST
-void apih_uart_test_init(void) {
-    uart_context[0].storage      = uart1_buf;
-    uart_context[0].storage_size = sizeof(uart1_buf);
-    uart_context[0].lock         = ws_hal_mutex_create();
-    uart_context[1].storage      = uart2_buf;
-    uart_context[1].storage_size = sizeof(uart2_buf);
-    uart_context[1].lock         = ws_hal_mutex_create();
-    apih_uart_test_reset();
+/* Хостовая обвязка: то же, что ws_uart_run, но без драйвера портов. Ядро у
+ * теста одно — им же играет роль клиента транспорта. */
+void apih_uart_test_init(api_t *api, app_context_t *app) {
+    uart_ports_init(app);
+    uart_fids_register(app, api, app->api_sta);
+    uart_rx_frame_sent[0] = 0;
+    uart_rx_frame_sent[1] = 0;
+    uart_rx_frame_tick[0] = 0;
+    uart_rx_frame_tick[1] = 0;
 }
 
 void apih_uart_test_reset(void) {
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < 2; i++)
         gw_uart_rxbuf_init(&uart_context[i].rxbuf, uart_context[i].storage,
                            uart_context[i].storage_size);
-        uart_context[i].pending = 0;
-    }
     uart_rx_frame_sent[0] = 0;
     uart_rx_frame_sent[1] = 0;
 }
+
+#ifdef APIH_UART_TEST
+void apih_uart_test_fill_rx_idle(int port, const uint8_t *data, uint32_t len,
+                                 uint32_t gap_us, uint8_t idle);
+#endif
 
 /* «Данные готовы к отдаче» — это законченная передача на линии: незакрытый
  * кусок читателю не отдаётся, пока не перевалит за порог частичной выгрузки. */
@@ -660,7 +776,7 @@ void apih_uart_test_fill_rx(int port, const uint8_t *data, uint32_t len) {
 }
 
 /* idle — «линия замолчала после этих байт», то есть передача закончилась.
- * Простоя в буфере больше нет: границы передач хранит сама метка куска. */
+ * Границы передач хранит сама метка куска. */
 void apih_uart_test_fill_rx_idle(int port, const uint8_t *data, uint32_t len,
                                  uint32_t gap_us, uint8_t idle) {
     uart_subscription_context_t *ctx = &uart_context[port];
@@ -668,9 +784,4 @@ void apih_uart_test_fill_rx_idle(int port, const uint8_t *data, uint32_t len,
     if (len > 0xFFFF) len = 0xFFFF;
     gw_uart_rxbuf_push(&ctx->rxbuf, data, (uint16_t)len, idle ? 1 : 0);
 }
-
-void apih_uart_test_handle_msg(app_context_t *app, webapi_msg_t *msg) {
-    handle_msg(app, msg);
-}
 #endif
-

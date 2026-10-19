@@ -5,7 +5,9 @@ BUILD    := build
 # ── Compiler flags ────────────────────────────────────────────────────────
 INCLUDES := \
     -Istubs \
-    -I$(ROOT)/ws_server/include \
+    -I$(ROOT)/api/include \
+    -I$(ROOT)/transport/include \
+    -I$(ROOT)/platform/include \
     -I$(ROOT)/CodeLibrary/CL \
     -I$(ROOT)/json/jsmn \
     -I$(ROOT)/json \
@@ -17,42 +19,55 @@ INCLUDES := \
 # by default it only prints and the run still reports OK.
 SANITIZE := -fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer
 
-CFLAGS   := -Wall -Wextra -g -DWS_SERVER_TEST -DAPIH_UART_TEST $(SANITIZE) $(INCLUDES)
-CXXFLAGS := -Wall -Wextra -g -DWS_SERVER_TEST -DAPIH_UART_TEST $(SANITIZE) $(INCLUDES)
+# APIH_UART_TEST / APIH_HOST_TEST — точки входа для тестов: службы отдают под ними
+# свой сброс состояния, а apih_sys_internal.h подключает тень app.h вместо
+# прошивочного (см. apih_uart.c, apih_fw.c).
+CFLAGS   := -Wall -Wextra -g -DAPIH_UART_TEST -DAPIH_HOST_TEST $(SANITIZE) $(INCLUDES)
+CXXFLAGS := -Wall -Wextra -g -DAPIH_UART_TEST -DAPIH_HOST_TEST $(SANITIZE) $(INCLUDES)
 LDFLAGS  := -L$(CPPUTEST)/lib -lCppUTest -lCppUTestExt $(SANITIZE)
 
 # ── Source → object mapping ───────────────────────────────────────────────
 # VPATH lets Make find sources by basename without per-rule path repetition.
+# Компонент transport — только заголовки (transport.h): исходников у него нет, в
+# VPATH ему делать нечего, хватает -I выше.
 VPATH := \
-    $(ROOT)/ws_server/src \
+    $(ROOT)/api/src \
     $(ROOT)/main \
     $(ROOT)/json \
     $(ROOT)/json/jsmn \
     $(ROOT)/CodeLibrary/CL/DataStructures/Src \
     $(ROOT)/CodeLibrary/CL/Converters/Src \
+    $(ROOT)/CodeLibrary/CL/Workflow/Src \
     stubs
 
 C_SRCS := \
-    ws_server.c \
+    api_core.c \
     apih_uart.c \
+    apih_fw.c \
+    apih_sys_common.c \
     web_iface_policy.c \
     fs_path.c \
     uart_rxbuf.c \
     GwJson.c \
     jsmn.c \
     LinkedList.c \
+    Event.c \
     Mem.c \
     Str.c \
     Base64Encoding.c \
-    ws_hal_stub.c \
-    ws_transport_stub.c \
-    gw_uart_stub.c
+    system_stub.c \
+    transport_stub.c \
+    gw_uart_stub.c \
+    net_stub.c \
+    esp_ota_stub.c \
+    esp_rom_md5_stub.c
 
 CPP_SRCS := \
     AllTests.cpp \
     GwJsonTest.cpp \
     WsServerTest.cpp \
     ApihUartTest.cpp \
+    ApihFwTest.cpp \
     WebIfacePolicyTest.cpp \
     FsPathTest.cpp \
     UartRxbufTest.cpp

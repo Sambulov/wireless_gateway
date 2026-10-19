@@ -55,7 +55,7 @@ int gw_json_skip(const gw_json_t *j, int idx)
 
 /* Сравнение ключа токена с именем: длина берётся из токена, поэтому входа
  * с нулём внутри ключа это не ломает. */
-static int bKeyIs(const gw_json_t *j, int idx, const char *key)
+static int key_is(const gw_json_t *j, int idx, const char *key)
 {
     if (idx < 0 || idx >= j->count || j->tok[idx].type != JSMN_STRING)
         return 0;
@@ -72,7 +72,7 @@ int gw_json_find(const gw_json_t *j, const char *key)
     int i = 1;                       /* 0 — сам корневой объект */
     while (i + 1 < j->count) {
         int val = i + 1;             /* пары «ключ: значение» идут подряд */
-        if (bKeyIs(j, i, key))
+        if (key_is(j, i, key))
             return val;
         int next = gw_json_skip(j, val);
         if (next <= val)
@@ -84,7 +84,7 @@ int gw_json_find(const gw_json_t *j, const char *key)
 
 /* Разбор целого из среза токена. Своя арифметика вместо strtol: входа без
  * нуля в конце (срез), а strtol ждёт C-строку. */
-static uint8_t bTokToInt(const gw_json_t *j, int idx, int32_t *out)
+static uint8_t tok_to_int(const gw_json_t *j, int idx, int32_t *out)
 {
     if (idx < 0 || idx >= j->count || j->tok[idx].type != JSMN_PRIMITIVE)
         return 0;
@@ -114,7 +114,7 @@ static uint8_t bTokToInt(const gw_json_t *j, int idx, int32_t *out)
 
 uint8_t gw_json_int_at(const gw_json_t *j, int idx, int32_t *out)
 {
-    return out ? bTokToInt(j, idx, out) : 0;
+    return out ? tok_to_int(j, idx, out) : 0;
 }
 
 uint8_t gw_json_int(const gw_json_t *j, const char *key, int32_t *out)
@@ -122,13 +122,13 @@ uint8_t gw_json_int(const gw_json_t *j, const char *key, int32_t *out)
     if (!out)
         return 0;
     int idx = gw_json_find(j, key);
-    return (idx >= 0) ? bTokToInt(j, idx, out) : 0;
+    return (idx >= 0) ? tok_to_int(j, idx, out) : 0;
 }
 
-/* Раскрытие escape-последовательностей JSON. Раньше это делалось при разборе;
- * здесь строки отдаются как есть, поэтому раскрываем сами — иначе пароль или
- * SSID с кавычкой/обратным слешем поехали бы. */
-static uint8_t vCopyString(const char *s, size_t len, char *out, size_t out_size)
+/* Раскрытие escape-последовательностей JSON. jsmn отдаёт строку как есть,
+ * поэтому раскрываем сами — иначе пароль или SSID с кавычкой или обратным
+ * слешем поехали бы. */
+static uint8_t copy_string(const char *s, size_t len, char *out, size_t out_size)
 {
     size_t o = 0;
     for (size_t i = 0; i < len; i++) {
@@ -198,7 +198,7 @@ uint8_t gw_json_str(const gw_json_t *j, const char *key, char *out, size_t out_s
 
     const char *s = j->js + j->tok[idx].start;
     size_t len = (size_t)(j->tok[idx].end - j->tok[idx].start);
-    return vCopyString(s, len, out, out_size);
+    return copy_string(s, len, out, out_size);
 }
 
 uint8_t gw_json_raw(const gw_json_t *j, const char *key, const char **start, size_t *len)
@@ -242,12 +242,12 @@ uint8_t gw_json_arr_int(const gw_json_t *j, const char *key, int idx_want, int32
             return 0;
         cur = next;
     }
-    return bTokToInt(j, cur, out);
+    return tok_to_int(j, cur, out);
 }
 
 /* ── Запись JSON ─────────────────────────────────────────────────────────── *
- * U+XXXX печатается в нижнем регистре (как %04x), чтобы ответы по возможности
- * совпадали с прежними байт в байт. */
+ * U+XXXX печатается в нижнем регистре (как %04x): так ответы остаются
+ * стабильными по байтам. */
 
 static void w_ch(gw_jsonw_t *w, char c)
 {
@@ -312,9 +312,8 @@ static int u_seq_len(const unsigned char *p, size_t n)
 
 /* Строка в кавычках с экранированием. Кавычка, обратный слеш и управляющие
  * символы — короткими последовательностями, остальные управляющие — \u00xx.
- * Корректный UTF-8 пишется БАЙТАМИ КАК ЕСТЬ, как это делал прежний сборщик JSON:
- * имена файлов, SSID и пароли с кириллицей не раздуваются, а клиент получает по
- * JSON ровно те же символы. Экранируется только байт, не образующий корректной
+ * Корректный UTF-8 пишется БАЙТАМИ КАК ЕСТЬ: имена файлов, SSID и пароли с
+ * кириллицей не раздуваются, а клиент получает по JSON ровно те же символы. Экранируется только байт, не образующий корректной
  * последовательности: иначе в ответе оказалась бы невалидная UTF-8, а текст
  * JSON обязан быть корректным UTF-8. */
 

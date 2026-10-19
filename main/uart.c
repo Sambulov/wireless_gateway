@@ -89,7 +89,7 @@ static uint32_t uart_char_us(uint32_t boud)
     return boud ? (uint32_t)((10ULL * 1000000ULL) / boud) : 87;
 }
 
-static uint8_t b_uart_single_wire(gw_uart_private_t *uart)
+static uint8_t uart_single_wire(gw_uart_private_t *uart)
 {
     return uart->mode == (uint8_t)GW_UART_MODE_UART_SINGLE_WIRE;
 }
@@ -151,7 +151,7 @@ static void uart_event_task(void *pvParameters) {
                 ev_trig.gap_us = uart_gap_take(uart->port);
                 /* Однопроводная линия: начало куска — своё же переданное.
                  * Отбрасываем ровно столько байт, сколько передали. */
-                if (b_uart_single_wire(uart)) {
+                if (uart_single_wire(uart)) {
                     int skip = uart_echo_skip(uart->port, sz);
                     if (skip >= sz) {
                         size -= sz;
@@ -196,20 +196,6 @@ static void uart_event_task(void *pvParameters) {
         //Event of UART frame error
         case UART_FRAME_ERR:
             //ESP_LOGI(TAG, "uart frame error");
-            break;
-        //UART_PATTERN_DET
-        case UART_PATTERN_DET:
-            //uart_get_buffered_data_len(UART_PORT, &buffered_size);
-            //int pos = uart_pattern_pop_pos(UART_PORT);
-            //ESP_LOGI(TAG, "[UART PATTERN DETECTED] pos: %d, buffered size: %d", pos, buffered_size);
-            //if (pos == -1) {
-                // There used to be a UART_PATTERN_DET event, but the pattern position queue is full so that it can not
-                // record the position. We should set a larger queue size.
-                // As an example, we directly flush the rx buffer here.
-            //    uart_flush_input(UART_PORT);
-            //} else {
-            //    uart_read_bytes(UART_PORT, dtmp, pos, 100 / portTICK_PERIOD_MS);
-            //}
             break;
         //Others
         default:
@@ -408,7 +394,7 @@ int32_t gw_uart_write(void *desc, const uint8_t *buf, uint16_t size) {
     gw_uart_private_t *uart = (gw_uart_private_t *) desc;
     /* Однопроводная линия: окно глушения открываем ДО первой посылки — иначе
      * первый же байт успеет вернуться эхом и попасть в приём. */
-    if (b_uart_single_wire(uart)) {
+    if (uart_single_wire(uart)) {
         uart_arm_echo(uart->port, uart->cnf.baud_rate, size);
     }
     return uart_write_bytes(uart->port, buf, size);

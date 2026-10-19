@@ -2,7 +2,7 @@
 #include "app.h"
 #include "uart.h"
 #include "GwJson.h"
-#include "web_api.h"
+#include "api.h"
 #include "ModBusHelpers.h"
 
 #define MB_PAYLOAD_SIZE    255
@@ -18,9 +18,9 @@ static uint32_t mb_timer_fn(const void *ctx) {
     return xTaskGetTickCount() * portTICK_PERIOD_MS;
 }
 
-/* В новом CL приём устроен наоборот: библиотека больше не читает сама, а
- * получает байты через modbus_receive_data (см. mb_rx_handler). В интерфейсе
- * остались только передача и таймер. */
+/* Приём устроен так: библиотека не читает линию сама, а получает байты через
+ * modbus_receive_data (см. mb_rx_handler). В интерфейсе — только передача и
+ * таймер. */
 static const modbus_iface_t mb_iface = {
     .pfWrite = gw_uart_write,
     .pfTimer = mb_timer_fn,
@@ -59,7 +59,9 @@ typedef struct {
 /* Состояние одного вызова API: разобранный запрос и место в очереди порта.
  * Живёт в контексте вызова, который принадлежит обработчику. Ответ клиенту
  * формирует и отправляет драйвер из своего колбэка — тогда же он помечает
- * контекст done, и обработчик сообщает ядру, что вызов обработан. */
+ * контекст done, и обработчик сообщает ядру, что вызов обработан.
+ * Ядро ответу не нужно: ответ адресован дескриптору вызова, и api_reply берёт
+ * ядро из него — прямо в колбэке драйвера. */
 #define MB_CTX_MAGIC 0x4d424354u   /* 'MBCT' — признак своего контекста */
 
 struct mb_call_ctx {
@@ -177,7 +179,7 @@ static void mb_rx_handler(void *trigger, void *sender, void *context) {
 /* Ответ клиенту отправляем через сам вызов — ядро само обрамит его в FID/SID. */
 static void send_mb_msg(void *call, const char *json_str, size_t len) {
     if (json_str && len > 0)
-        bApiCallSendJson(call, (const uint8_t *)json_str, len);
+        api_reply(call, (const uint8_t *)json_str, len);
 }
 
 static void send_mb_error(void *call, int code) {
@@ -425,6 +427,15 @@ static uint8_t mb_api_handler(void *call, void **context, uint8_t *data, uint32_
     return 1;
 }
 
+/* Регистрация обоих FID на одном ядре. Оба обязательны: половина портов,
+ * зарегистрированная молча, выглядела бы как «порт не отвечает». */
+static uint8_t mb_register(api_t *api) {
+    uint8_t ok = 1;
+    ok &= api_register_handler(api, mb_api_handler, ESP_WS_API_UART1_MODBUS_REQ, &mb_workers[0]);
+    ok &= api_register_handler(api, mb_api_handler, ESP_WS_API_UART2_MODBUS_REQ, &mb_workers[1]);
+    return ok;
+}
+
 esp_err_t ws_modbus_run(app_context_t *app) {
     for (int i = 0; i < 2; i++) {
         modbus_worker_t *w = &mb_workers[i];
@@ -459,12 +470,13 @@ esp_err_t ws_modbus_run(app_context_t *app) {
     }
 
     /* Запросы к прибору идут через ядро API: оно само вызывает обработчик и в
-     * такте работы, поэтому своей задачи и очереди здесь больше нет.
+     * такте работы, поэтому своей задачи и очереди здесь нет.
      * Контекст регистрации — рабочий поток порта: по нему обработчик понимает,
-     * каким портом управляет. Политики по интерфейсам у Modbus нет, поэтому
-     * оба FID зарегистрированы на маску «любой интерфейс». */
-    if (!bApiCallRegister(mb_api_handler, ESP_WS_API_UART1_MODBUS_REQ, GW_IFACE_MASK_ANY, &mb_workers[0]) ||
-        !bApiCallRegister(mb_api_handler, ESP_WS_API_UART2_MODBUS_REQ, GW_IFACE_MASK_ANY, &mb_workers[1])) {
+     * каким портом управляет. Политики по интерфейсам у Modbus нет, поэтому оба
+     * FID регистрируются на ОБОИХ ядрах: клиент точки доступа и клиент станции
+     * обслуживаются каждый своим ядром, а ответ уходит по дескриптору вызова
+     * через то ядро, на котором вызов пришёл. */
+    if (!mb_register(app->api_ap) || !mb_register(app->api_sta)) {
         ESP_LOGE(TAG, "не удалось зарегистрировать обработчики Modbus");
         return ESP_FAIL;
     }

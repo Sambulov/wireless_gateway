@@ -15,15 +15,16 @@ OUT="$ROOT/tests/fuzz/build"
 mkdir -p "$OUT"
 
 SRCS=(
-  "$ROOT/ws_server/src/ws_server.c"
+  "$ROOT/api/src/api_core.c"
   "$ROOT/json/GwJson.c"
   "$ROOT/json/jsmn/jsmn.c"
   "$ROOT/CodeLibrary/CL/DataStructures/Src/LinkedList.c"
+  "$ROOT/CodeLibrary/CL/Workflow/Src/Event.c"
   "$ROOT/CodeLibrary/CL/DataStructures/Src/Mem.c"
   "$ROOT/CodeLibrary/CL/DataStructures/Src/Str.c"
   "$ROOT/CodeLibrary/CL/Converters/Src/Base64Encoding.c"
-  "$ROOT/tests/unit/stubs/ws_hal_stub.c"
-  "$ROOT/tests/unit/stubs/ws_transport_stub.c"
+  "$ROOT/tests/unit/stubs/system_stub.c"
+  "$ROOT/tests/unit/stubs/transport_stub.c"
 )
 
 TARGETS=(
@@ -33,7 +34,10 @@ TARGETS=(
 
 INCLUDES=(
   -I"$ROOT/tests/unit/stubs"
-  -I"$ROOT/ws_server/include"
+  -I"$ROOT/main"
+  -I"$ROOT/api/include"
+  -I"$ROOT/transport/include"
+  -I"$ROOT/platform/include"
   -I"$ROOT/CodeLibrary/CL"
   -I"$ROOT/json"
   -I"$ROOT/json/jsmn"
@@ -54,13 +58,13 @@ for t in "${TARGETS[@]}"; do
   src="${t%%:*}"
   bin="${t##*:}"
   if [[ "$MODE" == libfuzzer ]]; then
-    "$CC_BIN" -g -O1 -fsanitize=fuzzer,address,undefined -DWS_SERVER_TEST \
+    "$CC_BIN" -g -O1 -fsanitize=fuzzer,address,undefined \
       "${INCLUDES[@]}" "${SRCS[@]}" "$ROOT/tests/fuzz/$src.c" -o "$OUT/$bin"
     echo "собран (libFuzzer, $CC_BIN): $OUT/$bin"
   else
     base="${bin%_fuzzer}_runner"
     "$CC_BIN" -g -O1 -fsanitize=address,undefined -fno-sanitize-recover=undefined \
-      -DWS_SERVER_TEST "${INCLUDES[@]}" "${SRCS[@]}" \
+      "${INCLUDES[@]}" "${SRCS[@]}" \
       "$ROOT/tests/fuzz/$src.c" "$ROOT/tests/fuzz/runner.c" -o "$OUT/$base"
     echo "собран (прогонщик без clang, $CC_BIN): $OUT/$base"
   fi

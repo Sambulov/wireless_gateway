@@ -19,7 +19,7 @@
 #include "sys/stat.h"
 
 
-#include "web_api.h"
+#include "api.h"
 
 #include <stdio.h>
 
@@ -30,6 +30,10 @@
 
 #include "uart.h"
 #include "connection.h"
+/* Объект веб-сервера интерфейса: приложение поднимает его на каждый интерфейс и
+ * регистрирует в нём то, что этому интерфейсу оказано. */
+#include "web_server.h"
+#include "ws_transport.h"
 
 #define TAG_S(x)  #x
 #define TAG_SX(x) TAG_S(x)
@@ -75,19 +79,15 @@ typedef struct {
 
 #define WEB_FILE_HANDLER_NAME "/*"
 
-httpd_handle_t start_webserver(void);
-httpd_handle_t start_ws_server(void);
-/* Единственная точка регистрации URI-обработчика: здесь же применяется политика
- * «какой сервис каким интерфейсам оказан» — см. web_iface_policy.c. Обработчик
- * сервиса, оказанного не всем, регистрируется в обёртке, которая отвечает 404
- * соединению с неподходящего интерфейса. */
-uint8_t webserver_register_handler(httpd_handle_t server, httpd_uri_t *uri_handler);
+/* Политика «какой сервис каким интерфейсам оказан» применяется при регистрации
+ * URI в объекте веб-сервера (web_server.c, таблица — web_iface_policy.c):
+ * обработчик сервиса, оказанного не всем, отвечает 404 соединению с
+ * неподходящего интерфейса. */
 
-/* Файлы читаются по HTTP GET — общим обработчиком-ловушкой, а меняются только через
- * WebSocket-сервисы sys.file.* — HTTP-методов /upload/…, /delete/… и /rename/…
- * больше нет. */
+/* Файлы читаются по HTTP GET — общим обработчиком-ловушкой, а меняются только
+ * через WebSocket-сервисы sys.file.*. Прошивка по HTTP больше не принимается:
+ * её принимает служба sys.fw.* (apih_fw.c). */
 extern httpd_uri_t file_server;
-extern httpd_uri_t ota_update;
 extern httpd_uri_t modbus_alias;
 extern httpd_uri_t config_page;
 extern httpd_uri_t config_page_html;
@@ -109,13 +109,26 @@ typedef struct {
      * (все нули — «как с завода»); mac_sta_factory/mac_ap_factory — заводские
      * значения из eFuse, прочитанные до первого esp_wifi_set_mac. Драйвер
      * принимает новый MAC только на остановленном интерфейсе, поэтому смена
-     * действует со следующей перезагрузки (см. wifi_init_ap_sta). */
+     * действует со следующей перезагрузки (см. net_wifi_init). */
     uint8_t mac_sta[6];
     uint8_t mac_ap[6];
     uint8_t mac_sta_factory[6];
     uint8_t mac_ap_factory[6];
-    httpd_handle_t web_server;
-    httpd_handle_t ws_server;
+    /* Веб-серверы интерфейсов: объект на интерфейс, по одному на точку доступа и
+     * станцию. Сокетный слой (web_httpd.c) у них общий — httpd на порт. */
+    web_server_t *web_ap;
+    web_server_t *web_sta;
+#ifdef CONFIG_QEMU_BUILD
+    /* В сборке для QEMU единственный сетевой интерфейс — проводной. */
+    web_server_t *web_eth;
+#endif
+    /* Ядра API этого приложения — по одному на транспорт (точка доступа и
+     * станция). Дескрипторы заводит app_main, а сервисы регистрируют на
+     * КОНКРЕТНОМ ядре свои обработчики FID: запрос приходит вызовом обработчика,
+     * ответ уходит из обработчика через дескриптор вызова (api_reply и
+     * api_broadcast) — очередей у ядра нет. */
+    api_t *api_ap;
+    api_t *api_sta;
     struct {
       uint32_t raw_sent_ts;
       struct app_uart_t {
@@ -125,9 +138,6 @@ typedef struct {
       } port[2];
     } uart;
 } app_context_t;
-
-void ws_server_init(void);
-httpd_uri_t *ws_transport_httpd_init(char *uri);
 
 /*==========================*/
 
@@ -146,18 +156,16 @@ uint8_t wifi_mac_valid(const uint8_t *mac);
 void wifi_ap_credentials_default(char *ssid, size_t ssid_size, char *pass, size_t pass_size);
 /* Empty password means an open network; WPA2 needs 8..63 characters. */
 uint8_t wifi_password_valid(const char *pass);
-/* Number of stations currently associated with the softAP (0 when AP is off). */
-uint8_t wifi_ap_clients_count(void);
+/* Поднимает сеть прибора в порядке, заданном сборкой (connection.c): учёт
+ * соединений и скан подписываются на события драйвера, затем Wi-Fi (в сборке для
+ * QEMU — проводной интерфейс), затем адреса интерфейсов. */
+void net_init(app_context_t *app);
 /* Applies the IPv4 settings of both interfaces (station and access point).
  * Called once after Wi-Fi init and whenever the configuration page changes
  * them; falls back to DHCP/esp_netif defaults where nothing is configured. */
 void net_apply_config(const app_context_t *app);
 /* Persists the IPv4 settings in NVS */
 void net_save_config(const app_context_t *app);
-/* Parses "a.b.c.d" into network byte order; 0 on success */
-uint8_t net_parse_ip4(const char *str, uint32_t *out);
-/* Formats an address into out, "—" when unset */
-void net_format_ip4(uint32_t ip, char *out, size_t out_size);
 
 /*==========================*/
 
@@ -169,7 +177,9 @@ void net_format_ip4(uint32_t ip, char *out, size_t out_size);
  *   wifi.ap    GET/SET AP credentials — a write is accepted only while exactly
  *              one station is associated with the softAP (see below)
  *   sys.info   GET device status: MACs, IPs, AP client count, heap, filesystem
- *   sys.reboot reboot the gateway after the response has been delivered
+ *   sys.reboot reboot the gateway after the response has been delivered; the
+ *              HTTP policy allows it from any interface, so the station core
+ *              registers it with a writable context too
  *   sys.files  GET LittleFS file listing
  *   sys.file.write  PUT a file in chunks: PATH, OFFSET, DATA (base64), LAST —
  *              written to a temporary file and renamed over the target on LAST
@@ -183,10 +193,23 @@ void net_format_ip4(uint32_t ip, char *out, size_t out_size);
  *   wifi.scan  GET the list of networks around (SSID, RSSI, channel, security);
  *              a helper for filling the SSID field — credentials are still typed
  *              by hand
+ *   sys.fw.begin  PUT start a firmware upload: SIZE (bytes) — the next OTA
+ *              partition is erased and an OTA session is opened; the answer
+ *              carries SESSION:1
+ *   sys.fw.write  PUT one chunk: SEQ (strictly the next chunk number) and DATA
+ *              (base64); the answer carries the number of bytes accepted so far
+ *              (WRITTEN). The call stays open until the next chunk is asked for,
+ *              which is how the service detects a stalled upload
+ *   sys.fw.end    PUT verify and boot: MD5 (optional, 32 hex digits of the image
+ *              itself), then esp_ota_end + set_boot_partition + reboot
+ *   sys.fw.abort  PUT drop the upload opened by sys.fw.begin
+ *   Прошивка (sys.fw.*) зарегистрирована ТОЛЬКО на AP-ядре (apih_fw.c), и
+ *   порция принимается, только пока на точке доступа ровно один клиент.
  *
- * Файловый менеджер (sys.files и sys.file.*) оказывается только точке доступа:
- * раньше это была та же граница у HTTP-методов /upload/…, /delete/…, /rename/…,
- * которые эти сервисы заменили. */
+ * Сервисы регистрируются на КОНКРЕТНОМ ядре (см. api.h): «только точка доступа»
+ * — это регистрация на AP-ядре, а не маска интерфейсов. Файловый менеджер
+ * (sys.files и sys.file.*) и echo есть на обоих ядрах одинаково — они доступны
+ * с любого интерфейса. */
 #define ESP_WS_API_SYS_WIFI_STA      "wifi.sta"
 #define ESP_WS_API_SYS_WIFI_AP       "wifi.ap"
 #define ESP_WS_API_SYS_INFO          "sys.info"
@@ -197,10 +220,15 @@ void net_format_ip4(uint32_t ip, char *out, size_t out_size);
 #define ESP_WS_API_SYS_FILE_RENAME   "sys.file.rename"
 #define ESP_WS_API_SYS_FILE_MKDIR    "sys.file.mkdir"
 #define ESP_WS_API_SYS_FILE_RMDIR    "sys.file.rmdir"
+#define ESP_WS_API_SYS_FW_BEGIN      "sys.fw.begin"
+#define ESP_WS_API_SYS_FW_WRITE      "sys.fw.write"
+#define ESP_WS_API_SYS_FW_END        "sys.fw.end"
+#define ESP_WS_API_SYS_FW_ABORT      "sys.fw.abort"
 #define ESP_WS_API_SYS_NET           "sys.net"
 #define ESP_WS_API_SYS_WIFI_MAC      "wifi.mac"
 #define ESP_WS_API_SYS_WIFI_SCAN     "wifi.scan"
-/* Registers the system FID queue and starts the task serving it */
+/* Регистрирует обработчики системных FID на обоих ядрах (задачи у службы нет:
+ * их зовёт такт ядра, который крутит задача приложения) */
 esp_err_t api_sys_run(app_context_t *app);
 
 #define ESP_WS_API_UART1_CNF         "uart1.config"
@@ -217,8 +245,6 @@ esp_err_t ws_uart_run(app_context_t *app);
 #define ESP_WS_API_UART1_MODBUS_REQ  "uart1.modbus"
 #define ESP_WS_API_UART2_MODBUS_REQ  "uart2.modbus"
 esp_err_t ws_modbus_run(app_context_t *app);
-
-void *get_ws_worker_queue(void);
 
 #ifdef __cplusplus
 }

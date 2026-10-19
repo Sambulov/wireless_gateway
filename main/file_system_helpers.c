@@ -7,7 +7,6 @@
 #include <sys/stat.h>
 #include "esp_netif.h"
 #include "esp_eth.h"
-#include "ws_api.h"
 #include "esp_littlefs.h"
 
 #include <esp_http_server.h>
