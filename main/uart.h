@@ -38,9 +38,11 @@ typedef enum {
 
 typedef enum {
   GW_UART_PORT_0 = 0,
-  GW_UART_PORT_1 = 1, /* unsupported */
+  GW_UART_PORT_1 = 1,
   GW_UART_PORT_2 = 2,
 } gw_uart_port_t;
+
+#include "board_config.h"
 
 #define GW_UART_PRIVATE(size)    uint32_t __private[(size + sizeof(void *) - 1) >> 2]
 
@@ -68,6 +70,18 @@ typedef struct {
  * то есть кадр считается законченным на любой скорости без настройки. */
 #define GW_UART_IDLE_CH_DEFAULT   4
 
+/* Кольца драйвера порта: приём и передача. Это КУЧА (их выделяет драйвер), и
+ * они выделяются на каждый порт сразу и навсегда — поэтому размер выбран по
+ * скорости линии, а не «побольше»:
+ *   - приём 2048 — почти два кадра по 115200 бод (11520 Б/с = 864 Б за кадр);
+ *     задача приёма забирает данные в своё кольцо сразу, так что 2048 — запас
+ *     на десятки миллисекунд задержки задачи;
+ *   - передача 2048 — в неё укладывается любая посылка сервиса (настройки,
+ *     запрос регистров — десятки байт), и запись не ждёт линию.
+ * Было 4096+4096 на порт: три порта съедали 24 КБ кучи вместо 12 КБ. */
+#define GW_UART_RX_RING   2048
+#define GW_UART_TX_RING   2048
+
 extern const gw_uart_config_t gw_uart_config_default;
 
 typedef struct {
@@ -86,6 +100,7 @@ typedef struct {
 } gw_uart_event_data_t;
 
 uint8_t gw_uart_init(void *desc, gw_uart_port_t port, uint32_t buffer_size);
+
 int32_t gw_uart_read(void *desc, uint8_t *buf, uint16_t size);
 int32_t gw_uart_write(void *desc, const uint8_t *buf, uint16_t size);
 uint8_t gw_uart_set(void *desc, const gw_uart_config_t *cnf);

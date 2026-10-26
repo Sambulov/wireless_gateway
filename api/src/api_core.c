@@ -389,6 +389,10 @@ static void send_to_session(api_private_t *core, api_call_t *sub, api_data_t *re
     *res = api_transport_iface(core)->begin_send(sub->session->self, resp->payload, resp->len);
     api_log(core, API_LOG_DEBUG, "Api call %lu json sending with result: %d", sub->id, *res);
     if(*res != TRANSPORT_OK) {
+        /* Кадр не ушёл — клиент его не увидит. Молчать об этом нельзя: снаружи
+         * это «данные пропали», и искать причину будет негде. */
+        api_log(core, API_LOG_WARN, "send of call %lu (%lu B) failed: result %d",
+                sub->id, (unsigned long)resp->len, (int)*res);
         /* Транспорт отправку не принял — события не будет, освобождаем сами. */
         if((!resp->counter) || !(--resp->counter))
             free(resp);
@@ -422,9 +426,15 @@ static uint8_t api_dispatch(api_private_t *core, api_call_t *call,
 
     if(targets == 0) {
         /* Рассылать некому: подписчиков этого FID сейчас нет (вызов снят,
-         * соединение закрыто или подписка ещё не зарегистрирована). Молчать об
-         * этом нельзя — снаружи это выглядит как «данные пропали». */
-        api_log(core, API_LOG_INFO, "broadcast %s: подписчиков нет, кадр (%lu Б) не отправлен",
+         * соединение закрыто или подписка ещё не зарегистрирована).
+         *
+         * Уровень — DEBUG, а не INFO: «подписчиков нет» — ОБЫЧНОЕ состояние
+         * (периферия отдаёт кадр на каждое событие линии, а слушателей у неё
+         * может не быть вовсе), и на потоке кадров эта запись шла в консоль по
+         * строке на кадр. Вывод на консоль синхронный, 115200 бод: задача такта
+         * блокировалась на единицы миллисекунд на кадр, переставала успевать за
+         * линией, и кольцо приёма наполнялось. */
+        api_log(core, API_LOG_DEBUG, "broadcast %s: подписчиков нет, кадр (%lu Б) не отправлен",
                 group_name ? group_name : "-", (unsigned long)data_len);
         api_unlock(core);
         return 0;
@@ -919,6 +929,12 @@ static uint8_t *api_call_arg(const api_call_t *call) {
 }
 
 static void api_worker_step(api_private_t *core) {
+        /* −1. Такт транспорту: он вправе отдать то, что принял, здесь — в задаче
+         * приложения (её стек 8 КБ), а не в задаче веб-сервера, где разбор
+         * сообщения оставлял 360 байт из 4096 (замерено на приборе). */
+        const transport_iface_t *iface = api_transport_iface(core);
+        if(iface->poll != NULL) iface->poll(transport_self(core));
+
         /* 0. Такт работы: обработчики получают возможность сделать своё
          * периодическое дело, не блокируя ядро */
         api_work_cycle(core);

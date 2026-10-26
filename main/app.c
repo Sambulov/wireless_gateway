@@ -106,10 +106,23 @@ static api_system_t app_api_system = {
 static void api_worker_task(void *param)
 {
     app_context_t *app = param;
+    /* ВРЕМЕННО (замер): сколько тактов в секунду и сколько длится самый долгий. */
+    TickType_t stat_win = xTaskGetTickCount();
+    uint32_t stat_n = 0, stat_max = 0;
 
     for (;;) {
+        TickType_t t0 = xTaskGetTickCount();
         api_worker(app->api_ap);
         api_worker(app->api_sta);
+        uint32_t dur = (uint32_t)(xTaskGetTickCount() - t0);
+        if(dur > stat_max) stat_max = dur;
+        stat_n++;
+        TickType_t now = xTaskGetTickCount();
+        if((uint32_t)(now - stat_win) >= 1000) {
+            ESP_LOGW("stat", "тактов/с: %lu, самый долгий: %lu мс",
+                     (unsigned long)stat_n, (unsigned long)stat_max);
+            stat_n = 0; stat_max = 0; stat_win = now;
+        }
         platform_delay_ms(API_WORK_PERIOD_MS);
     }
 }
@@ -184,9 +197,11 @@ void app_main(void)
     gpio_set_direction(LED_D2_GPIO, GPIO_MODE_OUTPUT);
 
     /* system HW */
-    if(gw_uart_init(&(app_context.uart.port[0].desc) , GW_UART_PORT_0, 2048))
+    if(gw_uart_init(&(app_context.uart.port[0].desc) , GW_UART_PORT_0, GW_UART_RX_RING))
         ESP_LOGI("app", "Uart0 ok");
-    if(gw_uart_init(&(app_context.uart.port[1].desc), GW_UART_PORT_2, 2048))
+    if(gw_uart_init(&(app_context.uart.port[1].desc), GW_UART_PORT_1, GW_UART_RX_RING))
+        ESP_LOGI("app", "Uart1 ok");
+    if(gw_uart_init(&(app_context.uart.port[2].desc), GW_UART_PORT_2, GW_UART_RX_RING))
         ESP_LOGI("app", "Uart2 ok");
 
     setup_littlefs();
@@ -312,7 +327,8 @@ void app_main(void)
             led_state ^= 1;
             gpio_set_level(LED_D2_GPIO, led_state);
         }
-        /* give other tasks to work, also idle task to reset wdt */
-        task_delay(1);
+        /* Отдать процессор остальным задачам и холостой задаче (сброс WDT).
+         * Один тик FreeRTOS — в миллисекундах, как их понимает платформа. */
+        platform_delay_ms(platform_ticks_to_ms(1));
     }
 }

@@ -29,7 +29,12 @@ typedef int esp_err_t;
 #define ESP_LOGI(tag, fmt, ...) platform_log_i(tag, fmt, ##__VA_ARGS__)
 #define ESP_LOGD(tag, fmt, ...) platform_log_d(tag, fmt, ##__VA_ARGS__)
 
-/* FID names (kept in sync with the real app.h) */
+/* FID names (kept in sync with the real app.h). Нумерация аппаратная:
+ * uart0 — консоль, uart1 — свободный порт, uart2 — RS-485. */
+#define ESP_WS_API_UART0_CNF         "uart0.config"
+#define ESP_WS_API_UART0_RAW_RX      "uart0.rx"
+#define ESP_WS_API_UART0_RAW_TX      "uart0.tx"
+#define ESP_WS_API_UART0_ECHO        "uart0.echo"
 #define ESP_WS_API_UART1_CNF         "uart1.config"
 #define ESP_WS_API_UART1_RAW_RX      "uart1.rx"
 #define ESP_WS_API_UART1_RAW_TX      "uart1.tx"
@@ -58,7 +63,7 @@ typedef struct {
             gw_uart_t        desc;
             gw_uart_config_t cnf;
             void            *proto_context;
-        } port[2];
+        } port[3];   /* по аппаратным номерам: uart0, uart1, uart2 */
     } uart;
 } app_context_t;
 

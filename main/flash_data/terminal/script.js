@@ -25,6 +25,20 @@ class ESP32Terminal {
          * от устройства, чтобы заметить чужое вмешательство. */
         this.applied = null;
         this.cfgSid = Math.floor(Math.random() * 0xffff) + 1;
+        /* Признак жизни и автопереподключение: сон ПК или потеря Wi-Fi рвут
+         * сокет, и страница возвращает сессию сама. */
+        this.KEEPALIVE_MS = 20000;
+        this.KEEPALIVE_TIMEOUT_MS = 5000;
+        /* Паузы переподключения. Прибор один и обслуживает всех клиентов
+         * одной очередью отправки: мгновенное переподключение после неудачи
+         * возвращается к нему сразу же и снова занимает его. Поэтому пауза
+         * растёт, а после удачного открытия снова минимальна. */
+        this.RECONNECT_STEPS_MS = [1000, 2000, 5000, 10000, 20000];
+        this.reconnectAttempt = 0;
+        this.keepAliveTimer = null;
+        this.keepAlivePending = false;
+        this.wantConnected = false;
+        this.reconnecting = false;
         this.initTerminal();
         this.bindEvents();
         this.loadSettings();
@@ -87,8 +101,15 @@ class ESP32Terminal {
     }
 
     bindEvents() {
+        this.renderConnectButton(false);
         document.getElementById('connect-btn').addEventListener('click', () => {
-            this.isConnected ? this.disconnect('отключено пользователем') : this.connect();
+            if (this.isConnected) {
+                this.wantConnected = false;
+                this.disconnect('отключено пользователем');
+            } else {
+                this.wantConnected = true;
+                this.connect();
+            }
         });
 
         // Кнопка местного эха: только показ набранного, к прибору не относится
@@ -105,6 +126,27 @@ class ESP32Terminal {
         document.getElementById('port-sel').addEventListener('change', () => {
             this.port = parseInt(document.getElementById('port-sel').value, 10) || 2;
             this.showChannel();
+        });
+
+        /* После сна ПК или пропажи сети соединение обычно уже мертво, но
+         * страница об этом не знает: проверяем при возврате вкладки и сети.
+         *
+         * Свёрнутую вкладку НЕ отключаем: сеанс продолжается, данные порта
+         * продолжают приходить и копятся в терминале. Пока вкладка скрыта,
+         * браузер замораживает её и не вычитывает сокет — прибор это терпит,
+         * кадры для такого клиента он отбрасывает, а не рвёт сеанс. */
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState !== 'visible') return;
+            if (!this.wantConnected || this.reconnecting) return;
+            /* Вернулись — пауза снова минимальная: столько ждать незачем. */
+            this.reconnectAttempt = 0;
+            if (!this.socket || this.socket.readyState !== WebSocket.OPEN)
+                this.reconnect();
+            else if (this.keepAlivePending)
+                this.reconnect();
+        });
+        window.addEventListener('online', () => {
+            if (this.wantConnected) this.reconnect();
         });
 
         window.addEventListener('resize', () => {
@@ -218,6 +260,61 @@ class ESP32Terminal {
 
     /* ── подключение ─────────────────────────────────────────────────────── */
 
+    /* Признак жизни: раз в KEEPALIVE_MS спрашиваем sys.info. Ответ приходит —
+     * сессия жива; нет ответа за KEEPALIVE_TIMEOUT_MS — считаем связь мёртвой
+     * (полуоткрытый сокет после сна ПК так и выглядит) и переподключаемся. */
+    startKeepAlive() {
+        this.stopKeepAlive();
+        this.keepAliveTimer = setInterval(() => {
+            if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return;
+            if (this.keepAlivePending) {
+                this.setState('связь не отвечает', 'err');
+                this.reconnect();
+                return;
+            }
+            this.keepAlivePending = true;
+            this.socket.send(JSON.stringify({
+                FID: 'sys.info', SID: Math.floor(Math.random() * 0xffff) + 1, FLAGS: 0,
+            }));
+            setTimeout(() => { this.keepAlivePending = false; }, this.KEEPALIVE_TIMEOUT_MS);
+        }, this.KEEPALIVE_MS);
+    }
+
+    stopKeepAlive() {
+        if (this.keepAliveTimer) {
+            clearInterval(this.keepAliveTimer);
+            this.keepAliveTimer = null;
+        }
+        this.keepAlivePending = false;
+    }
+
+    /* Переподключение после сна ПК или потери сети: страница сама возвращает
+     * сессию, пользователю не надо жать кнопку. */
+    reconnect() {
+        if (this.reconnecting || !this.wantConnected) return;
+        this.reconnecting = true;
+        this.disconnect('связь пропала, переподключаюсь');
+        this.wantConnected = true;
+        const step = Math.min(this.reconnectAttempt,
+                              this.RECONNECT_STEPS_MS.length - 1);
+        const delay = this.RECONNECT_STEPS_MS[step];
+        this.reconnectAttempt++;
+        setTimeout(() => {
+            this.reconnecting = false;
+            if (this.wantConnected && !this.isConnected) this.connect();
+        }, delay);
+    }
+
+    /* Кнопка подключения: зелёная «Подключиться», пока связи нет, и красная
+     * «Отключиться», когда она есть. Подпись и цвет всегда меняются вместе —
+     * поэтому одним методом, а не по местам вызовов. */
+    renderConnectButton(connected) {
+        const btn = document.getElementById('connect-btn');
+        if (!btn) return;
+        btn.textContent = connected ? 'Отключиться' : 'Подключиться';
+        btn.classList.toggle('connected', !!connected);
+    }
+
     async connect() {
         /* Адрес не спрашиваем: страница открыта с прибора, значит и WebSocket
          * на нём же (порт 81 — CONFIG_WEB_SOCKET_SERVER_PORT). */
@@ -231,6 +328,7 @@ class ESP32Terminal {
 
             this.socket.onopen = () => {
                 this.isConnected = true;
+                this.reconnectAttempt = 0;   /* связь есть — пауза минимальная */
                 this.setState('подключено', 'ok');
                 this.setSettingsEnabled(false);
 
@@ -241,27 +339,35 @@ class ESP32Terminal {
                 this.applyConfig(cfg);
                 this.registerClient();
                 this.subscribeConfig();
+                this.startKeepAlive();
             };
 
             this.socket.onmessage = (event) => {
                 this.handleWebSocketMessage(event.data);
             };
 
-            this.socket.onclose = () => {
+            this.socket.onclose = (event) => {
                 const wasConnected = this.isConnected;
                 this.isConnected = false;
                 this.isRegistered = false;
                 this.subscriptionSid = null;
                 this.configSid = null;
                 this.setSettingsEnabled(true);
-                document.getElementById('connect-btn').textContent = 'Подключиться';
+                this.renderConnectButton(false);
                 if (this.closing) {          /* причину уже написали в disconnect() */
                     this.closing = false;
                 } else if (wasConnected) {
-                    this.setState('связь оборвана', 'err');
+                    /* Код 1006 — «связь пропала без закрытия»: так выглядит и
+                     * уход ПК в сон, и потеря Wi-Fi. Остальные коды присылает
+                     * прибор, и по ним видно, закрыл он сессию или нет. */
+                    const why = event.code === 1006 ? 'связь пропала (сон ПК/сеть)'
+                                                    : `закрыто прибором (код ${event.code})`;
+                    this.setState(`отключено: ${why}`, 'err');
+                    console.warn('WebSocket закрыт:', event.code, event.reason || '');
                 } else {
                     this.setState('отключено', '');
                 }
+                this.stopKeepAlive();
             };
 
             /* У события error нет внятного текста, и приходит оно в том числе
@@ -323,6 +429,7 @@ class ESP32Terminal {
         /* Причину отключения пишем мы, а не обработчик закрытия: иначе оно
          * затрёт её своим «связь оборвана». */
         this.closing = true;
+        this.stopKeepAlive();
         clearTimeout(this.resubscribeTimer);
         this.sendDelete(this.fid('rx'), this.subscriptionSid);
         this.sendDelete(this.fid('config'), this.configSid);
@@ -335,7 +442,7 @@ class ESP32Terminal {
         this.subscriptionSid = null;
         this.configSid = null;
         this.setSettingsEnabled(true);
-        document.getElementById('connect-btn').textContent = 'Подключиться';
+        this.renderConnectButton(false);
         this.setState(reason || 'отключено', reason ? 'err' : '');
     }
 
@@ -361,7 +468,7 @@ class ESP32Terminal {
                 if (packet.ARG.STA === "0x00000005") {
                     this.isRegistered = true;
                     clearTimeout(this.resubscribeTimer);
-                    document.getElementById('connect-btn').textContent = 'Отключиться';
+                    this.renderConnectButton(true);
                 } else if (this.isRegistered) {
                     this.processUARTData(packet.ARG);
                 }

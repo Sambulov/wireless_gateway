@@ -168,22 +168,16 @@ static void uart_event_task(void *pvParameters) {
             }
             break;
         }
-        //Event of HW FIFO overflow detected
+        /* Переполнение приёма. Кольцо драйвера уже потеряло байты — но то, что в
+         * нём лежит, отдавать всё равно надо: uart_flush_input() выбросил бы и
+         * его, то есть потери выросли бы с «сколько не влезло» до «всё, что не
+         * успели прочитать». Поэтому только громкое предупреждение: молчаливая
+         * потеря данных — худшее из возможного. */
         case UART_FIFO_OVF:
-            ESP_LOGI(TAG, "hw fifo overflow");
-            // If fifo overflow happened, you should consider adding flow control for your application.
-            // The ISR has already reset the rx FIFO,
-            // As an example, we directly flush the rx buffer here in order to read more data.
-            uart_flush_input(uart->port);
-            xQueueReset(uart->uart_queue);
+            ESP_LOGW(TAG, "hw fifo overflow: часть принятого потеряна");
             break;
-        //Event of UART ring buffer full
         case UART_BUFFER_FULL:
-            ESP_LOGI(TAG, "ring buffer full");
-            // If buffer full happened, you should consider increasing your buffer size
-            // As an example, we directly flush the rx buffer here in order to read more data.
-            uart_flush_input(uart->port);
-            xQueueReset(uart->uart_queue);
+            ESP_LOGW(TAG, "ring buffer full: часть принятого потеряна");
             break;
         //Event of UART RX break detected
         case UART_BREAK:
@@ -332,6 +326,20 @@ uint8_t gw_uart_set(void *desc, const gw_uart_config_t *cnf) {
     return 1;
 }
 
+/* Вывод годится под UART? 6..11 заняты flash, 34..39 только вход. */
+static uint8_t uart_pin_ok(int8_t pin, uint8_t output)
+{
+    if (pin == GW_UART_PIN_NONE)
+        return 1;
+    if (pin < 0 || pin > 39)
+        return 0;
+    if (pin >= 6 && pin <= 11)
+        return 0;                        /* SPI-flash */
+    if (output && pin >= 34 && pin <= 39)
+        return 0;                        /* только вход */
+    return 1;
+}
+
 uint8_t gw_uart_init(void *desc, gw_uart_port_t port, uint32_t buffer_size) {
     gw_uart_private_t *uart = (gw_uart_private_t *) desc;
     switch (port) {
@@ -349,28 +357,34 @@ uint8_t gw_uart_init(void *desc, gw_uart_port_t port, uint32_t buffer_size) {
     if (uart->port == UART_NUM_2)
         cnf.mode = GW_UART_MODE_RS485_HALF_DUPLEX;
     uint8_t result = gw_uart_set(desc, &cnf);
-    int rxp, txp, rts, cts = UART_PIN_NO_CHANGE;
-    /*  
-    UART0      RX TX RTS CTS
-    UART_NUM_0  3  1  22  19
-    UART_NUM_1  9 10  11   6
-    UART_NUM_2 16 17   7   8
-    */
-    switch(uart->port) {
-        case UART_NUM_0: rxp = 3; txp = 1; rts = 22; break;
-        case UART_NUM_2: rxp = 16; txp = 17; rts = 18; break;
-        case UART_NUM_1: rxp = 9; txp = 10; rts = 11; /* GPIO6 to GPIO11 connected to flash */
-        /* fall through */
-        default: return 0;
+    int rxp, txp, rtsp;
+    int cts = UART_PIN_NO_CHANGE;
+
+    if (uart->port < 0 || uart->port > 2)
+        return 0;
+    /* Пины — из конфигурации платы (main/board_config.h). */
+    txp  = BOARD_UART_TX(uart->port);
+    rxp  = BOARD_UART_RX(uart->port);
+    rtsp = BOARD_UART_RTS(uart->port);
+    if (!uart_pin_ok((int8_t)txp, 1) || !uart_pin_ok((int8_t)rxp, 0)
+        || !uart_pin_ok((int8_t)rtsp, 1)) {
+        ESP_LOGE(TAG, "UART %d: недопустимые пины TX=%d RX=%d RTS=%d", uart->port, txp, rxp, rtsp);
+        return 0;
     }
-    result = result && (uart_set_pin(uart->port, txp, rxp, rts, cts) == ESP_OK);
-    result = result && (uart_driver_install(port, buffer_size, buffer_size, 10, &uart->uart_queue, 0) == ESP_OK);
+    result = result && (uart_set_pin(uart->port, txp, rxp, rtsp, cts) == ESP_OK);
+    /* Приём и передача — РАЗНЫЕ кольца: размер приёма задаёт вызывающий (наш
+     * накопитель кадра), размер передачи фиксирован (см. uart.h). */
+    result = result && (uart_driver_install(port, buffer_size, GW_UART_TX_RING, 10,
+                                            &uart->uart_queue, 0) == ESP_OK);
     result = result && (uart_set_mode(uart->port, uart_mode_idf((gw_uart_mode_t)uart->mode)) == ESP_OK);
     /* Порог «линия молчит» — таймаут приёма драйвера: по нему приходит признак
      * конца кадра (см. gw_uart_event_data_t::b_end). */
     result = result && (uart_set_rx_timeout(uart->port,
                         uart_idle_symbols(uart_idle_chars[uart->port])) == ESP_OK);
-    result = result && (xTaskCreate(uart_event_task, "uart_event", 4096, uart, tskIDLE_PRIORITY + 4, NULL) == pdPASS);
+    /* Стек задачи приёма: она только копирует принятое в кольцо сервиса и
+     * поднимает событие — 3072 хватает с запасом (было 4096, три порта = 12 КБ
+     * вместо 9). */
+    result = result && (xTaskCreate(uart_event_task, "uart_event", 3072, uart, tskIDLE_PRIORITY + 4, NULL) == pdPASS);
     if(result)
         ESP_LOGI(TAG, "UART port %d init OK", uart->port);
     return result;

@@ -387,6 +387,15 @@ uint8_t web_server_session_close(web_server_t *srv, int fd) {
     return closed;
 }
 
+int web_server_write(web_server_t *srv, int fd, const char *buf, size_t len,
+                     uint32_t stall_ms) {
+    if ((srv == NULL) || (srv->ports[WEB_ROUTE_WS] == NULL)) {
+        ESP_LOGW(TAG, "write: нет порта WS (srv=%p fd=%d len=%u)", (void *)srv, fd, (unsigned)len);
+        return -1;
+    }
+    return web_httpd_write(srv->ports[WEB_ROUTE_WS], fd, buf, len, stall_ms);
+}
+
 esp_err_t web_server_send_ws(web_server_t *srv, int fd, httpd_ws_frame_t *frame,
                              transfer_complete_cb done, void *arg) {
     if ((srv == NULL) || (srv->ports[WEB_ROUTE_WS] == NULL))

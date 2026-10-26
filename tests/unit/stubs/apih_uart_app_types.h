@@ -19,7 +19,12 @@ typedef int esp_err_t;
 #define TAG_SX(x) TAG_S(x)
 #define TAG  TAG_SX(__FILE__) " " TAG_SX(__LINE__)
 
-/* FID names (kept in sync with the real app.h) */
+/* FID names (kept in sync with the real app.h). Нумерация аппаратная:
+ * uart0 — консоль, uart1 — свободный порт, uart2 — RS-485. */
+#define ESP_WS_API_UART0_CNF         "uart0.config"
+#define ESP_WS_API_UART0_RAW_RX      "uart0.rx"
+#define ESP_WS_API_UART0_RAW_TX      "uart0.tx"
+#define ESP_WS_API_UART0_ECHO        "uart0.echo"
 #define ESP_WS_API_UART1_CNF         "uart1.config"
 #define ESP_WS_API_UART1_RAW_RX      "uart1.rx"
 #define ESP_WS_API_UART1_RAW_TX      "uart1.tx"
@@ -28,6 +33,9 @@ typedef int esp_err_t;
 #define ESP_WS_API_UART2_RAW_RX      "uart2.rx"
 #define ESP_WS_API_UART2_RAW_TX      "uart2.tx"
 #define ESP_WS_API_UART2_ECHO        "uart2.echo"
+#define ESP_WS_API_UART0_MODBUS_REQ  "uart0.modbus"
+#define ESP_WS_API_UART1_MODBUS_REQ  "uart1.modbus"
+#define ESP_WS_API_UART2_MODBUS_REQ  "uart2.modbus"
 
 typedef struct {
     /* Ядра API теста: сервис берёт их отсюда, как и в прошивке (app.c).

@@ -10,7 +10,7 @@
 #define UART_ARG_MAX_TOKENS 16
 #include "api.h"
 #include "platform.h"
-#include "uart_rxbuf.h"
+#include "seg_ring.h"
 
 typedef struct {
     __linked_list_object__
@@ -80,19 +80,30 @@ typedef struct {
 
 /* По контексту на каждую пару «порт × действие». Контексты общие для обоих ядер:
  * обработчик их только читает, а состояние порта (кольцо приёма) и так общее. */
-static uart_handler_ctx_t uart_handler_ctx[2][UART_ACT_COUNT];
+/* Портов теперь три — по аппаратным номерам: uart0 (консоль), uart1, uart2. */
+#define UART_PORTS 3
+static uart_handler_ctx_t uart_handler_ctx[UART_PORTS][UART_ACT_COUNT];
 
-/* Замок СБОРКИ КАДРА — один на оба порта: буферы base64, снимок куска и буфер
- * кадра статические и общие. Собирать кадр могут две задачи: задача приложения
- * (обработчик FID в такте ядра) и задача событий UART (приём пришёл сам).
- * Прядок захвата везде один — сначала этот замок, потом замок порта, — поэтому
- * двойного захвата в обратном порядке не бывает. */
-static platform_mutex_t uart_frame_lock;
+
+/* Порт, чей кадр приёма транспорт не принял (его рабочая очередь полна). Кадр
+ * остаётся собранным в uart_raw_buf и повторяется на следующем такте: данные из
+ * кольца уже забраны, и потерять их молча — худший из вариантов. -1 — нечего
+ * повторять. */
+static int8_t   uart_rx_pending_port = -1;
+static uint16_t uart_rx_pending_len;     /* длина отложенного кадра */
+static uint8_t  uart_rx_pending_tries;   /* сколько раз уже пробовали отправить */
+
+/* Сколько тактов удерживаем отложенный кадр. Транспорт, не принявший кадр за
+ * столько попыток, не примет его и дальше (клиент ушёл или связь встала), а
+ * держать кадр вечно нельзя: пока он в буфере, порт не отдаёт НИЧЕГО — так
+ * терминал «просто перестаёт работать» до перезагрузки. */
+#define UART_RX_PENDING_TRIES_MAX 20
+
 
 typedef struct {
-    /* Кольцо приёма: куски [метка][данные] с границами передач (см. uart_rxbuf.h).
+    /* Кольцо приёма: сегменты [метка][данные] с границами передач (см. seg_ring.h).
      * Само кольцо (массив байт) — статический буфер этого файла, дескриптор здесь. */
-    gw_uart_rxbuf_t rxbuf;
+    gw_seg_ring_t ring;
     uint8_t *storage;
     uint16_t storage_size;
     platform_mutex_t lock;
@@ -108,21 +119,33 @@ typedef struct {
  * Смысл — не гнать по кадру на каждый байт (эхо набора в терминале давало 38
  * кадров на одну набранную строку, и рабочая очередь httpd захлёбывалась).
  *
- * Размер накопителя выбран от предельной скорости порта: 500000 бод — это
- * 50000 Б/с, то есть 3750 байт за 75 мс. 4096 > 3750 — при таком темпе терять
- * нечего. */
+ * Размер накопителя выбран от скорости порта: 115200 бод — это 11520 Б/с, то
+ * есть 864 байта за 75 мс; 2048 — вдвое с лишним больше, а кадр такого размера
+ * (в base64 ~2,7 КБ) уходит одним сообщением. Накопитель — это же и размер
+ * кадра, и размер кольца порта: держать больше незачем, а память он занимает
+ * сразу и навсегда (см. uart{0,1,2}_buf).
+ *
+ * Проверка на приборе: непрерывный поток 115200 бод с двух портов одновременно,
+ * подписки с двух интерфейсов — см. local/tools/ws_stream_rate.py. */
 #define UART_RX_FRAME_MS      75
-#define UART_RX_ACC_SIZE      4096
+#define UART_RX_ACC_SIZE      2048
+/* Запас, начиная с которого сборка не ждёт темпа: столько в кольце — значит
+ * сервис отстаёт, и ждать очередных 75 мс нельзя. Четверть кольца — заведомо
+ * больше того, что накапливается за темп при ровном потоке, и заметно меньше
+ * кольца, чтобы потерять было чего. */
+#define UART_RX_DRAIN_LIMIT   (UART_RX_ACC_SIZE / 4)
 #define UART_B64_MAX          (4 * ((UART_RX_ACC_SIZE + 2) / 3))
 
-/* Кадр приёма собирает и отдаёт подписчикам САМА задача приёма порта: это
- * внутреннее дело сервиса, и ядру для этого ничего не нужно — рассылка
- * api_broadcast публичная. Такт ядра тоже может собрать кадр (клиент
- * спросил порт вызовом), поэтому сборка защищена замком сборки — см. uart_rx_flush.
+/* Кадр приёма собирает и отдаёт подписчикам ТАКТ ЯДРА — обработчик подписки в
+ * контексте задачи приложения (см. uart_rx_flush). Задача приёма порта только
+ * складывает байты в кольцо: если бы она ещё и собирала кадр, ей пришлось бы
+ * ждать отправки в транспорт, а приём в это время встал бы — так терялись
+ * данные, которых никто не считал потерянными (переполнение кольца драйвера).
  *
- * Возврат: TRUE — вызов надо повторить (темп кадров ещё не вышел), FALSE —
- * отдавать больше нечего. */
-static uint8_t uart_rx_flush(uart_handler_ctx_t *hc);
+ * Кроме того, сборка из двух задач — это гонка с тактом ядра: рассылка ищет
+ * подписчиков по спискам вызовов, а вызов в этот момент такт как раз
+ * обрабатывает, и кадр уходил «в никуда» с записью «подписчиков нет». Один
+ * отправитель (такт) такой гонки не имеет вовсе. */
 
 static void uart_event_on_rx(void *event_trigger, void *sender, void *context) {
     (void)sender;
@@ -134,21 +157,14 @@ static void uart_event_on_rx(void *event_trigger, void *sender, void *context) {
     /* Кусок кладём в кольцо вместе с признаком «линия замолчала» — по нему
      * читатель видит конец передачи. Признак и границы передач пишутся здесь,
      * в момент приёма, а не при отдаче: отдача может агрегировать сколько угодно
-     * кусков в одно сообщение и ничего при этом не склеивает. */
+     * сегментов в одно сообщение и ничего при этом не склеивает. */
     size_t sz = data->size;
     if (sz > 0xFFFF) sz = 0xFFFF;
     uint16_t taken;
-    platform_mutex_take(uart_frame_lock, PLATFORM_WAIT_FOREVER);
+
     platform_mutex_take(buf_desc->lock, PLATFORM_WAIT_FOREVER);
-    taken = gw_uart_rxbuf_push(&buf_desc->rxbuf, data->buf, (uint16_t)sz,
-                               data->b_end ? 1 : 0);
+    taken = gw_seg_ring_write(&buf_desc->ring, data->buf, (uint16_t)sz, data->b_end);
     platform_mutex_give(buf_desc->lock);
-    /* Кадр уходит сразу, не дожидаясь опроса подписки: иначе вывод упирался бы
-     * в период переспроса (страница просит 50 мс). Ожиданий здесь нет: если темп
-     * кадров ещё не вышел, данные останутся в кольце до следующего куска или
-     * опроса. */
-    (void)uart_rx_flush(&uart_handler_ctx[buf_desc->port][UART_ACT_RX]);
-    platform_mutex_give(uart_frame_lock);
 
     /* Потеря приёма — не молчаливая: о ней должно быть видно в логе, иначе
      * «терминал иногда теряет вывод» выглядит как загадка. */
@@ -192,16 +208,17 @@ static void format_uart_resp(gw_jsonw_t *w, const gw_uart_config_t *cnf)
 	gw_jsonw_int(w, "MODE", cnf->mode);
 	/* Порог простоя линии в знаках: сколько тишины считать концом кадра */
 	gw_jsonw_int(w, "IDLE_CH", cnf->idle_ch);
+
 }
 
+static uint8_t uart0_buf[UART_RX_ACC_SIZE];
 static uint8_t uart1_buf[UART_RX_ACC_SIZE];
 static uint8_t uart2_buf[UART_RX_ACC_SIZE];
 /* Когда с каждого порта ушёл предыдущий кадр — по нему считается темп. */
-static uint32_t uart_rx_frame_tick[2];
-static uint8_t  uart_rx_frame_sent[2];
-static uart_subscription_context_t uart_context[2];
-static delegate_t uart1_delegate;
-static delegate_t uart2_delegate;
+static uint32_t uart_rx_frame_tick[UART_PORTS];
+static uint8_t  uart_rx_frame_sent[UART_PORTS];
+static uart_subscription_context_t uart_context[UART_PORTS];
+static delegate_t uart_delegate[UART_PORTS];
 
 /* Настройки порта: что просили — меняем, остальное (в том числе режим) оставляем
  * как есть. Изменения применяются ТОЛЬКО когда их просили: пустой ARG — это
@@ -275,6 +292,19 @@ static void uart_send_to(void *call, const char *fid, gw_jsonw_t *w)
 	}
 	for (uint8_t i = 0; i < uart_api_num; i++)
 		api_broadcast(uart_apis[i], fid, (const uint8_t *)json, len);
+}
+
+/* Рассылка уже собранного кадра по всем ядрам сервиса. 1 — кадр принял хотя бы
+ * один транспорт (значит, повторять нечего). */
+static uint8_t uart_broadcast_built(const char *fid, const char *json, size_t len)
+{
+	uint8_t sent = 0;
+
+	if (uart_api_num == 0)
+		return 1;                       /* ядер нет: терять некуда */
+	for (uint8_t i = 0; i < uart_api_num; i++)
+		sent |= api_broadcast(uart_apis[i], fid, (const uint8_t *)json, len);
+	return sent;
 }
 
 /* Отвечает тем, что стоит на порту сейчас. Нужен там, где применять нечего:
@@ -369,18 +399,40 @@ static uint8_t parse_uart_params(const uint8_t *data, size_t len,
  * data == NULL — это такт работы, а не запрос клиента: делать по нему что-то
  * есть смысл только приёму (накопленное ждёт темпа). */
 
-/* Кадр приёма: забрать из кольца столько кусков, сколько влезает в один кадр, и
- * разослать подписчикам этого FID на всех ядрах. Мьютексы рекурсивные, поэтому
- * вложенный захват замков (задача приёма уже держит их) безопасен. */
-static uint8_t uart_rx_flush_locked(uart_handler_ctx_t *hc)
+/* Кадр приёма: забрать из кольца столько, сколько влезает в один кадр, и
+ * разослать подписчикам этого FID на всех ядрах.
+ *
+ * Зовётся ТОЛЬКО из такта ядра (задача приложения), поэтому буферы base64 и
+ * снимок куска ни с кем не делятся: задача приёма порта в них не заходит. */
+static uint8_t uart_rx_flush(uart_handler_ctx_t *hc)
 {
 	uart_subscription_context_t *ctx = &uart_context[hc->port];
 	const int port = hc->port;
+	gw_seg_ring_chunk_t probe;
+
+	/* Прошлый кадр транспорт не принял — повторяем его, а не собираем новый:
+	 * данные из кольца уже забраны. Темп здесь не при чём, ждать нечего. */
+	if (uart_rx_pending_port >= 0) {
+		if (uart_rx_pending_port != port)
+			return 1;               /* в буфере кадр другого порта */
+		if (uart_broadcast_built(hc->fid, uart_raw_buf, uart_rx_pending_len)) {
+			uart_rx_pending_port  = -1;
+			uart_rx_pending_tries = 0;
+		} else if (++uart_rx_pending_tries >= UART_RX_PENDING_TRIES_MAX) {
+			/* Транспорт так и не принял. Кадр отпускаем и говорим об этом
+			 * громко: иначе порт замолкает навсегда, а причина не видна. */
+			platform_log_w(TAG, "UART rx: кадр (%u Б) отброшен, транспорт не принял\n",
+				       (unsigned)uart_rx_pending_len);
+			uart_rx_pending_port  = -1;
+			uart_rx_pending_tries = 0;
+		}
+		return 1;
+	}
 
 	/* Есть ли что отдавать — спрашиваем, не дожидаясь: пустой опрос
 	 * (подписка без данных) должен отвечать сразу, а не держать темп. */
 	platform_mutex_take(ctx->lock, PLATFORM_WAIT_FOREVER);
-	uint8_t ready = gw_uart_rxbuf_peek(&ctx->rxbuf, NULL, NULL, NULL);
+	uint8_t ready = gw_seg_ring_read(&ctx->ring, NULL, 0, &probe);
 	platform_mutex_give(ctx->lock);
 	if (!ready)
 		return 0;
@@ -395,74 +447,101 @@ static uint8_t uart_rx_flush_locked(uart_handler_ctx_t *hc)
 			return 1;
 	}
 
-	/* Забираем готовые куски и складываем их в ОДИН кадр. Кусок идёт в кадр
-	 * только целиком: забранный вернуть в кольцо нельзя, поэтому сначала
-	 * смотрим (peek), влезает ли, и лишь потом забираем. Не влезло — уйдёт
-	 * следующим кадром сразу же: это не «лишний» кадр, а выгрузка того, что не
-	 * поместилось, и темпа она не ждёт. */
+	/* Кадр собирается из того, что отдаёт кольцо. Данные копятся в снимке и
+	 * кодируются в base64 ЦЕЛИКОМ, а не кусками: у куска, длина которого не
+	 * кратна трём, в конце появляется выравнивание '=', а строка со '=' в
+	 * середине неразбираема — клиент декодировал такую часть до первого '=' и
+	 * терял остальное (на приборе это выглядело как «прибор принял 12 КБ, а
+	 * клиент получил 11»). Поэтому выравнивание допускается только на границе
+	 * части — там, где стоит разделитель '#'/'~' или кончается кадр. */
 	for (;;) {
 		size_t  out_len = 0;
-		uint8_t lost = 0, dropped = 0;
-		int     pieces = 0;
+		uint8_t lost = 0;
+		uint8_t frame_full = 0;
+		size_t  staged = 0;              /* накоплено в снимке, ещё не закодировано */
 
 		/* Разделители в данных — символы, которых не бывает в base64:
-		 * '#' — передача на линии закончилась (idle), '~' — здесь потеряли
-		 * часть данных. Ставятся прямо в поток, между кусками base64. */
+		 * '#' — сегмент кончился (передача на линии замолчала), '~' — сразу
+		 * после этих байт данные терялись. Ставятся в поток, между частями
+		 * base64, и относятся к тому, что стоит ПЕРЕД ними. */
 		for (;;) {
-			uint16_t piece_len = 0;
-			uint8_t  frame_end = 0, piece_lost = 0;
-			int32_t  b64_size;
+			int32_t  space = (int32_t)sizeof(uart_b64_buf) - 1 - (int32_t)out_len;
+			uint32_t budget;             /* данных влезает в кадр, кратно 3 */
+			uint32_t want;
+			gw_seg_ring_chunk_t chunk;
+			uint32_t n, b64_room;
+			int32_t  b64_len;
 
-			platform_mutex_take(ctx->lock, PLATFORM_WAIT_FOREVER);
-			if (!gw_uart_rxbuf_peek(&ctx->rxbuf, &piece_len, &frame_end, &piece_lost)) {
-				platform_mutex_give(ctx->lock);
+			if (space <= 8) {
+				frame_full = 1;
+				break;               /* остальное — следующим кадром */
+			}
+			/* Запас 4 байта: два разделителя и выравнивание. Кратность трём
+			 * даёт кодирование без '=' внутри части. */
+			budget = (uint32_t)(((space - 4) / 4) * 3);
+			if (budget > sizeof(uart_rx_snapshot))
+				budget = (uint32_t)sizeof(uart_rx_snapshot);
+			if (staged > budget) {
+				frame_full = 1;
 				break;
 			}
-			b64_size = base64_encode_buffer_required(piece_len);
-			/* Запас на два разделителя: '~' перед куском и '#' после него. */
-			if (out_len + (size_t)b64_size + 3 > sizeof(uart_b64_buf)) {
-				/* Кусок не влезает в ПУСТОЙ кадр — такого быть не должно
-				 * (буфер рассчитан на всё кольцо), но застрять на нём навсегда
-				 * хуже, чем потерять его с записью в журнал. */
-				if (pieces == 0) {
-					gw_uart_rxbuf_piece_t big;
-					if (gw_uart_rxbuf_take(&ctx->rxbuf, (uint8_t *)uart_rx_snapshot,
-								sizeof(uart_rx_snapshot), &big))
-						dropped = 1;
-				}
-				platform_mutex_give(ctx->lock);
-				break;                       /* остальное — следующим кадром */
+			want = budget - (uint32_t)staged;
+			if (want > sizeof(uart_rx_snapshot) - staged)
+				want = (uint32_t)(sizeof(uart_rx_snapshot) - staged);
+			if (want == 0) {
+				frame_full = 1;
+				break;
 			}
-			gw_uart_rxbuf_piece_t piece;
-			if (!gw_uart_rxbuf_take(&ctx->rxbuf, (uint8_t *)uart_rx_snapshot,
-						sizeof(uart_rx_snapshot), &piece)) {
-				platform_mutex_give(ctx->lock);
-				break;                       /* гонка с приёмом: попробуем позже */
-			}
-			platform_mutex_give(ctx->lock);
 
-			/* '~' — перед куском, следующим за потерей: он стоит ровно там,
-			 * где данные пропали. */
-			if (piece.lost_before) {
+			platform_mutex_take(ctx->lock, PLATFORM_WAIT_FOREVER);
+			uint8_t got = gw_seg_ring_read(&ctx->ring, &uart_rx_snapshot[staged],
+						       (uint16_t)want, &chunk);
+			platform_mutex_give(ctx->lock);
+			if (!got)
+				break;               /* отдавать больше нечего */
+
+			staged += chunk.len;
+
+			/* Кодируем накопленное и только когда часть ОБЯЗАНА кончиться:
+			 * сегмент закончился или данные потеряны — после них должен встать
+			 * '#' / '~'. Пока границы нет, копим дальше. Кодировать по
+			 * пришедшему куску нельзя: кусок — это размер события UART
+			 * (до 128 байт), а не единица протокола. */
+			if (!chunk.end && !chunk.lost && staged < budget)
+				continue;
+
+			b64_room = (uint32_t)(space - 4);
+			if (staged) {
+				n = (uint32_t)staged;
+				b64_len = base64_encode((uint8_t *)&uart_b64_buf[out_len], b64_room,
+							uart_rx_snapshot, n);
+				if (b64_len > 0)
+					out_len += (size_t)b64_len;
+				staged = 0;
+			}
+			/* Кусок без данных несёт только разметку: конец сегмента и/или
+			 * отметку потери — так они приходят, даже если сами байты уже
+			 * ушли раньше. */
+			if (chunk.lost) {
 				uart_b64_buf[out_len++] = '~';
 				lost = 1;
 			}
-			int32_t b64_len = base64_encode((uint8_t *)&uart_b64_buf[out_len], b64_size,
-							uart_rx_snapshot, piece.len);
-			if (b64_len <= 0)
-				break;
-			out_len += (size_t)b64_len;
-			/* '#' — ПОСЛЕ куска, которым закончилась передача на линии. Кусок с
-			 * признаком «продолжение» идёт без разделителя. */
-			if (piece.frame_end)
+			if (chunk.end)
 				uart_b64_buf[out_len++] = '#';
-			pieces++;
 		}
 
-		if (dropped)
-			platform_log_w(TAG, "UART rx: кусок больше кадра, потерян\n");
+		/* Кадр кончается, а накопленное не закодировано (границы части не
+		 * было) — кодируем сейчас, с выравниванием: этим часть и закрывается. */
+		if (staged) {
+			int32_t space = (int32_t)sizeof(uart_b64_buf) - 1 - (int32_t)out_len;
+			int32_t b64_len = base64_encode((uint8_t *)&uart_b64_buf[out_len],
+							(uint32_t)(space - 2),
+							uart_rx_snapshot, (uint32_t)staged);
+			if (b64_len > 0)
+				out_len += (size_t)b64_len;
+		}
 
-		if (pieces == 0)
+		if (out_len == 0)
 			break;                           /* отдавать больше нечего */
 
 		uart_b64_buf[out_len] = '\0';
@@ -470,38 +549,47 @@ static uint8_t uart_rx_flush_locked(uart_handler_ctx_t *hc)
 		uart_rx_frame_sent[port] = 1;
 
 		/* Данные одним куском текста: '#' — конец передачи на линии, '~' —
-		 * потеря данных здесь. Кусок без разделителя — продолжение
-		 * предыдущего (длинный кадр выгружается частями). Адресат — подписчики
-		 * этого FID на каждом ядре: кадр порта не принадлежит ни одному
-		 * конкретному вызову. */
+	 * потеря данных здесь. Кусок без разделителя — продолжение
+	 * предыдущего (длинный кадр выгружается частями). Адресат — подписчики
+	 * этого FID на каждом ядре: кадр порта не принадлежит ни одному
+	 * конкретному вызову. */
 		gw_jsonw_t w;
 		gw_jsonw_init(&w, uart_raw_buf, sizeof(uart_raw_buf));
 		gw_jsonw_obj(&w, NULL);
 		gw_jsonw_str(&w, "RX", uart_b64_buf);
-		uart_send_to(NULL, hc->fid, &w);
+		uint8_t room = gw_jsonw_ok(&w);
+		size_t  flen = gw_jsonw_finish(&w);
+		if (!room || !flen)
+			break;                   /* кадр не собрался: такой же дефект, как потеря */
+		uart_rx_pending_len = (uint16_t)flen;
+		if (!uart_broadcast_built(hc->fid, uart_raw_buf, flen)) {
+			/* Транспорт не принял (очередь полна). Кадр остаётся в буфере:
+			 * повторим на следующем такте. */
+			uart_rx_pending_port  = (int8_t)port;
+			uart_rx_pending_tries = 0;
+			platform_log_w(TAG, "UART rx: транспорт занят, кадр (%u Б) отложен\n",
+				       (unsigned)flen);
+		}
 
 		if (lost)
 			platform_log_w(TAG, "UART rx: приём терялся, клиенту сообщено\n");
 
-		/* Кольцо опустело — кадр был последним. */
+		/* Ещё один кадр сразу — в двух случаях: кадр УПЁРСЯ в предел (это
+		 * выгрузка того же накопления) или в кольце скопился запас больше
+		 * UART_RX_DRAIN_LIMIT (сервис отстаёт от линии, и ждать темпа нельзя —
+		 * за это время накопится ещё столько же). Во всех прочих случаях кадр
+		 * последний, а следующий пойдёт по темпу: без этой оговорки сборка
+		 * превращалась в отправку на каждый пришедший кусок — кадры по 120
+		 * байт, отправка каждого ~10 мс, и на 115200 бод сервис переставал
+		 * успевать за линией: кольцо росло и переполнялось. */
 		platform_mutex_take(ctx->lock, PLATFORM_WAIT_FOREVER);
-		uint8_t more = gw_uart_rxbuf_peek(&ctx->rxbuf, NULL, NULL, NULL);
+		uint16_t pending = gw_seg_ring_used(&ctx->ring);
 		platform_mutex_give(ctx->lock);
-		if (!more)
+		if (!frame_full && pending < UART_RX_DRAIN_LIMIT)
 			break;
 	}
 
 	return 0;
-}
-
-/* Обёртка: сборка кадра всегда идёт под замком сборки (см. uart_frame_lock) —
- * так статические буферы не делят между собой задача приёма и задача приложения. */
-static uint8_t uart_rx_flush(uart_handler_ctx_t *hc)
-{
-	platform_mutex_take(uart_frame_lock, PLATFORM_WAIT_FOREVER);
-	uint8_t more = uart_rx_flush_locked(hc);
-	platform_mutex_give(uart_frame_lock);
-	return more;
 }
 
 /* Настройки порта: что просили — меняем, остальное (в том числе режим) оставляем
@@ -639,8 +727,13 @@ static uint8_t uart_api_handler(void *call, void **context,
 	/* Между вызовами обработчик ничего не держит (накопитель приёма принадлежит
 	 * порту, а не вызову), поэтому снятие вызова — это просто FALSE: освобождать
 	 * нечего. */
-	if (call == NULL)
+	if (call == NULL) {
+		/* Вызов снят (клиент ушёл): отложенный кадр никому уже не нужен, а
+		 * держать его — значит заблокировать порт для следующей подписки. */
+		uart_rx_pending_port  = -1;
+		uart_rx_pending_tries = 0;
 		return 0;
+	}
 	if ((hc == NULL) || (hc->app == NULL))
 		return 0;
 
@@ -675,36 +768,33 @@ static uint8_t uart_register(api_t *api, uart_handler_ctx_t *hc, app_context_t *
  * ту же подготовку, что и цель. */
 static void uart_ports_init(app_context_t *app)
 {
+        static uint8_t *const ring_storage[UART_PORTS] = { uart0_buf, uart1_buf, uart2_buf };
+
         uart_apis_set(app->api_ap, app->api_sta);
-        uart_frame_lock = platform_mutex_create();
 
-        uart_context[0].port         = 0;
-        uart_context[0].storage      = uart1_buf;
-        uart_context[0].storage_size = sizeof(uart1_buf);
-        gw_uart_rxbuf_init(&uart_context[0].rxbuf, uart_context[0].storage,
-                           uart_context[0].storage_size);
-        uart_context[0].lock = platform_mutex_create();
-        uart1_delegate.handler = &uart_event_on_rx;
-        uart1_delegate.context = &uart_context[0];
+        for (uint8_t i = 0; i < UART_PORTS; i++) {
+                /* Номер порта в службе — аппаратный (uart0/uart1/uart2), поэтому
+                 * и кольцо, и драйвер адресуются одним и тем же номером. */
+                uart_context[i].port         = i;
+                uart_context[i].storage      = ring_storage[i];
+                uart_context[i].storage_size = UART_RX_ACC_SIZE;
+                gw_seg_ring_init(&uart_context[i].ring, uart_context[i].storage,
+                                 uart_context[i].storage_size);
+                uart_context[i].lock = platform_mutex_create();
 
-        uart_context[1].port         = 1;
-        uart_context[1].storage      = uart2_buf;
-        uart_context[1].storage_size = sizeof(uart2_buf);
-        gw_uart_rxbuf_init(&uart_context[1].rxbuf, uart_context[1].storage,
-                           uart_context[1].storage_size);
-        uart_context[1].lock = platform_mutex_create();
-        uart2_delegate.context = &uart_context[1];
-        uart2_delegate.handler = &uart_event_on_rx;
-
-        gw_uart_on_receive_subscribe(&app->uart.port[0].desc, &uart1_delegate);
-        gw_uart_on_receive_subscribe(&app->uart.port[1].desc, &uart2_delegate);
+                uart_delegate[i].handler = &uart_event_on_rx;
+                uart_delegate[i].context = &uart_context[i];
+                gw_uart_on_receive_subscribe(&app->uart.port[i].desc, &uart_delegate[i]);
+        }
 }
 
 /* Регистрирует обработчики всех FID портов на переданных ядрах. NULL-ядро
  * пропускается: в тестах бывает одно. */
 static uint8_t uart_fids_register(app_context_t *app, api_t *api_ap, api_t *api_sta)
 {
-        static const char *const fids[2][UART_ACT_COUNT] = {
+        static const char *const fids[UART_PORTS][UART_ACT_COUNT] = {
+                { ESP_WS_API_UART0_CNF, ESP_WS_API_UART0_RAW_RX,
+                  ESP_WS_API_UART0_RAW_TX, ESP_WS_API_UART0_ECHO },
                 { ESP_WS_API_UART1_CNF, ESP_WS_API_UART1_RAW_RX,
                   ESP_WS_API_UART1_RAW_TX, ESP_WS_API_UART1_ECHO },
                 { ESP_WS_API_UART2_CNF, ESP_WS_API_UART2_RAW_RX,
@@ -712,7 +802,7 @@ static uint8_t uart_fids_register(app_context_t *app, api_t *api_ap, api_t *api_
         };
         api_t *cores[2] = { api_ap, api_sta };
 
-        for (uint8_t port = 0; port < 2; port++) {
+        for (uint8_t port = 0; port < UART_PORTS; port++) {
                 for (uint8_t act = 0; act < UART_ACT_COUNT; act++) {
                         for (uint8_t c = 0; c < 2; c++) {
                                 if (cores[c] == NULL)
@@ -757,11 +847,11 @@ void apih_uart_test_init(api_t *api, app_context_t *app) {
 }
 
 void apih_uart_test_reset(void) {
-    for (int i = 0; i < 2; i++)
-        gw_uart_rxbuf_init(&uart_context[i].rxbuf, uart_context[i].storage,
-                           uart_context[i].storage_size);
-    uart_rx_frame_sent[0] = 0;
-    uart_rx_frame_sent[1] = 0;
+    for (int i = 0; i < UART_PORTS; i++)
+        gw_seg_ring_init(&uart_context[i].ring, uart_context[i].storage,
+                         uart_context[i].storage_size);
+    for (int i = 0; i < UART_PORTS; i++)
+        uart_rx_frame_sent[i] = 0;
 }
 
 #ifdef APIH_UART_TEST
@@ -769,8 +859,8 @@ void apih_uart_test_fill_rx_idle(int port, const uint8_t *data, uint32_t len,
                                  uint32_t gap_us, uint8_t idle);
 #endif
 
-/* «Данные готовы к отдаче» — это законченная передача на линии: незакрытый
- * кусок читателю не отдаётся, пока не перевалит за порог частичной выгрузки. */
+/* «Данные готовы к отдаче» — это то, что уже лежит в кольце; закрывать сегмент
+ * для этого не нужно (незакрытый отдаётся с end == 0). */
 void apih_uart_test_fill_rx(int port, const uint8_t *data, uint32_t len) {
     apih_uart_test_fill_rx_idle(port, data, len, 0, 1);
 }
@@ -782,6 +872,6 @@ void apih_uart_test_fill_rx_idle(int port, const uint8_t *data, uint32_t len,
     uart_subscription_context_t *ctx = &uart_context[port];
     (void)gap_us;
     if (len > 0xFFFF) len = 0xFFFF;
-    gw_uart_rxbuf_push(&ctx->rxbuf, data, (uint16_t)len, idle ? 1 : 0);
+    gw_seg_ring_write(&ctx->ring, data, (uint16_t)len, idle ? 1 : 0);
 }
 #endif

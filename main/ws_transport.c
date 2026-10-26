@@ -20,6 +20,7 @@
 /* Свой httpd транспорт не поднимает: точка живёт в веб-сервере интерфейса, и с
  * ним же он работает — сессию закрывает и кадры отправляет через его методы. */
 #include "ws_transport.h"
+#include "platform.h"
 
 static const char *TAG = "ws_transport";
 
@@ -62,6 +63,10 @@ static const char *TAG = "ws_transport";
  * Объявлен заранее — дескриптор соединения знает, чей он. */
 typedef struct ws_transport_module_s ws_transport_module_t;
 
+/* Сколько соединений экземпляр держит в списке (см. WS_CONN_MAX у модуля). */
+#define WS_CONN_MAX   8
+
+
 /* Дескриптор соединения транспорта. Ядру он непрозрачен: ядро использует его
  * как ключ своей сессии и не знает ни этого типа, ни веб-сервера. */
 typedef struct {
@@ -86,15 +91,47 @@ typedef struct {
     /* Сессия ядра уже закрыта (CLOSED отправлен), но отправки ещё в работе:
      * память дескриптора освободит последний колбэк. */
     uint8_t  detached;
+    /* Колбэк отправки сейчас уведомляет ядро. Ядро вправе закрыть соединение
+     * прямо из этого уведомления (отказ отправки), и тогда обработчик закрытия
+     * НЕ освобождает дескриптор: он ещё нужен колбэку, который его вызвал. */
+    uint8_t  in_callback;
+    /* Сколько принятых сообщений этого соединения ждёт доставки (см. очередь
+     * recv). Пока счётчик не ноль, дескриптор не освобождается: записи очереди
+     * на него ссылаются. */
+    uint16_t recv_queued;
+    /* Начатый кадр, который клиент ещё не принял целиком: своя копия заголовка и
+     * данных. Сокет отдаёт данные порциями (send с MSG_DONTWAIT пишет сколько
+     * влезло), и кадр нельзя ни бросить на середине, ни смешать со следующим —
+     * поэтому остаток живёт здесь, а досылает его такт транспорта (poll).
+     * Пока буфер занят, новые кадры этому клиенту отбрасываются: он не
+     * принимает, и копить их незачем. */
+    uint8_t *out;
+    uint32_t out_len;
+    uint32_t out_off;
+    uint32_t out_since;      /* когда кадр начат — для решения «клиент пропал» */
+    uint8_t  out_pending;    /* в буфере есть недописанное */
+    uint16_t out_dropped;    /* сколько кадров отброшено за время занятости */
 } ws_transport_conn_t;
 
-/* Контекст одной асинхронной отправки: веб-сервер отдаёт колбэку только свой
- * arg, а нам нужно помнить, чья это отправка и какие данные ядру вернуть. */
-typedef struct {
-    ws_transport_conn_t *conn;
-    const void *data;
-    uint32_t length;
-} ws_transport_send_t;
+/* Предел отложенного кадра: столько транспорт держит на соединение, пока клиент
+ * не принимает. Кадр потока — до ~2,7 КБ base64 (накопитель 2048), ответ вызова —
+ * сотни байт; 8 КБ покрывают всё с запасом. Больше — отбрасываем кадр: копить
+ * клиенту, который не читает, незачем. */
+#define WS_OUT_MAX   8192u
+/* Сколько начатый кадр может висеть без прогресса, прежде чем считать клиента
+ * пропавшим и закрыть сеанс. */
+#define WS_OUT_DEAD_MS   20000u
+
+/* Принятое сообщение, ждущее доставки ядру. Копия, а не указатель на буфер
+ * соединения: за время ожидания в то же соединение может прийти следующее
+ * сообщение, и буфер будет переиспользован. */
+typedef struct ws_transport_recv_s {
+    struct ws_transport_recv_s *next;
+    ws_transport_conn_t *conn;   /* чьё соединение: дескриптор живёт, пока жива
+                                  * запись (см. recv_queued в соединении) */
+    uint32_t len;
+    uint8_t  data[];             /* само сообщение + '\0' в конце */
+} ws_transport_recv_t;
 
 /* ── Экземпляр транспорта ───────────────────────────────────────────────────
  *
@@ -129,6 +166,24 @@ struct ws_transport_module_s {
     char         *uri;
     uint8_t   inited;
     uint8_t   opened;
+    /* Отправки, которые транспорт принял, но о завершении которых ещё не
+     * уведомлён. Список нужен, чтобы находить ЗАВИСШИЕ отправки: httpd ставит
+     * задание в свою очередь датаграммой по UDP, и под нагрузкой она теряется —
+     * колбэк тогда не приходит НИКОГДА, а буферы (наш контекст отправки и блок
+     * ответа ядра) остаются занятыми навсегда. Замерено на стенде: восемьдесят
+     * таких отправок = −23 КБ кучи без возврата, через несколько минут прибор
+     * падал от нехватки памяти. */
+    /* Соединения экземпляра: нужны, чтобы такт транспорта досылал начатые кадры.
+     * Список фиксированный — соединений не больше, чем сессий у веб-сервера. */
+    platform_mutex_t conn_lock;
+    ws_transport_conn_t *conns[WS_CONN_MAX];
+    /* Принятые, но ещё не разобранные сообщения: их доставляет poll в задаче
+     * приложения (см. ws_transport_poll). Задача веб-сервера только копирует
+     * принятое сюда — разбор сообщения ей не по стеку. */
+    platform_mutex_t recv_lock;
+    ws_transport_recv_t *recv_head;
+    ws_transport_recv_t *recv_tail;
+    uint32_t recv_bytes;
 };
 
 /* Настройки экземпляра: путь WS-точки и объект веб-сервера, который его
@@ -159,12 +214,54 @@ static uint32_t notify_event(ws_transport_conn_t *conn, const transport_event_tr
     return event_raise(&m->on_event, conn, (void *)ev);
 }
 
+/* Список соединений экземпляра: такт транспорта досылает по нему начатые кадры.
+ * Список нужен именно для этого — других причин знать все соединения у
+ * транспорта нет. */
+static void conn_list_add(ws_transport_module_t *m, ws_transport_conn_t *conn) {
+    if((m == NULL) || (m->conn_lock == NULL)) return;
+    platform_mutex_take(m->conn_lock, PLATFORM_WAIT_FOREVER);
+    for(size_t i = 0; i < WS_CONN_MAX; i++) {
+        if(m->conns[i] == NULL) { m->conns[i] = conn; break; }
+    }
+    platform_mutex_give(m->conn_lock);
+}
+
+static void conn_list_remove(ws_transport_module_t *m, ws_transport_conn_t *conn) {
+    if((m == NULL) || (m->conn_lock == NULL)) return;
+    platform_mutex_take(m->conn_lock, PLATFORM_WAIT_FOREVER);
+    for(size_t i = 0; i < WS_CONN_MAX; i++)
+        if(m->conns[i] == conn) m->conns[i] = NULL;
+    platform_mutex_give(m->conn_lock);
+}
+
+/* Снимок списка: досылка идёт без мьютекса (запись в сокет — не критическая
+ * секция), поэтому сначала копируем указатели. */
+static int conn_list_snapshot(ws_transport_module_t *m, ws_transport_conn_t **out) {
+    int n = 0;
+    if((m == NULL) || (m->conn_lock == NULL)) return 0;
+    platform_mutex_take(m->conn_lock, PLATFORM_WAIT_FOREVER);
+    for(size_t i = 0; i < WS_CONN_MAX; i++)
+        if(m->conns[i] != NULL) out[n++] = m->conns[i];
+    platform_mutex_give(m->conn_lock);
+    return n;
+}
+
 /* free_ctx у httpd принимает void*, поэтому обёртка: внутри — своя логика на
  * типизированном дескрипторе. */
 static void session_free_ctx(void *ctx) {
     ws_transport_conn_t *conn = (ws_transport_conn_t *)ctx;
     if(conn == NULL) return;
     event_unsubscribe(&conn->delegate);
+    conn_list_remove(conn->module, conn);
+    free(conn->out);
+    conn->out     = NULL;
+    conn->out_len = 0;
+    conn->out_off = 0;
+    conn->out_pending = 0;
+    /* Дескриптор сокета больше не наш: httpd мог отдать его новому соединению.
+     * Запоминаем это в дескрипторе, чтобы позднее закрытие (отказ отправки или
+     * ядро, закрывающее мёртвое соединение) не закрыло ЧУЖОЙ сокет. */
+    conn->fd = -1;
     free(conn->msg);
     conn->msg    = NULL;
     conn->msg_len  = 0;
@@ -175,9 +272,10 @@ static void session_free_ctx(void *ctx) {
     transport_event_trigger_t ev = { .event = TRANSPORT_CLOSED };
     notify_event(conn, &ev);
 
-    if(conn->sends_in_flight) {
+    if(conn->sends_in_flight || conn->in_callback || conn->recv_queued) {
         /* Отправки ещё в работе и получат этот указатель в колбэке — освободит
-         * память последний из них (см. ws_httpd_send_done). */
+         * память последний из них (см. ws_httpd_send_done). Колбэк, уведомляющий
+         * ядро прямо сейчас, тоже ещё пользуется дескриптором. */
         conn->detached = 1;
         return;
     }
@@ -197,6 +295,76 @@ static void link_event_handler(void *event_trigger, void *sender, void *context)
  * веб-сервера, который его породил. Зовётся один раз, из ws_transport_create;
  * URI активирует open, и только после того, как подписчик назначен (см.
  * conn_open). */
+
+/* Доставка принятого подписчику: это и есть «такт транспорта» (transport_iface_t
+ * poll). Зовётся из задачи приложения на каждом её такте — там, где уже
+ * работают обработчики сервисов и где стек 8 КБ, а не 4, как у веб-сервера.
+ *
+ * Порядок сохраняется (очередь FIFO): ядро получает сообщения клиента в том
+ * порядке, в каком они пришли. */
+static int  out_flush(ws_transport_conn_t *conn);
+static void ws_out_pump(ws_transport_module_t *m);
+
+static void ws_httpd_poll(const void *self) {
+    ws_transport_module_t *m = (ws_transport_module_t *)self;
+    if(m == NULL || m->recv_lock == NULL) return;
+
+    ws_out_pump(m);
+
+    for(;;) {
+        platform_mutex_take(m->recv_lock, PLATFORM_WAIT_FOREVER);
+        ws_transport_recv_t *rec = m->recv_head;
+        if(rec != NULL) {
+            m->recv_head = rec->next;
+            if(m->recv_head == NULL) m->recv_tail = NULL;
+            m->recv_bytes -= (rec->len + 1);
+        }
+        platform_mutex_give(m->recv_lock);
+        if(rec == NULL) return;
+
+        ws_transport_conn_t *conn = rec->conn;
+        transport_event_trigger_t ev = { .event = TRANSPORT_RECEIVED };
+        ev.data.ptr    = rec->data;
+        ev.data.length = rec->len;
+        ev.data.left   = 0;                   /* сообщение отдано целиком */
+        notify_event(conn, &ev);
+
+        /* Дескриптор ждал этого сообщения: теперь его можно освободить, если
+         * сессия уже закрыта и отправок не осталось. */
+        if(conn != NULL && conn->recv_queued) conn->recv_queued--;
+        uint8_t release = (conn != NULL) && conn->detached && !conn->sends_in_flight
+                          && !conn->recv_queued && !conn->in_callback;
+        free(rec);
+        if(release) free(conn);
+    }
+}
+
+/* Досылка начатых кадров: клиент, который снова начал читать, получает остаток, а
+ * не копит потери. Клиента, у которого кадр не двигается дольше WS_OUT_DEAD_MS,
+ * считаем пропавшим и закрываем сеанс — иначе буфер и счётчики висят вечно. */
+static void ws_out_pump(ws_transport_module_t *m) {
+    ws_transport_conn_t *list[WS_CONN_MAX];
+    int n = conn_list_snapshot(m, list);
+    uint32_t now = platform_tick();
+    uint32_t dead_ticks = platform_ms_to_ticks(WS_OUT_DEAD_MS);
+
+    for(int i = 0; i < n; i++) {
+        ws_transport_conn_t *conn = list[i];
+        if(conn->out == NULL) continue;
+        uint32_t before = conn->out_off;
+        int rc = out_flush(conn);
+        if(rc < 0 || ((conn->out != NULL) && (conn->out_off == before) &&
+                      ((uint32_t)(now - conn->out_since) > dead_ticks))) {
+            ESP_LOGW(TAG, "Клиент fd=%d не принимает кадр (%lu из %lu Б в буфере) — закрываю",
+                     conn->fd, (unsigned long)conn->out_off, (unsigned long)conn->out_len);
+            if(conn->fd >= 0) web_server_session_close(m->server, conn->fd);
+            continue;
+        }
+        if(conn->out != NULL && (conn->out_off > before))
+            conn->out_since = now;          /* прогресс есть — отсчёт заново */
+    }
+}
+
 static transport_result_t ws_httpd_init(const void *self, const void *config) {
     ws_transport_module_t *m = (ws_transport_module_t *)self;
     const ws_transport_config_t *cfg = (const ws_transport_config_t *)config;
@@ -208,6 +376,11 @@ static transport_result_t ws_httpd_init(const void *self, const void *config) {
      * сколько строка у вызывающего. */
     m->uri = strdup(cfg->uri);
     if(m->uri == NULL) return TRANSPORT_FAULT;
+    m->conn_lock = platform_mutex_create();
+    for(size_t ci = 0; ci < WS_CONN_MAX; ci++) m->conns[ci] = NULL;
+    m->recv_lock = platform_mutex_create();
+    m->recv_head = m->recv_tail = NULL;
+    m->recv_bytes = 0;
     m->server = cfg->server;
     m->inited = 1;
     ESP_LOGI(TAG, "Init, iface=%lu, uri=%s",
@@ -271,6 +444,10 @@ static transport_result_t ws_httpd_subscribe(const void *self, delegate_t *deleg
 static transport_result_t ws_httpd_close(const void *self) {
     ws_transport_conn_t *conn = (ws_transport_conn_t *)self;
     if(conn == NULL) return TRANSPORT_BAD_CALL;
+    /* Сессия уже закрыта (сессия ядра снимается раньше, чем ядро узнаёт о
+     * завершении отправок): закрывать нечего, и дескриптора у нас нет — он мог
+     * достаться другому соединению. */
+    if(conn->fd < 0) return TRANSPORT_OK;
     if(!web_server_session_close(conn->module->server, conn->fd)) {
         ESP_LOGW(TAG, "Close fd=%d failed", conn->fd);
         return TRANSPORT_BAD_CALL;   /* сессии уже нет */
@@ -285,87 +462,111 @@ static transport_result_t ws_httpd_break_sending(const void *self) {
     return TRANSPORT_OK;
 }
 
-static void ws_httpd_send_done(esp_err_t err, int fd, void *arg) {
-    (void)fd;
-    ws_transport_send_t *snd = (ws_transport_send_t *)arg;
-    ws_transport_conn_t *conn = snd->conn;
-
-    transport_event_trigger_t ev = {
-        .event = err ? TRANSPORT_TRANSFER_ERR : TRANSPORT_TRANSFER_COMPLETE,
-    };
-    ev.data.ptr    = snd->data;      /* тот же указатель, что дало ядро */
-    ev.data.length = snd->length;
-    ev.data.left   = 0;              /* сообщение отдано целиком */
-    if(err) {
-        /* Отправка не удалась: соединение считаем мёртвым, ядро закроет его
-         * само (см. TRANSFER_ERR в api_core.c). */
-        ESP_LOGW(TAG, "Send failed (err %d), fd=%d", err, conn->fd);
+/* Заголовок кадра WebSocket (сервер не маскирует, RFC 6455 §5.2).
+ * Возврат — длина заголовка. */
+static int ws_frame_header(uint8_t *hdr, uint32_t len, uint8_t opcode) {
+    int n = 0;
+    hdr[n++] = (uint8_t)(0x80 | opcode);          /* FIN + тип */
+    if(len <= 125) {
+        hdr[n++] = (uint8_t)len;
+    } else if(len <= 0xFFFF) {
+        hdr[n++] = 126;
+        hdr[n++] = (uint8_t)(len >> 8);
+        hdr[n++] = (uint8_t)(len & 0xFF);
+    } else {
+        hdr[n++] = 127;
+        for(int shift = 56; shift >= 0; shift -= 8)
+            hdr[n++] = (uint8_t)(((uint64_t)len >> shift) & 0xFF);
     }
-
-    ESP_LOGD(TAG, "write fd=%d %lu Б: %s", conn->fd, (unsigned long)snd->length,
-             err ? esp_err_to_name(err) : "ок");
-    free(snd);
-    if(conn->sends_in_flight) conn->sends_in_flight--;
-
-    /* Ядро должно узнать о завершении отправки даже у уже закрытой сессии:
-     * так оно освобождает свой буфер ответа. В этот момент дескриптор ещё жив. */
-    notify_event(conn, &ev);
-
-    if(conn->detached && !conn->sends_in_flight) free(conn);
+    return n;
 }
 
-/* Сколько ждать места в рабочей очереди httpd, прежде чем признать отправку
- * неудавшейся. Очередь разбирается задачей httpd за единицы миллисекунд, поэтому
- * ожидание короткое, а потерянных кадров не остаётся. */
-#define TRANSPORT_SEND_RETRY_MAX 200
-#define TRANSPORT_SEND_RETRY_MS  1
+/* Досылка начатого кадра. Возврат: 1 — буфер свободен (кадр ушёл целиком),
+ * 0 — остаток ждёт места в сокете, -1 — сокет сломан. */
+static int out_flush(ws_transport_conn_t *conn) {
+    if(conn->out == NULL) return 1;
+    /* Ожидания здесь нет: остаток живёт в нашем буфере, и его досылает такт
+     * транспорта. Ждать в такте нельзя — задержка одного нечитающего клиента
+     * останавливает приём сообщений от всех. */
+    int rc = web_server_write(conn->module->server, conn->fd,
+                              (const char *)conn->out + conn->out_off,
+                              conn->out_len - conn->out_off, 0);
+    if(rc < 0) return -1;
+    conn->out_off += (uint32_t)rc;
+    if(conn->out_off < conn->out_len) return 0;
+    free(conn->out);
+    conn->out       = NULL;
+    conn->out_len   = 0;
+    conn->out_off   = 0;
+    conn->out_pending = 0;
+    return 1;
+}
+
+/* Кадр целиком: голова и данные кладутся в ОДИН буфер, поэтому кадр либо есть у
+ * клиента весь, либо его нет вовсе — смешать половину с чужим кадром нельзя.
+ * Возврат: 1 — принят (ушёл или ждёт в буфере), 0 — отброшен, -1 — сокет сломан. */
+static int frame_queue(ws_transport_conn_t *conn, const void *data, uint32_t length) {
+    if(conn->out != NULL) {
+        /* Предыдущий кадр ещё не ушёл: этот клиент не принимает — свежий кадр
+         * отбрасываем, а не копим (поток с линии lossy по своей природе). */
+        conn->out_dropped++;
+        return 0;
+    }
+
+    uint8_t header[10];
+    int hlen = ws_frame_header(header, length, 0x1);       /* 0x1 — text */
+    uint32_t total = (uint32_t)hlen + length;
+    if(total > WS_OUT_MAX) {
+        ESP_LOGW(TAG, "Кадр %lu Б больше предела %u — отброшен, fd=%d",
+                 (unsigned long)total, (unsigned)WS_OUT_MAX, conn->fd);
+        return 0;
+    }
+
+    uint8_t *buf = malloc(total);
+    if(buf == NULL) return 0;
+    memcpy(buf, header, (size_t)hlen);
+    memcpy(buf + hlen, data, length);
+    conn->out        = buf;
+    conn->out_len    = total;
+    conn->out_off    = 0;
+    conn->out_since  = platform_tick();
+    conn->out_pending = 1;
+
+    int sent = out_flush(conn);
+    if(sent >= 0) return 1;
+    ESP_LOGW(TAG, "out_flush: сокет сломан (fd=%d, %lu Б)", conn->fd, (unsigned long)total);
+    /* Сокет сломан: закрываем соединение (ядро узнает отказом ниже). */
+    return -1;
+}
 
 static transport_result_t ws_httpd_begin_send(const void *self, const void *data, uint32_t length) {
     ws_transport_conn_t *conn = (ws_transport_conn_t *)self;
     if((conn == NULL) || (data == NULL) || (length == 0)) return TRANSPORT_BAD_CALL;
+    /* Соединение уже закрыто: писать некуда, дескриптора у нас нет. */
+    if(conn->fd < 0) return TRANSPORT_BAD_CALL;
 
-    ws_transport_send_t *snd = malloc(sizeof(*snd));
-    if(snd == NULL) return TRANSPORT_FAULT;
-    snd->conn   = conn;
-    snd->data   = data;
-    snd->length = length;
+    /* Дескриптор нужен уведомлению: обработчик закрытия сессии его не освободит
+     * (in_callback), а мы освободим сами, если сессия уже закрыта. */
+    conn->sends_in_flight++;
+    int queued = frame_queue(conn, data, length);
+    conn->sends_in_flight--;
 
-    /* Веб-сервер только читает payload, поэтому const снимаем осознанно: данные
-     * принадлежат ядру и живут до события завершения отправки. */
-    httpd_ws_frame_t f = {
-        .type       = HTTPD_WS_TYPE_TEXT,
-        .final      = true,
-        .fragmented = false,
-        .payload    = (uint8_t *)data,
-        .len        = length,
+    /* Завершение объявляем сразу и всегда: данные у нас в СВОЕЙ копии (или
+     * отброшены), поэтому буфер ядра больше не нужен — оно его освободит.
+     * Отказ объявляем только тогда, когда поток испорчен и соединение надо
+     * закрыть. */
+    transport_event_trigger_t ev = {
+        .event = (queued < 0) ? TRANSPORT_TRANSFER_ERR : TRANSPORT_TRANSFER_COMPLETE,
     };
+    ev.data.ptr    = data;
+    ev.data.length = length;
+    ev.data.left   = 0;
 
-    /* Отправка идёт через рабочую очередь httpd, а она ограничена по глубине. На
-     * потоке мелких кадров (эхо набора в терминале — кадр на символ) очередь
-     * переполнялась, httpd_ws_send_data_async отвечал отказом, и кадр ПРОПАДАЛ:
-     * ядро считало отправку неудавшейся и освобождало буфер. Замерено на стенде:
-     * устройство отдало 38 кадров, клиент получил 5 — то есть «терминал теряет
-     * ввод» было потерей именно здесь. Ждём место в очереди, а не теряем данные. */
-    esp_err_t err = ESP_FAIL;
-    for(int attempt = 0; attempt <= TRANSPORT_SEND_RETRY_MAX; attempt++) {
-        conn->sends_in_flight++;
-        err = web_server_send_ws(conn->module->server, conn->fd, &f, ws_httpd_send_done, snd);
-        if(err == ESP_OK) return TRANSPORT_OK;
-        conn->sends_in_flight--;
-
-        if(attempt < TRANSPORT_SEND_RETRY_MAX)
-            vTaskDelay(pdMS_TO_TICKS(TRANSPORT_SEND_RETRY_MS));
-    }
-
-    /* Очередь так и не освободилась — об этом должно быть видно в логе, иначе
-     * «иногда теряется» останется загадкой. Колбэка не будет, буфер освободит
-     * ядро. */
-    ESP_LOGW(TAG, "Отправка не принята за %d мс (fd=%d, %lu Б): %s",
-             TRANSPORT_SEND_RETRY_MAX * TRANSPORT_SEND_RETRY_MS, conn->fd,
-             (unsigned long)length, esp_err_to_name(err));
-    free(snd);
-    if(err == ESP_ERR_NO_MEM) return TRANSPORT_FAULT;
-    return TRANSPORT_BAD_CALL;
+    conn->in_callback = 1;
+    notify_event(conn, &ev);
+    conn->in_callback = 0;
+    if(conn->detached && !conn->sends_in_flight && !conn->recv_queued) free(conn);
+    return TRANSPORT_OK;
 }
 
 static int32_t ws_httpd_peer_id(const void *self) {
@@ -382,6 +583,7 @@ static const transport_iface_t ws_iface = {
     .begin_send    = ws_httpd_begin_send,
     .break_sending = ws_httpd_break_sending,
     .subscribe     = ws_httpd_subscribe,
+    .poll          = ws_httpd_poll,
     .peer_id       = ws_httpd_peer_id,
 };
 
@@ -425,24 +627,58 @@ static void drop_message(ws_transport_conn_t *conn) {
 /* Собранное сообщение — ядру одним событием RECEIVED. Уровень сообщений: ядро
  * фрагментов не видит вовсе. Буфер освобождаем после возврата из обработчика:
  * ядро читает его только там. */
+/* Предел того, что копится непринятым: очередь короткая (её разбирают на
+ * каждом такте, раз в 1 мс), но одно сообщение бывает крупным — порция заливки
+ * прошивки приходит base64-строкой в десяток килобайт. */
+#define WS_RECV_QUEUE_MAX     16
+#define WS_RECV_QUEUE_BYTES    (32u * 1024u)
+
+/* Принятое сообщение — В ОЧЕРЕДЬ, а не сразу подписчику: разбор идёт в задаче
+ * приложения (см. ws_transport_poll). Здесь только копия: буфер соединения
+ * переиспользуется следующим кадром. */
 static void deliver_message(ws_transport_conn_t *conn) {
     if(conn->msg_len == 0) {
         /* Пустое сообщение ядру не нужно: разбирать в нём нечего. */
         drop_message(conn);
         return;
     }
-    conn->msg[conn->msg_len] = '\0';   /* ядру удобно видеть строку в логе */
 
-    transport_event_trigger_t ev = { .event = TRANSPORT_RECEIVED };
-    ev.data.ptr    = conn->msg;
-    ev.data.length = conn->msg_len;
-    ev.data.left   = 0;                    /* сообщение отдано целиком */
-    notify_event(conn, &ev);
+    ws_transport_module_t *m = conn->module;
+    if((m->recv_lock == NULL) ||
+       (conn->recv_queued >= WS_RECV_QUEUE_MAX) ||
+       (m->recv_bytes + conn->msg_len > WS_RECV_QUEUE_BYTES)) {
+        /* Разбирать негде или копится больше предела: соединение закрываем —
+         * молча терять сообщения клиента нельзя, он ждёт ответа. */
+        ESP_LOGW(TAG, "Очередь приёма заполнена (%lu Б в ней), закрываю fd=%d",
+                 (unsigned long)m->recv_bytes, conn->fd);
+        drop_message(conn);
+        web_server_session_close(m->server, conn->fd);
+        return;
+    }
 
-    free(conn->msg);
-    conn->msg   = NULL;
-    conn->msg_len = 0;
-    conn->msg_cap = 0;
+    ws_transport_recv_t *rec = malloc(sizeof(*rec) + conn->msg_len + 1);
+    if(rec == NULL) {
+        ESP_LOGW(TAG, "Нет памяти под принятое сообщение (%lu Б), закрываю fd=%d",
+                 (unsigned long)conn->msg_len, conn->fd);
+        drop_message(conn);
+        web_server_session_close(m->server, conn->fd);
+        return;
+    }
+    rec->next = NULL;
+    rec->conn = conn;
+    rec->len  = conn->msg_len;
+    memcpy(rec->data, conn->msg, conn->msg_len);
+    rec->data[conn->msg_len] = '\0';   /* ядру удобно видеть строку в логе */
+
+    platform_mutex_take(m->recv_lock, PLATFORM_WAIT_FOREVER);
+    if(m->recv_tail != NULL) m->recv_tail->next = rec;
+    else                     m->recv_head = rec;
+    m->recv_tail   = rec;
+    m->recv_bytes += rec->len + 1;
+    conn->recv_queued++;
+    platform_mutex_give(m->recv_lock);
+
+    drop_message(conn);
 }
 
 /* Чтение управляющего кадра. Обрабатывает их транспорт: ядру PING/PONG/CLOSE не
@@ -618,6 +854,7 @@ static ws_transport_conn_t *conn_open(httpd_req_t *req, int fd) {
     conn->delegate.handler = link_event_handler;
     conn->delegate.context = conn;
     net_link_subscribe(fd, &conn->delegate);
+    conn_list_add(module, conn);
 
     transport_event_trigger_t ev = { .event = TRANSPORT_ESTABLISHED };
     if(notify_event(conn, &ev) == 0) {
@@ -676,6 +913,11 @@ transport_t *ws_transport_create(web_server_t *server, const char *uri) {
      * бывает, а половины от разных экземпляров разойтись не могут. */
     transport_t *transport = malloc(sizeof(*transport));
     if(transport == NULL) {
+        while(m->recv_head != NULL) {
+            ws_transport_recv_t *rec = m->recv_head;
+            m->recv_head = rec->next;
+            free(rec);
+        }
         free(m->uri);
         free(m);
         return NULL;

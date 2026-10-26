@@ -23,7 +23,6 @@
 
 #include <stdio.h>
 
-#include "sys_def.h"
 
 #include "esp_littlefs.h"
 #include "esp_http_server.h"
@@ -135,7 +134,7 @@ typedef struct {
         gw_uart_t desc;
         gw_uart_config_t cnf;
         void *proto_context; /* holds upstanding proto descriptor */
-      } port[2];
+      } port[3];
     } uart;
 } app_context_t;
 
@@ -231,6 +230,10 @@ void net_save_config(const app_context_t *app);
  * их зовёт такт ядра, который крутит задача приложения) */
 esp_err_t api_sys_run(app_context_t *app);
 
+#define ESP_WS_API_UART0_CNF         "uart0.config"
+#define ESP_WS_API_UART0_RAW_RX      "uart0.rx"
+#define ESP_WS_API_UART0_RAW_TX      "uart0.tx"
+#define ESP_WS_API_UART0_ECHO        "uart0.echo"
 #define ESP_WS_API_UART1_CNF         "uart1.config"
 #define ESP_WS_API_UART1_RAW_RX      "uart1.rx"
 #define ESP_WS_API_UART1_RAW_TX      "uart1.tx"
@@ -242,6 +245,7 @@ esp_err_t api_sys_run(app_context_t *app);
 //TODO: move to apih_uart.h
 esp_err_t ws_uart_run(app_context_t *app);
 
+#define ESP_WS_API_UART0_MODBUS_REQ  "uart0.modbus"
 #define ESP_WS_API_UART1_MODBUS_REQ  "uart1.modbus"
 #define ESP_WS_API_UART2_MODBUS_REQ  "uart2.modbus"
 esp_err_t ws_modbus_run(app_context_t *app);

@@ -155,6 +155,44 @@ static int send_bounded(web_httpd_t *port, int fd, const char *buf, size_t len,
     }
 }
 
+/* Запись куска в сокет сессии: сколько сокет принял — столько и записано.
+ *
+ * Возврат: >= 0 — записано столько байт (может быть меньше len — остаток вызывающий
+ * допишет сам, у него своя копия); -1 — сокет сломан (не EAGAIN, а настоящая
+ * ошибка), писать в него больше нельзя.
+ *
+ * Ждать «пока влезет всё» здесь нельзя: вызывающий — такт сервисов, и один
+ * нечитающий клиент не должен его задерживать. Поэтому одна попытка без
+ * ожидания, а если что-то уже записано — короткая (stall_ms) попытка добрать
+ * остаток: частично записанный кадр хуже, чем задержка в единицы миллисекунд. */
+int web_httpd_write(web_httpd_t *port, int fd, const char *buf, size_t len,
+                    uint32_t stall_ms) {
+    if ((port == NULL) || (fd <= 0) || (buf == NULL) || (len == 0)) return -1;
+    web_httpd_session_t *s = session_take(port, fd);
+    size_t done = 0;
+    TickType_t base = xTaskGetTickCount();
+    for (;;) {
+        int ret = send(fd, buf + done, len - done, MSG_DONTWAIT);
+        if (ret > 0) {
+            done += (size_t)ret;
+            if (s) s->last_ok = xTaskGetTickCount();
+            if (done == len) return (int)done;
+            continue;
+        }
+        if (ret < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR
+            && errno != ENOMEM && errno != ENOBUFS) {
+            ESP_LOGW(TAG, "write fd=%d len=%u errno=%d (%s), записано %u",
+                     fd, (unsigned)len, errno, strerror(errno), (unsigned)done);
+            return (done == 0) ? -1 : (int)done;
+        }
+        /* Места нет. Что-то записано — ждём недолго и добираем; не записано
+         * ничего — сразу отдаём 0, пусть вызывающий решает сам. */
+        if ((done == 0) || ((xTaskGetTickCount() - base) > pdMS_TO_TICKS(stall_ms)))
+            return (int)done;
+        vTaskDelay(pdMS_TO_TICKS(1));
+    }
+}
+
 /* Своя отправка сессии порта: бюджет берётся из настроек порта. */
 static int port_send(httpd_handle_t hd, int fd, const char *buf, size_t len, int flags) {
     web_httpd_t *port = (web_httpd_t *)httpd_get_global_user_ctx(hd);

@@ -91,6 +91,9 @@ void ws_transport_stub_complete_pending(ws_transport_stub_conn_t *conn, transpor
  * индексу). Тесту это нужно, чтобы проверить, что один и тот же буфер ушёл
  * нескольким подписчикам, а не был собран каждому свой. */
 const void *ws_transport_stub_pending_data(ws_transport_stub_conn_t *conn, int idx);
+/* Длина буфера, отданного в begin_send: он НЕ строка (ядро не дописывает '\0'),
+ * поэтому разбирать его можно только по длине. */
+uint32_t    ws_transport_stub_pending_len(ws_transport_stub_conn_t *conn, int idx);
 
 /* Отдать ядру CLOSED ещё раз, даже если соединение уже закрыто: транспорт вправе
  * сообщить о разрыве дважды, и ядро обязано пережить это без двойного

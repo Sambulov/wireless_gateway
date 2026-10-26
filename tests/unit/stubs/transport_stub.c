@@ -479,6 +479,11 @@ const void *ws_transport_stub_pending_data(ws_transport_stub_conn_t *conn, int i
     return conn->pending[idx].data;
 }
 
+uint32_t ws_transport_stub_pending_len(ws_transport_stub_conn_t *conn, int idx) {
+    if((conn == NULL) || (idx < 0) || (idx >= conn->pending_count)) return 0;
+    return conn->pending[idx].len;
+}
+
 void ws_transport_stub_complete_pending(ws_transport_stub_conn_t *conn, transport_result_t res) {
     if(conn == NULL) return;
     /* Обработчик может поставить новые отправки: завершаем только те, что уже

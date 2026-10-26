@@ -49,6 +49,13 @@
       font-weight: bold;
     }
 
+    /* Кнопка подключения: зелёная «Подключиться», пока связи нет, и красная
+     * «Отключиться», когда подключились. Класс переставляет script.js. */
+    #connect-btn { background: #2e9b4f; }
+    #connect-btn:hover { background: #37b85e; }
+    #connect-btn.connected { background: #c0392b; }
+    #connect-btn.connected:hover { background: #e04a37; }
+
     .button.toggle { background: #2d2d2d; border: 1px solid #444; color: #9aa4b2; font-weight: normal; }
     .button.toggle.on { background: #1f6f3f; border-color: #2e8b57; color: #eaffea; }
 
@@ -138,6 +145,7 @@
           <select id="port-sel">
             <option value="2">uart2</option>
             <option value="1">uart1</option>
+            <option value="0">uart0</option>
           </select>
         </label>
         <label class="set"><span>режим</span>
