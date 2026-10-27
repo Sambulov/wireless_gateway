@@ -1,10 +1,6 @@
 /* Служба прибора: sys.info, sys.net, sys.reboot — состояние прибора, сетевые
- * адреса его интерфейсов и перезагрузка.
- *
- * Имя файла — «device», а не «system»: system здесь слишком общее слово, системные
- * так или иначе все три файла (apih_wifi.c, apih_device.c, apih_files.c), а
- * «прибор» точно называет то, что общего у этих трёх методов. Общая обвязка —
- * apih_sys_common.c, точка сборки — apih_sys.c.
+ * адреса его интерфейсов и перезагрузка. Общая обвязка — apih_sys_common.c,
+ * точка сборки — apih_sys.c.
  */
 #include <stdio.h>
 #include <string.h>
@@ -23,6 +19,9 @@
 #include "app.h"
 
 #include "apih_sys_internal.h"
+
+#define GW_LOG_MODULE GW_LOG_API
+#include "gw_log.h"
 
 #define REBOOT_DELAY_MS 1000
 
@@ -50,9 +49,7 @@ static void handle_info(const sys_service_t *svc) {
     uint8_t clients = net_wifi_clients_count();
 
     /* MAC — у ДРАЙВЕРА, а не из eFuse: esp_read_mac() отдаёт заводской адрес даже
-     * когда интерфейсу назначен другой (esp_wifi_set_mac его не меняет), и тогда
-     * страница показывала бы не тот адрес, которым прибор работает в эфире.
-     * Чтение и печать адреса — общие с Wi-Fi (mac_runtime в apih_sys_common.c). */
+     * когда интерфейсу назначен другой (esp_wifi_set_mac его не меняет). */
     mac_runtime(WIFI_IF_STA, app->mac_sta_factory, mac_sta, sizeof(mac_sta));
     mac_runtime(WIFI_IF_AP,  app->mac_ap_factory,  mac_ap,  sizeof(mac_ap));
     netif_ip_str("WIFI_STA_DEF", ip_sta, sizeof(ip_sta));
@@ -69,13 +66,12 @@ static void handle_info(const sys_service_t *svc) {
     gw_jsonw_str(&sys_w, "AP_IP", ip_ap);
     gw_jsonw_int(&sys_w, "AP_CLIENTS", clients);
     gw_jsonw_bool(&sys_w, "FROM_AP", svc->from_ap);
-    /* The page uses this to enable configuration controls */
     gw_jsonw_bool(&sys_w, "CAN_CONFIGURE", change_allowed(svc, clients));
     gw_jsonw_str(&sys_w, "STA_SSID", (char *)app->sta_cnf.sta.ssid);
     gw_jsonw_str(&sys_w, "STA_IP", ip_sta);
     gw_jsonw_bool(&sys_w, "STA_CONNECTED", ip_sta[0] != '\0');
-    /* К КАКОЙ точке подключены: имя сети у двух точек одно, различает их BSSID.
-     * Страница показывает это рядом с состоянием, чтобы выбор был проверяем. */
+    /* к какой точке подключены: имя сети у двух точек одно, различает их BSSID —
+     * страница показывает это рядом с состоянием, чтобы выбор был проверяем. */
     wifi_ap_record_t ap_info;
     if (esp_wifi_sta_get_ap_info(&ap_info) == ESP_OK) {
         char ap_bssid[MAC_TEXT_LEN];
@@ -92,8 +88,6 @@ static void handle_info(const sys_service_t *svc) {
     gw_jsonw_uint(&sys_w, "FS_TOTAL", (uint64_t)fs_total);
     gw_jsonw_uint(&sys_w, "FS_USED", (uint64_t)fs_used);
 
-    /* Firmware identity and OTA slots, so the page can show what is running and
-     * what an upload would replace */
     const esp_app_desc_t *desc = esp_app_get_description();
     if (desc) {
         gw_jsonw_str(&sys_w, "FW_NAME", desc->project_name);
@@ -112,16 +106,15 @@ static void handle_info(const sys_service_t *svc) {
 
 static void reboot_task(void *arg) {
     vTaskDelay(pdMS_TO_TICKS((uint32_t)(uintptr_t)arg));
-    ESP_LOGW(TAG, "Rebooting on client request");
+    LOGI(TAG, "Rebooting on client request");
     esp_restart();
 }
 
-/* 1 — перезагрузка разрешена этому клиенту (ответ уже собран), 0 — отказано. */
+/* 1 — перезагрузка разрешена этому клиенту (ответ уже собран), 0 — отказано */
 static uint8_t handle_reboot(const sys_service_t *svc) {
-    /* Перезагрузку разрешает экземпляр сервиса (регистрация на ядро): у точки
-     * доступа и у STA-ядра она разрешена (см. sys_svc_mut). Условие про
-     * единственного клиента к ней не относится: перезагрузка настройки не
-     * меняет. */
+    /* перезагрузку разрешает экземпляр сервиса (регистрация на ядро): на STA-ядре
+     * у неё свой контекст (см. sys_svc_mut). Условие про единственного клиента к
+     * ней не относится — настройки она не меняет. */
     if (!svc->may_change) {
         ESP_LOGW(TAG, "Reboot refused (from_ap=%u)", svc->from_ap);
         resp_denied(svc, net_wifi_clients_count());
@@ -153,7 +146,7 @@ static void net_cfg_to_json(const char *name, const net_iface_cnf_t *cfg) {
     gw_jsonw_end(&sys_w);
 }
 
-/* A netmask has to be a run of ones followed by a run of zeros */
+/* маска — непрерывная последовательность единиц, затем нулей */
 static uint8_t net_mask_valid(uint32_t mask) {
     uint32_t host = ntohl(mask);
     if (host == 0 || host == 0xFFFFFFFFu)
@@ -164,7 +157,7 @@ static uint8_t net_mask_valid(uint32_t mask) {
 
 static void net_apply_task(void *arg) {
     vTaskDelay(pdMS_TO_TICKS(NET_APPLY_DELAY_MS));
-    ESP_LOGW(TAG, "Applying network settings");
+    LOGI(TAG, "Applying network settings");
     net_apply_config((const app_context_t *)arg);
     vTaskDelete(NULL);
 }
@@ -189,8 +182,8 @@ static void handle_net(const sys_service_t *svc, const uint8_t *data, uint32_t l
         resp_ok();
         net_cfg_to_json("STA_CFG", &app->net_sta);
 
-        /* Nothing configured yet means the built-in default is in force — show
-         * the address actually in use so the form can be edited as is. */
+        /* Ничего не настроено — в силе встроенный адрес по умолчанию: показываем
+         * действующий, чтобы форму можно было править как есть. */
         net_iface_cnf_t ap_show = app->net_ap;
         if (ap_show.ip == 0) {
             esp_netif_t *ap = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
@@ -232,8 +225,8 @@ static void handle_net(const sys_service_t *svc, const uint8_t *data, uint32_t l
     gw_json_str(&json, "DNS1", s_dns1, sizeof(s_dns1));
     gw_json_str(&json, "DNS2", s_dns2, sizeof(s_dns2));
 
-    /* The access point always has a fixed address of its own; only the station
-     * can be told to use DHCP. */
+    /* у точки доступа адрес всегда фиксированный; на DHCP переводится только
+     * станция */
     uint8_t want_static = is_ap || (mode[0] != '\0' && strcasecmp(mode, "static") == 0);
 
     net_iface_cnf_t cfg = is_sta ? app->net_sta : app->net_ap;
@@ -266,7 +259,7 @@ static void handle_net(const sys_service_t *svc, const uint8_t *data, uint32_t l
             cfg.mode = NET_MODE_STATIC;
             cfg.ip = ip;
             cfg.mask = mask;
-            /* The access point is the gateway for its own clients */
+            /* точка доступа — шлюз для своих клиентов */
             cfg.gw = is_ap ? ip : gw;
             cfg.dns1 = is_ap ? 0 : dns1;
             cfg.dns2 = is_ap ? 0 : dns2;
@@ -276,9 +269,7 @@ static void handle_net(const sys_service_t *svc, const uint8_t *data, uint32_t l
     if (bad) return;
 
     /* Сравниваем с текущими настройками: страница присылает адрес при каждом
-     * сохранении карточки, в том числе когда правили только MAC или пароль.
-     * Перезапускать из-за этого DHCP точки доступа (а он у неё останавливается
-     * на время смены адреса) незачем. */
+     * сохранении карточки, а перезапускать из-за этого DHCP точки доступа незачем. */
     const net_iface_cnf_t *cur = is_sta ? &app->net_sta : &app->net_ap;
     uint8_t changed = memcmp(cur, &cfg, sizeof(cfg)) != 0;
 
@@ -291,15 +282,15 @@ static void handle_net(const sys_service_t *svc, const uint8_t *data, uint32_t l
     gw_jsonw_bool(&sys_w, "CHANGED", changed);
 
     if (!changed) {
-        ESP_LOGI(TAG, "%s address unchanged — nothing to apply", is_sta ? "STA" : "AP");
+        LOGI(TAG, "%s address unchanged — nothing to apply", is_sta ? "STA" : "AP");
         return;
     }
 
     net_save_config(app);
 
     if (is_ap) {
-        /* Changing the access point address drops the very connection this answer
-         * travels over, so apply it once the response has gone out. */
+        /* Смена адреса точки доступа рвёт то самое соединение, по которому уйдёт
+         * ответ, поэтому применяем его после отправки. */
         gw_jsonw_bool(&sys_w, "RECONNECT", 1);
         if (xTaskCreate(net_apply_task, "net_apply", 2560, app, 5, NULL) != pdPASS)
             ESP_LOGE(TAG, "Failed to schedule network apply");
@@ -311,9 +302,7 @@ static void handle_net(const sys_service_t *svc, const uint8_t *data, uint32_t l
 /* ── Обработчики вызовов ─────────────────────────────────────────────────── *
  *
  * Контракт (api.h): обработчик не блокирующий, отвечает сам и возвращает 0 —
- * вызов завершён. call == NULL — принудительное завершение: освобождать нечего
- * (контекст — статический экземпляр сервиса), поэтому просто сообщаем, что
- * завершились. Ответ отправляется ровно один раз за вызов. */
+ * вызов завершён; call == NULL — вызов сняли. Ответ отправляется ровно один раз. */
 
 static uint8_t sys_info_handler(void *call, void **context, uint8_t *data, uint32_t data_len) {
     (void)data; (void)data_len;
@@ -333,8 +322,7 @@ static uint8_t sys_reboot_handler(void *call, void **context, uint8_t *data, uin
     if (!svc) return 0;
     resp_begin();
     uint8_t armed = handle_reboot(svc);
-    /* Ответ уходит клиенту до перезагрузки: задача её откладывает, а отправка
-     * асинхронна — соединение успевает получить конверт ответа. */
+    /* ответ уходит до перезагрузки: задача её откладывает, а отправка асинхронна */
     send_response(call);
     if (armed && (xTaskCreate(reboot_task, "reboot", 2560,
                               (void *)(uintptr_t)REBOOT_DELAY_MS, 5, NULL) != pdPASS))
@@ -359,20 +347,17 @@ esp_err_t apih_device_run(app_context_t *app) {
     api_t *ap  = app->api_ap;    /* ядро точки доступа: администратор */
     api_t *sta = app->api_sta;   /* ядро станции: только чтение */
 
-    /* sys.net меняет настройки, поэтому — по тому же правилу, что wifi.sta/ap:
-     * на AP-ядре администратор, на STA-ядре только чтение. */
+    /* sys.net меняет настройки: на AP-ядре администратор, на STA-ядре только чтение */
     ok &= register_service(ap,  sys_net_handler, ESP_WS_API_SYS_NET, &sys_svc_ap);
     ok &= register_service(sta, sys_net_handler, ESP_WS_API_SYS_NET, &sys_svc_ro);
 
-    /* sys.info — чтение, но страница по нему решает, можно ли ей показывать
-     * кнопки записи: FROM_AP и CAN_CONFIGURE берутся из контекста регистрации
-     * того ядра, на которое пришёл вызов. */
+    /* sys.info — чтение, но по FROM_AP и CAN_CONFIGURE страница решает, показывать
+     * ли кнопки записи: они берутся из контекста того ядра, куда пришёл вызов. */
     ok &= register_service(ap,  sys_info_handler, ESP_WS_API_SYS_INFO, &sys_svc_ap);
     ok &= register_service(sta, sys_info_handler, ESP_WS_API_SYS_INFO, &sys_svc_ro);
 
-    /* Перезагрузка: на AP-ядре — администратор, на STA-ядре — контекст, который
-     * менять разрешает, но клиент не на точке доступа (см. sys_svc_mut):
-     * перезагрузка доступна с любого интерфейса. */
+    /* перезагрузка — не настройка, доступна с любого интерфейса: на STA-ядре у неё
+     * контекст, который менять разрешает, но клиент не на точке доступа */
     ok &= register_service(ap,  sys_reboot_handler, ESP_WS_API_SYS_REBOOT, &sys_svc_ap);
     ok &= register_service(sta, sys_reboot_handler, ESP_WS_API_SYS_REBOOT, &sys_svc_mut);
 

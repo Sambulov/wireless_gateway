@@ -498,8 +498,8 @@ TEST(ApihUartRx, EveryPartIsSelfContainedBase64) {
 
 /* Транспорт не принимает кадр долго (клиент ушёл, связь встала). Держать его
  * вечно нельзя: пока кадр в буфере, порт не отдаёт ничего — терминал «просто
- * перестаёт работать» до перезагрузки. Через UART_RX_PENDING_TRIES_MAX тактов
- * кадр отпускается, и порт снова живой. */
+ * перестаёт работать» до перезагрузки. Через UART_RX_PENDING_HOLD_MS кадр
+ * отпускается, и порт снова живой. */
 TEST(ApihUartRx, StuckPendingFrameDoesNotBlockThePort) {
     client_subscription(api, conn, ESP_WS_API_UART2_RAW_RX, 1);
     ws_transport_stub_set_send_result(conn, TRANSPORT_BUSY);

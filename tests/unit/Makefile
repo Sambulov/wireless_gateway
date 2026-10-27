@@ -14,10 +14,18 @@ INCLUDES := \
     -I$(ROOT)/main \
     -I$(CPPUTEST)/include
 
-# ASan/UBSan: regression tests for memory bugs (use-after-free, NULL
-# writes) only fail reliably under a sanitizer. UBSan is made fatal —
-# by default it only prints and the run still reports OK.
+# ASan/UBSan: regression tests for memory bugs (use-after-free, NULL writes)
+# only fail reliably under a sanitizer; UBSan made fatal (по умолчанию он только
+# печатает, и прогон всё равно рапортует OK). Рантайма в тулчейне может не быть
+# (MinGW-w64 без libasan/libubsan) — тогда сборка падает с "cannot find -lasan",
+# поэтому включаем санитайзеры только если тулчейн их действительно несёт.
+# Явный "make SANITIZE=..." по-прежнему главнее.
 SANITIZE := -fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer
+ifeq ($(wildcard $(shell $(CC) -print-file-name=libasan.dll.a)),)
+SANITIZE :=
+else ifeq ($(wildcard $(shell $(CC) -print-file-name=libubsan.dll.a)),)
+SANITIZE :=
+endif
 
 # APIH_UART_TEST / APIH_HOST_TEST — точки входа для тестов: службы отдают под ними
 # свой сброс состояния, а apih_sys_internal.h подключает тень app.h вместо
@@ -47,7 +55,7 @@ C_SRCS := \
     apih_sys_common.c \
     web_iface_policy.c \
     fs_path.c \
-    seg_ring.c \
+    SegmentedRing.c \
     GwJson.c \
     jsmn.c \
     LinkedList.c \

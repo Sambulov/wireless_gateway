@@ -9,10 +9,10 @@
 #include "web_httpd.h"
 #include "web_server.h"
 #include "web_iface_policy.h"
-/* Транспорт интерфейса порождает объект (web_server_open_websocket): реализация
- * и её контекст живут в main/ws_transport.c, а работа с соединениями идёт через
- * этот объект. */
 #include "ws_transport.h"
+
+#define GW_LOG_MODULE GW_LOG_HTTP
+#include "gw_log.h"
 
 static const char *TAG = "web_server";
 
@@ -20,8 +20,7 @@ static const char *TAG = "web_server";
  * WebSocket-точка своего интерфейса. */
 #define WEB_SERVER_ROUTES_MAX    12
 
-/* Сколько транспортов может породить один объект. Их столько, сколько
- * WebSocket-точек оказано интерфейсу; в прошивке — одна.
+/* Сколько транспортов может породить один объект (в прошивке — одна точка).
  * Список нужен для владения: порождённое объектом освобождает объект. */
 #define WEB_SERVER_TRANSPORTS_MAX 4
 
@@ -65,10 +64,8 @@ static web_route_t *route_reserved(web_server_t *srv, web_route_kind_t kind,
 }
 
 /* Занять место под путь в таблице объекта. Путь при этом ещё НЕ отдан httpd:
- * публикует его route_publish, и делает это либо регистрация страницы
- * (web_server_register_uri), либо активация WebSocket-точки
- * (web_server_activate_ws). Политика интерфейса применяется сразу — она следует
- * за путём, а не за моментом публикации. */
+ * публикует его route_publish — регистрация страницы или активация
+ * WebSocket-точки. Политика интерфейса применяется сразу, она следует за путём. */
 static web_route_t *route_claim(web_server_t *srv, const char *uri,
                                 web_route_kind_t kind) {
     if ((srv == NULL) || (uri == NULL)) return NULL;
@@ -127,14 +124,13 @@ static uint8_t route_publish(web_server_t *srv, web_route_t *route) {
 }
 
 /* Путь, которым httpd выбрал этот запрос. Шаблон приходит от сокетного слоя:
- * сопоставление с путём запроса уже сделал httpd (httpd_uri_match_wildcard).
+ * сопоставление с путём запроса уже сделал httpd.
  *
  * Метод сверяется только у обычных маршрутов: рукопожатие WebSocket httpd
- * отвечает сам, а каждый следующий кадр приходит запросом с method == 0 (не GET),
- * и путь у него тот же, что у точки.
+ * отвечает сам, а каждый следующий кадр приходит запросом с method == 0 (не GET).
  *
- * Заявка без обработчика (WS-точка, закреплённая, но ещё не активированная)
- * не находится: клиенту нечего на неё ответить. */
+ * Заявка без обработчика (WS-точка, ещё не активированная) не находится: клиенту
+ * нечего на неё ответить. */
 static web_route_t *route_find(web_server_t *srv, web_route_kind_t kind,
                                const char *uri, httpd_method_t method) {
     if ((srv == NULL) || (uri == NULL)) return NULL;
@@ -151,12 +147,8 @@ static web_route_t *route_find(web_server_t *srv, web_route_kind_t kind,
 /* ── Регистрация сервисов ───────────────────────────────────────────────────
  *
  * Политика «какой сервис каким интерфейсам оказан» живёт в одной таблице
- * (web_iface_policy.c): здесь она лишь применяется к маршруту, чтобы отказ не
- * расползался проверками по обработчикам и его нельзя было забыть в отдельном
- * обработчике. Масок интерфейсов у httpd нет, поэтому решение остаётся за нами.
- *
- * Отказ — 404 Not Found, как у несуществующего пути: клиенту нечего знать о том,
- * что путь на устройстве есть; он есть, но не для него. */
+ * (web_iface_policy.c): здесь она лишь применяется к маршруту. Отказ — 404, как у
+ * несуществующего пути: клиенту нечего знать о том, что путь на устройстве есть. */
 uint8_t web_server_register_uri(web_server_t *srv, const httpd_uri_t *uri) {
     if ((srv == NULL) || (uri == NULL) || (uri->uri == NULL) ||
         (uri->handler == NULL)) return 0;
@@ -173,11 +165,10 @@ uint8_t web_server_register_uri(web_server_t *srv, const httpd_uri_t *uri) {
         return 0;
     }
 
-    /* Сервис, оказанный любому интерфейсу, регистрируется как есть: проверять
-     * нечего, и на горячем пути (кадры WebSocket, страницы, файлы) не
-     * появляется ни одного лишнего вызова. */
+    /* Сервис, оказанный любому интерфейсу, регистрируется как есть: на горячем
+     * пути (кадры WebSocket, страницы, файлы) не появляется лишних вызовов. */
     if (route->iface_mask != GW_IFACE_MASK_ANY)
-        ESP_LOGI(TAG, "Сервис '%s' оказан интерфейсам 0x%08lx; прочим — 404",
+        LOGI(TAG, "Сервис '%s' оказан интерфейсам 0x%08lx; прочим — 404",
                  uri->uri, (unsigned long)route->iface_mask);
     return 1;
 }
@@ -185,15 +176,11 @@ uint8_t web_server_register_uri(web_server_t *srv, const httpd_uri_t *uri) {
 /* ── Транспорт интерфейса ───────────────────────────────────────────────────
  *
  * Транспорт порождает объект, а не приходит со стороны: интерфейс уже задан
- * объектом, и «какой транспорт обслуживает какой интерфейс» отдельно не
- * спрашивается — другой интерфейс порождает другой объект. Ни реестра, ни
- * таблицы «интерфейс → транспорт» здесь нет: экземпляр помнит сам себя.
+ * объектом. Ни реестра, ни таблицы «интерфейс → транспорт» здесь нет.
  *
- * URI закрепляется за объектом здесь и сразу — вместе с политикой интерфейса, —
- * но в httpd он попадает только при активации (web_server_activate_ws): между
- * порождением и активацией вызывающий назначает транспорту обработчик. Так
- * соединение, пришедшее раньше подписчика, не попадает в «висящую» сессию, а
- * просто не находит пути. */
+ * URI закрепляется за объектом сразу, вместе с политикой интерфейса, но в httpd
+ * попадает только при активации (web_server_activate_ws): между порождением и
+ * активацией вызывающий назначает транспорту обработчик. */
 transport_t *web_server_open_websocket(web_server_t *srv, const char *uri) {
     if ((srv == NULL) || (uri == NULL)) return NULL;
 
@@ -222,7 +209,7 @@ transport_t *web_server_open_websocket(web_server_t *srv, const char *uri) {
     /* 3. Порождённое принадлежит объекту: web_server_close его освободит. */
     srv->transports[srv->transport_count++] = transport;
 
-    ESP_LOGI(TAG, "Транспорт на '%s' порождён для интерфейса %lu: URI ждёт активации",
+    LOGI(TAG, "Транспорт на '%s' порождён для интерфейса %lu: URI ждёт активации",
              uri, (unsigned long)srv->iface);
     return transport;
 }
@@ -254,7 +241,7 @@ uint8_t web_server_activate_ws(web_server_t *srv, const char *uri,
         return 0;
     }
 
-    ESP_LOGI(TAG, "WebSocket-точка '%s' активна на интерфейсе %lu", uri,
+    LOGI(TAG, "WebSocket-точка '%s' активна на интерфейсе %lu", uri,
              (unsigned long)srv->iface);
     return 1;
 }
@@ -262,13 +249,11 @@ uint8_t web_server_activate_ws(web_server_t *srv, const char *uri,
 /* ── Поиск маршрута по пути запроса ──────────────────────────────────────────
  *
  * httpd выбирает обработчик по своей таблице, а она одна на порт: путь мог
- * зарегистрировать объект ДРУГОГО интерфейса. Так устроена вшитая страница
- * конфигурации — её маршрут есть только у точки доступа, а в таблице порта 80 он
- * один на всех. Поэтому объект, не найдя у себя шаблон, которым httpd выбрал
- * запрос, ищет по СВОЕЙ таблице и уже по пути запроса, в порядке регистрации —
- * как это делает httpd. Общий обработчик файлов (шаблон «звёздочка») есть у
- * каждого объекта, поэтому запрос с интерфейса, которому путь не оказан,
- * означает обычный путь файловой системы. */
+ * зарегистрировать объект ДРУГОГО интерфейса. Поэтому объект, не найдя у себя
+ * шаблон, которым httpd выбрал запрос, ищет по СВОЕЙ таблице и по пути запроса, в
+ * порядке регистрации. Общий обработчик файлов (шаблон «звёздочка») есть у каждого
+ * объекта, поэтому запрос с интерфейса, которому путь не оказан, означает обычный
+ * путь файловой системы. */
 static web_route_t *route_find_request(web_server_t *srv, web_route_kind_t kind,
                                        const char *path, httpd_method_t method) {
     if ((path == NULL) || (path[0] != '/')) return NULL;
@@ -287,8 +272,8 @@ static web_route_t *route_find_request(web_server_t *srv, web_route_kind_t kind,
 /* ── Диспетчеризация запроса ──────────────────────────────────────────────── */
 
 /* Вызвать обработчик маршрута с контекстом, с которым его регистрировали: в
- * req->user_ctx на время вызова лежит то, что положил сокетный слой. Возвращаем
- * исходное значение — httpd заполняет поле заново на каждый запрос. */
+ * req->user_ctx на время вызова лежит то, что положил сокетный слой, поэтому
+ * исходное значение возвращаем на место. */
 static esp_err_t route_call(web_route_t *route, httpd_req_t *req) {
     if ((route == NULL) || (req == NULL)) return ESP_FAIL;
 
@@ -309,17 +294,17 @@ esp_err_t web_server_handle(web_server_t *srv, web_route_kind_t kind,
     if (route == NULL) {
         route = route_find_request(srv, kind, req->uri, req->method);
         if (route != NULL)
-            ESP_LOGD(TAG, "URI '%s' найден по таблице интерфейса %lu, а не по '%s'",
+            LOGD(TAG, "URI '%s' найден по таблице интерфейса %lu, а не по '%s'",
                      req->uri, (unsigned long)srv->iface, uri);
     }
     if (route == NULL) {
-        ESP_LOGW(TAG, "URI '%s' не оказан интерфейсу %lu — 404", uri,
+        LOGI(TAG, "URI '%s' не оказан интерфейсу %lu — 404", uri,
                  (unsigned long)srv->iface);
         return httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Not found");
     }
 
     if (!web_iface_mask_allows(route->iface_mask, srv->iface)) {
-        ESP_LOGW(TAG, "URI '%s' не обслуживается на интерфейсе %lu (маска 0x%08lx) — 404",
+        LOGI(TAG, "URI '%s' не обслуживается на интерфейсе %lu (маска 0x%08lx) — 404",
                  uri, (unsigned long)srv->iface, (unsigned long)route->iface_mask);
         return httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Not found");
     }
@@ -333,7 +318,7 @@ esp_err_t web_server_handshake(web_server_t *srv, web_route_kind_t kind,
 
     web_route_t *route = route_find(srv, kind, uri, HTTP_GET);
     if ((route == NULL) || (route->post_handshake == NULL)) {
-        ESP_LOGW(TAG, "Рукопожатие '%s' не оказано интерфейсу %lu", uri,
+        LOGI(TAG, "Рукопожатие '%s' не оказано интерфейсу %lu", uri,
                  (unsigned long)srv->iface);
         return ESP_FAIL;
     }
@@ -357,7 +342,7 @@ uint8_t web_server_session_open(web_server_t *srv, int fd) {
     if (srv->session_count >= WEB_SERVER_SESSIONS_MAX) return 0;
 
     srv->sessions[srv->session_count++] = fd;
-    ESP_LOGD(TAG, "Сессия интерфейса %lu: fd=%d (открыто %u)", (unsigned long)srv->iface,
+    LOGD(TAG, "Сессия интерфейса %lu: fd=%d (открыто %u)", (unsigned long)srv->iface,
              fd, (unsigned)srv->session_count);
     return 1;
 }
@@ -369,7 +354,7 @@ void web_server_session_release(web_server_t *srv, int fd) {
         srv->session_count--;
         srv->sessions[i] = srv->sessions[srv->session_count];
         srv->sessions[srv->session_count] = 0;
-        ESP_LOGD(TAG, "Сессия интерфейса %lu: fd=%d закрыта (осталось %u)",
+        LOGD(TAG, "Сессия интерфейса %lu: fd=%d закрыта (осталось %u)",
                  (unsigned long)srv->iface, fd, (unsigned)srv->session_count);
         return;
     }
@@ -412,8 +397,8 @@ web_server_t *web_server_open(uint32_t iface) {
     if (srv == NULL) return NULL;
     srv->iface = iface;
 
-    /* Объект приходит к каждому поднятому порту сам: порт не разыскивает
-     * объекты, а помнит, чей он, — иначе появился бы скрытый реестр серверов. */
+    /* Объект приходит к каждому поднятому порту сам: порт помнит, чей он, — иначе
+     * появился бы скрытый реестр серверов. */
     for (uint32_t kind = 0; kind < WEB_ROUTE_KINDS; kind++) {
         web_httpd_t *port = web_httpd_port((web_route_kind_t)kind);
         if (port == NULL) {
@@ -430,7 +415,7 @@ web_server_t *web_server_open(uint32_t iface) {
         srv->ports[kind] = port;
     }
 
-    ESP_LOGI(TAG, "Веб-сервер интерфейса %lu поднят", (unsigned long)iface);
+    LOGI(TAG, "Веб-сервер интерфейса %lu поднят", (unsigned long)iface);
     return srv;
 }
 
@@ -439,8 +424,7 @@ void web_server_close(web_server_t *srv) {
 
     /* Сначала отвязываемся: соединения интерфейса перестают попадать в объект, а
      * записи портов перестают ссылаться на его память. Открытые сессии остаются
-     * за сокетным слоем — он их и закрывает; сервер живёт до перезагрузки, так
-     * что закрывать его вместе с соединениями не требуется. */
+     * за сокетным слоем — он их и закрывает. */
     for (uint32_t kind = 0; kind < WEB_ROUTE_KINDS; kind++)
         if (srv->ports[kind] != NULL) web_httpd_detach(srv->ports[kind], srv);
 
@@ -448,12 +432,11 @@ void web_server_close(web_server_t *srv) {
         route_drop(srv, &srv->routes[0]);
 
     /* Транспорты породил этот объект — он же их и освобождает: их контекст
-     * ссылается на объект (через него они работают с соединениями), и после
-     * free(srv) этой ссылке жить негде. */
+     * ссылается на объект, и после free(srv) этой ссылке жить негде. */
     for (uint8_t i = 0; i < srv->transport_count; i++)
         ws_transport_destroy(srv->transports[i]);
     srv->transport_count = 0;
 
-    ESP_LOGI(TAG, "Веб-сервер интерфейса %lu погашен", (unsigned long)srv->iface);
+    LOGI(TAG, "Веб-сервер интерфейса %lu погашен", (unsigned long)srv->iface);
     free(srv);
 }

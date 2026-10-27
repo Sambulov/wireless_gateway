@@ -7,6 +7,9 @@
 #include "app.h"
 #include "uart.h"
 
+#define GW_LOG_MODULE GW_LOG_UART
+#include "gw_log.h"
+
 typedef struct {
     QueueHandle_t uart_queue;
     int port; // UART_NUM_0, UART_NUM_1, UART_NUM_2
@@ -23,25 +26,18 @@ ASSERRT_STRUCTURE_CAST(gw_uart_private_t, gw_uart_t, GW_UART_PRIVATE_SIZE, "uart
 
 /* ── Эхо однопроводной линии ────────────────────────────────────────────────
  *
- * В однопроводном режиме (GW_UART_MODE_UART_SINGLE_WIRE) всё, что порт передал,
- * возвращается в его же приёмник. Своё эхо надо отбросить — и ровно столько
- * байт, сколько передали: эхо и есть копия посылки.
+ * В однопроводном режиме всё переданное возвращается в свой же приёмник, и это
+ * эхо надо отбросить — ровно столько байт, сколько передали. Считаем по числу
+ * байт, а не по времени: событие приёма приходит НЕ вместе с байтом, драйвер
+ * отдаёт UART_DATA по таймауту приёма, то есть позже последнего байта.
  *
- * Почему по числу байт, а не по времени: событие приёма приходит НЕ вместе с
- * байтом. Драйвер отдаёт UART_DATA, когда сработал таймаут приёма, то есть
- * позже последнего байта. Замер с внутренним кольцом драйвера (uart_set_loop_back
- * — провод не нужен): окно «передача + два знака» (1.5 мс на 16 байтах) к
- * моменту пробуждения задачи уже закрылось, и эхо ушло в приём целиком.
- * Счётчик байт от задержки не зависит.
+ * Ожидание ограничено: если за GIVE_UP_US после расчётного конца передачи эхо не
+ * пришло, линия не однопроводная — счётчик сбрасывается, чтобы не съесть чужой
+ * ответ. Ответ собеседника приходит всегда ПОСЛЕ эха, поэтому отбрасывается
+ * начало, а не середина.
  *
- * Ожидание эха ограничено: если за GIVE_UP_US после расчётного конца передачи
- * эхо не пришло, значит линия не однопроводная — счётчик сбрасывается, чтобы не
- * съесть чужой ответ. Настоящий ответ однопроводной линии приходит всегда ПОСЛЕ
- * эха (собеседник физически не может говорить, пока говорим мы), поэтому
- * отбрасывается начало, а не середина.
- *
- * Счётчики — на порт (индексы UART_NUM_0..2) и через атомарные операции:
- * пишет их задача API, читает задача приёма. */
+ * Счётчики — на порт и через атомарные операции: пишет задача API, читает
+ * задача приёма. */
 #define UART_ECHO_GIVE_UP_US   50000
 
 static volatile uint32_t uart_echo_pending[3];
@@ -50,15 +46,11 @@ static volatile int64_t  uart_echo_deadline_us[3];
 /* ── Простой линии ──────────────────────────────────────────────────────────
  *
  * Клиенту нужно знать, где поток принятого прерывается: по этому признаку
- * протокол на стороне страницы делит данные на кадры (как t3.5 в Modbus RTU).
- * Два источника:
- *   • признак драйвера (event.timeout_flag → gw_uart_event_data_t::b_end) —
- *     «после этих байт линия молчала дольше порога»;
- *   • измеренный простой перед куском (gap_us) — сколько прошло с прошлого
- *     прочтения.
- * Порог молчания задаётся настройкой порта (idle_ch, знаки) и превращается в
- * символьные периоды драйвера: uart_set_rx_timeout ждёт СИМВОЛЫ (~11 бит), а
- * знак у нас 10 бит, отсюда перевод с округлением вверх. */
+ * протокол страницы делит данные на кадры (как t3.5 в Modbus RTU). Признака два:
+ * b_end от драйвера (линия молчала дольше порога) и измеренный gap_us (простой
+ * перед куском). Порог задаётся настройкой порта (idle_ch, знаки) и переводится
+ * в символьные периоды драйвера: uart_set_rx_timeout ждёт СИМВОЛЫ (~11 бит), а
+ * знак у нас 10 бит — отсюда округление вверх. */
 static uint8_t  uart_idle_chars[3];
 static volatile int64_t uart_last_rx_us[3];
 
@@ -127,13 +119,10 @@ static void uart_event_task(void *pvParameters) {
     uart_event_t event;
     gw_uart_private_t *uart = (gw_uart_private_t *)pvParameters;
 
-    //Waiting for UART event.
     while (xQueueReceive(uart->uart_queue, (void *)&event, (TickType_t)portMAX_DELAY)) {
         switch (event.type) {
-        //Event of UART receiving data
-        /*We'd better handler data event fast, there would be much more data events than
-        other types of events. If we take too much time on data event, the queue might
-        be full.*/
+        /* данных приходит много больше прочих событий: обрабатывать быстро,
+         * иначе очередь переполнится. */
         case UART_DATA: {
             if (uart->rx_locked) break;
             gw_uart_event_data_t ev_trig;
@@ -145,9 +134,8 @@ static void uart_event_task(void *pvParameters) {
                 int sz = uart_read_bytes(uart->port, ev_trig.buf, ev_trig.size, 0);
                 if(sz <= 0) break;
                 ev_trig.size = sz;
-                /* Простой линии перед этим куском — по нему клиент видит, где
-                 * кончился предыдущий кадр. Считаем ДО отбрасывания эха: время
-                 * прихода байт от этого не зависит. */
+                /* Простой перед куском — по нему клиент видит, где кончился
+                 * предыдущий кадр. Считаем ДО отбрасывания эха. */
                 ev_trig.gap_us = uart_gap_take(uart->port);
                 /* Однопроводная линия: начало куска — своё же переданное.
                  * Отбрасываем ровно столько байт, сколько передали. */
@@ -168,32 +156,34 @@ static void uart_event_task(void *pvParameters) {
             }
             break;
         }
-        /* Переполнение приёма. Кольцо драйвера уже потеряло байты — но то, что в
-         * нём лежит, отдавать всё равно надо: uart_flush_input() выбросил бы и
-         * его, то есть потери выросли бы с «сколько не влезло» до «всё, что не
-         * успели прочитать». Поэтому только громкое предупреждение: молчаливая
-         * потеря данных — худшее из возможного. */
+        /* Переполнение приёма: кольцо драйвера уже потеряло байты, но что в нём
+         * лежит — отдавать надо (uart_flush_input выбросил бы и это). Пишем не
+         * на каждое событие: консоль синхронная (115200), печать тормозит задачу
+         * приёма и усиливает переполнение. Считаем и пишем раз в секунду. */
         case UART_FIFO_OVF:
-            ESP_LOGW(TAG, "hw fifo overflow: часть принятого потеряна");
+        case UART_BUFFER_FULL: {
+            static uint32_t ovf_count[3];
+            static uint32_t ovf_ms[3];
+            uint8_t  p = (uint8_t)uart->port;
+            uint32_t now = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+            ovf_count[p]++;
+            if ((now - ovf_ms[p]) >= 1000) {
+                ESP_LOGW(TAG, "UART%d: переполнение приёма (событий %lu за %lu мс): часть принятого потеряна",
+                         (int)uart->port, (unsigned long)ovf_count[p],
+                         (unsigned long)(now - ovf_ms[p]));
+                ovf_count[p] = 0;
+                ovf_ms[p] = now;
+            }
             break;
-        case UART_BUFFER_FULL:
-            ESP_LOGW(TAG, "ring buffer full: часть принятого потеряна");
-            break;
-        //Event of UART RX break detected
+        }
         case UART_BREAK:
-            //ESP_LOGI(TAG, "uart rx break");
             break;
-        //Event of UART parity check error
         case UART_PARITY_ERR:
-            //ESP_LOGI(TAG, "uart parity error");
             break;
-        //Event of UART frame error
         case UART_FRAME_ERR:
-            //ESP_LOGI(TAG, "uart frame error");
             break;
-        //Others
         default:
-            ESP_LOGI(TAG, "uart event type: %d", event.type);
+            LOGI(TAG, "uart event type: %d", event.type);
             break;
         }
     }
@@ -242,6 +232,7 @@ static uart_mode_t uart_mode_idf(gw_uart_mode_t mode) {
                                                     : UART_MODE_UART;
 }
 
+#if GW_LOG_MODULE
 static const char *uart_mode_name(gw_uart_mode_t mode) {
     switch (mode) {
         case GW_UART_MODE_RS485_HALF_DUPLEX: return "RS-485";
@@ -250,6 +241,7 @@ static const char *uart_mode_name(gw_uart_mode_t mode) {
         default:                             return "UART";
     }
 }
+#endif
 
 uint8_t gw_uart_set(void *desc, const gw_uart_config_t *cnf) {
     gw_uart_private_t *uart = (gw_uart_private_t *) desc;
@@ -286,9 +278,8 @@ uint8_t gw_uart_set(void *desc, const gw_uart_config_t *cnf) {
     uart->cnf.stop_bits = stop;
     uart->cnf.flow_ctrl = UART_HW_FLOWCTRL_DISABLE;
     uart->cnf.rx_flow_ctrl_thresh = 122;
-    /* Собираем настройки отдельно и переносим их в драйвер ТОЛЬКО после успеха:
-     * иначе при отказе (например, недопустимая скорость) uart->cnf хранил бы
-     * значение, которого на порту нет, и gw_uart_get врал бы и нам, и странице. */
+    /* Настройки переносим в uart->cnf ТОЛЬКО после успеха: иначе при отказе
+     * (например, недопустимая скорость) gw_uart_get врал бы и нам, и странице. */
     uart_config_t next = uart->cnf;
     next.baud_rate = boud;
     next.data_bits = bits;
@@ -301,9 +292,8 @@ uint8_t gw_uart_set(void *desc, const gw_uart_config_t *cnf) {
         ESP_LOGW(TAG, "UART config failed (boud %lu)", boud);
         return 0;
     }
-    /* Режим драйвер принимает только на установленном драйвере (uart_set_mode
-     * требует uart_driver_install) — при инициализации он применяется отдельно,
-     * после установки (см. gw_uart_init). */
+    /* uart_set_mode требует установленного драйвера: при инициализации режим
+     * применяется отдельно, после установки (см. gw_uart_init). */
     if (uart_is_driver_installed(uart->port)
         && uart_set_mode(uart->port, uart_mode_idf(cnf->mode)) != ESP_OK) {
         ESP_LOGW(TAG, "UART mode failed");
@@ -314,14 +304,13 @@ uint8_t gw_uart_set(void *desc, const gw_uart_config_t *cnf) {
     uart->mode = (uint8_t)cnf->mode;
     if (cnf->idle_ch != 0) {
         uart_idle_chars[uart->port] = cnf->idle_ch;
-        /* Таймаут приёма принимается только на установленном драйвере — при
-         * инициализации он применяется отдельно, после установки (gw_uart_init). */
+        /* Таймаут приёма — тоже только на установленном драйвере (gw_uart_init). */
         if (uart_is_driver_installed(uart->port))
             uart_set_rx_timeout(uart->port, uart_idle_symbols(cnf->idle_ch));
     } else if (uart_idle_chars[uart->port] == 0) {
         uart_idle_chars[uart->port] = GW_UART_IDLE_CH_DEFAULT;
     }
-    ESP_LOGI(TAG, "UART configured: port %d, boud: %lu, mode: %s", uart->port, boud,
+    LOGI(TAG, "UART configured: port %d, boud: %lu, mode: %s", uart->port, boud,
              uart_mode_name(cnf->mode));
     return 1;
 }
@@ -349,13 +338,14 @@ uint8_t gw_uart_init(void *desc, gw_uart_port_t port, uint32_t buffer_size) {
         default: return 0;
     }
     uart->port = port;
-    /* Умолчание по порту: RS-485 — только у того порта, к которому он подключён
-     * (UART2, D16/D17). Остальные работают обычным UART, иначе «полудуплекс»
-     * глушил бы приём на время передачи и на консольном порту. Режим потом можно
-     * сменить вызовом uartN.config. */
+    /* Умолчание по порту — обычный UART. RS-485 по номеру порта не включается:
+     * он глушит собственный приём и делает порт без трансивера глухим. Режим
+     * задаётся настройкой порта (uartN.config, MODE 1, см. BOARD_UART2_DEFAULT_RS485). */
     gw_uart_config_t cnf = gw_uart_config_default;
+#if BOARD_UART2_DEFAULT_RS485
     if (uart->port == UART_NUM_2)
         cnf.mode = GW_UART_MODE_RS485_HALF_DUPLEX;
+#endif
     uint8_t result = gw_uart_set(desc, &cnf);
     int rxp, txp, rtsp;
     int cts = UART_PIN_NO_CHANGE;
@@ -382,11 +372,15 @@ uint8_t gw_uart_init(void *desc, gw_uart_port_t port, uint32_t buffer_size) {
     result = result && (uart_set_rx_timeout(uart->port,
                         uart_idle_symbols(uart_idle_chars[uart->port])) == ESP_OK);
     /* Стек задачи приёма: она только копирует принятое в кольцо сервиса и
-     * поднимает событие — 3072 хватает с запасом (было 4096, три порта = 12 КБ
-     * вместо 9). */
-    result = result && (xTaskCreate(uart_event_task, "uart_event", 3072, uart, tskIDLE_PRIORITY + 4, NULL) == pdPASS);
+     * поднимает событие — 3072 хватает с запасом.
+     *
+     * Приоритет — ВЫШЕ задачи такта API (приоритет 5, см. app.c): у линии нет
+     * пауз, а аппаратный FIFO всего 128 байт. При равном или меньшем приоритете
+     * FIFO переполняется и приём теряет данные ещё до кольца. Задача очень
+     * короткая (скопировать кусок и выйти), поэтому вытеснять такт ей можно. */
+    result = result && (xTaskCreate(uart_event_task, "uart_event", 3072, uart, 6, NULL) == pdPASS);
     if(result)
-        ESP_LOGI(TAG, "UART port %d init OK", uart->port);
+        LOGI(TAG, "UART port %d init OK", uart->port);
     return result;
 }
 
@@ -413,14 +407,6 @@ int32_t gw_uart_write(void *desc, const uint8_t *buf, uint16_t size) {
     }
     return uart_write_bytes(uart->port, buf, size);
 }
-
-// int32_t gw_uart_available_read(void *desc) {
-//     gw_uart_private_t *uart = (gw_uart_private_t *) desc;
-//     size_t size;
-//     if(uart_get_buffered_data_len(uart->port, &size) == ESP_OK)
-//         return (int32_t)size;
-//     return -1;
-// }
 
 int32_t gw_uart_available_write(void *desc) {
     gw_uart_private_t *uart = (gw_uart_private_t *) desc;

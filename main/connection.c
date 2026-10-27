@@ -1,11 +1,9 @@
-/* connection.c — точка сборки сети: в каком порядке поднимаются её части и какие
- * IPv4-адреса получают интерфейсы.
+/* connection.c — точка сборки сети: порядок подъёма её частей и IPv4-адреса
+ * интерфейсов.
  *
- * Сами части лежат рядом и друг о друге не знают: net_wifi.c — радио (STA+AP,
- * события драйвера, привязка к выбранной точке), net_scan.c — скан эфира,
- * net_link.c — учёт соединений. Порядок подъёма задан здесь, и он важен: учёт
- * линков и скан подписываются на события драйвера ДО esp_wifi_start, иначе
- * первые события (клиент подключился, скан завершился) пропали бы. */
+ * Части друг о друге не знают, но порядок подъёма важен: линки и скан
+ * подписываются на события драйвера ДО esp_wifi_start, иначе первые события
+ * пропали бы. */
 
 #include <assert.h>
 #include <stdio.h>
@@ -26,18 +24,21 @@
 #include "connection.h"
 #include "net_internal.h"
 
+#define GW_LOG_MODULE GW_LOG_LINK
+#include "gw_log.h"
+
 /* ── Подъём сети ─────────────────────────────────────────────────────────── */
 
 void net_init(app_context_t *app) {
-    /* База сети поднимается ДО подписок: обработчики событий Wi-Fi регистрируются
-     * на уже существующем цикле событий, иначе регистрация отвергается. */
+    /* База сети — ДО подписок: обработчики Wi-Fi регистрируются на уже
+     * существующем цикле событий, иначе регистрация отвергается. */
     ESP_ERROR_CHECK(esp_netif_init());
     esp_err_t loop_err = esp_event_loop_create_default();
     if (loop_err != ESP_OK && loop_err != ESP_ERR_INVALID_STATE)
         ESP_ERROR_CHECK(loop_err);
 
-    /* Учёт линков и скан — только подписки на события: состояние у них своё и
-     * появляется вместе с подпиской. */
+    /* Учёт линков и скан — только подписки на события: своё состояние они заводят
+     * вместе с подпиской. */
     net_link_init();
     net_scan_init();
 
@@ -54,7 +55,7 @@ void net_init(app_context_t *app) {
     net_apply_config(app);
 }
 
-/* ── IPv4 configuration of both interfaces ───────────────────────────────── */
+/* ── IPv4 обоих интерфейсов ─────────────────────────────────────────────── */
 
 uint8_t net_parse_ip4(const char *str, uint32_t *out) {
     /* Note: ESP-IDF v6 turned esp_netif_str_to_ip4() from bool into esp_err_t */
@@ -75,7 +76,7 @@ void net_format_ip4(uint32_t ip, char *out, size_t out_size) {
 }
 
 /* Applies a static address, or (re)starts the DHCP client where the interface
- * is meant to obtain an address on its own. */
+ * is meant to get an address on its own. */
 void net_apply_config(const app_context_t *app) {
     esp_netif_t *sta = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
     if (sta) {
@@ -106,7 +107,7 @@ void net_apply_config(const app_context_t *app) {
             }
             char buf[16];
             net_format_ip4(app->net_sta.ip, buf, sizeof(buf));
-            ESP_LOGI(TAG, "Station static address %s", buf);
+            LOGI(TAG, "Station static address %s", buf);
         } else {
             esp_err_t err = esp_netif_dhcpc_start(sta);
             if (err != ESP_OK && err != ESP_ERR_ESP_NETIF_DHCP_ALREADY_STARTED)
@@ -116,8 +117,8 @@ void net_apply_config(const app_context_t *app) {
 
     esp_netif_t *ap = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
     if (ap && app->net_ap.ip) {
-        /* The DHCP server has to be stopped while the address changes, and the
-         * AP is its own gateway for the clients. */
+        /* The DHCP server has to be stopped while the address changes: the AP is
+         * its own gateway for the clients. */
         esp_err_t err = esp_netif_dhcps_stop(ap);
         if (err != ESP_OK && err != ESP_ERR_ESP_NETIF_DHCP_ALREADY_STOPPED)
             ESP_LOGW(TAG, "dhcps stop: %s", esp_err_to_name(err));
@@ -137,7 +138,7 @@ void net_apply_config(const app_context_t *app) {
 
         char buf[16];
         net_format_ip4(app->net_ap.ip, buf, sizeof(buf));
-        ESP_LOGI(TAG, "Access point address %s", buf);
+        LOGI(TAG, "Access point address %s", buf);
     }
 }
 
@@ -149,7 +150,7 @@ static void eth_event_handler(void *arg, esp_event_base_t event_base,
 {
     if (event_base == IP_EVENT && event_id == IP_EVENT_ETH_GOT_IP) {
         ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
-        ESP_LOGI(TAG, "Ethernet got IP: " IPSTR, IP2STR(&event->ip_info.ip));
+        LOGI(TAG, "Ethernet got IP: " IPSTR, IP2STR(&event->ip_info.ip));
     }
 }
 
@@ -181,6 +182,6 @@ void eth_init_openeth(void)
                                                &eth_event_handler, NULL));
 
     ESP_ERROR_CHECK(esp_eth_start(eth_handle));
-    ESP_LOGI(TAG, "OpenEth Ethernet started, waiting for DHCP...");
+    LOGI(TAG, "OpenEth Ethernet started, waiting for DHCP...");
 }
 #endif /* CONFIG_QEMU_BUILD */

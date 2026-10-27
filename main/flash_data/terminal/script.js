@@ -17,7 +17,9 @@ class ESP32Terminal {
         this.packetCount = 0;
         this.subscriptionSid = null;     /* подписка на приём порта */
         this.configSid = null;           /* подписка на настройки порта */
-        /* Порт — 2 (uart2) или 1 (uart1); имя FID собирается из него */
+        /* Порт — 0 (uart0), 1 (uart1) или 2 (uart2); имя FID собирается из него.
+         * Внимание: `parseInt(...) || 2` здесь нельзя — у uart0 номер 0, а он
+         * ложный для `||`, и выбор молча превращался в uart2. */
         this.port = 2;
         /* Местное эхо: показывать набранное сразу, не дожидаясь эхо линии */
         this.localEcho = (localStorage.getItem('localEcho') !== '0');
@@ -124,7 +126,10 @@ class ESP32Terminal {
 
         // Порт выбирается только ДО подключения
         document.getElementById('port-sel').addEventListener('change', () => {
-            this.port = parseInt(document.getElementById('port-sel').value, 10) || 2;
+            /* Number.isInteger, а не `|| 2`: номер uart0 — ноль, то есть ложное
+             * значение, и выбор uart0 молча превращался в uart2. */
+            const sel = parseInt(document.getElementById('port-sel').value, 10);
+            this.port = Number.isInteger(sel) ? sel : 2;
             this.showChannel();
         });
 
@@ -178,9 +183,12 @@ class ESP32Terminal {
             put('par-sel', saved.par);
             put('stop-sel', saved.sb);
             put('mode-sel', saved.mode);
-            if (saved.port) {
-                this.port = saved.port;
-                put('port-sel', saved.port);
+            /* Порт 0 — законное значение (uart0), поэтому проверяем на undefined,
+             * а не на «ложность»: иначе сохранённый uart0 не восстанавливался. */
+            if (saved.port !== undefined && saved.port !== null) {
+                const p = parseInt(saved.port, 10);
+                this.port = Number.isInteger(p) ? p : 2;
+                put('port-sel', this.port);
             }
         } else {
             put('baud-sel', 115200);

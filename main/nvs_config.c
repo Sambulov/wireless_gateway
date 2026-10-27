@@ -7,6 +7,9 @@
 
 #include "app.h"
 
+#define GW_LOG_MODULE GW_LOG_NVS
+#include "gw_log.h"
+
 #define NVS_NAMESPACE "wifi_config"
 #define NVS_KEY_AP_SSID "ap_ssid"
 #define NVS_KEY_AP_PASS "ap_pass"
@@ -23,10 +26,8 @@
 #define AP_MAX_CONNECTIONS 4
 
 /* Default softAP credentials are unique per device: the SSID carries the last
- * three MAC bytes ("WG-310184" for 94:51:dc:31:01:84) and the password is a
- * 10-character digest of the whole MAC. The alphabet leaves out 0/O/1/l so the
- * password stays unambiguous when it is read from a log or a label. WPA2 needs
- * at least 8 characters, 10 fits with room to spare. */
+ * three MAC bytes ("WG-310184"), the password is a 10-character digest of the
+ * whole MAC. The alphabet leaves out 0/O/1/l so it stays unambiguous in a log. */
 #define AP_SSID_PREFIX "WG-"
 #define AP_PASS_LEN    10
 
@@ -67,7 +68,7 @@ void save_wifi_sta_config(const char *ssid, const char *password) {
     ESP_ERROR_CHECK(nvs_set_str(nvs_handle, NVS_KEY_STA_PASS, password));
     ESP_ERROR_CHECK(nvs_commit(nvs_handle));
     nvs_close(nvs_handle);
-    ESP_LOGI(TAG, "Wi-Fi station settings saved to NVS: SSID=%s", ssid);
+    LOGI(TAG, "Wi-Fi station settings saved to NVS: SSID=%s", ssid);
 }
 
 void save_wifi_ap_config(const char *ssid, const char *password) {
@@ -77,11 +78,11 @@ void save_wifi_ap_config(const char *ssid, const char *password) {
     ESP_ERROR_CHECK(nvs_set_str(nvs_handle, NVS_KEY_AP_PASS, password));
     ESP_ERROR_CHECK(nvs_commit(nvs_handle));
     nvs_close(nvs_handle);
-    ESP_LOGI(TAG, "Wi-Fi AP settings saved to NVS: SSID=%s", ssid);
+    LOGI(TAG, "Wi-Fi AP settings saved to NVS: SSID=%s", ssid);
 }
 
-/* Secret of the softAP is only usable when it is 8..63 characters long (WPA2);
- * an empty password means an open network. */
+/* The softAP secret is usable only when 8..63 characters long (WPA2); an empty
+ * password means an open network. */
 uint8_t wifi_password_valid(const char *pass) {
     size_t len = strlen(pass);
     return (len == 0) || (len >= 8 && len <= 63);
@@ -89,9 +90,8 @@ uint8_t wifi_password_valid(const char *pass) {
 
 /* ── IPv4 configuration ──────────────────────────────────────────────────── */
 
-/* The station asks for an address by default; the access point keeps the
- * esp_netif default of 192.168.4.1/24 until somebody sets something else
- * (ip == 0 means "leave the built-in default alone"). */
+/* The station asks for an address by default; the access point keeps the esp_netif
+ * default of 192.168.4.1/24 (ip == 0 — leave the built-in default alone). */
 static void _net_defaults(net_iface_cnf_t *sta, net_iface_cnf_t *ap) {
     memset(sta, 0, sizeof(*sta));
     sta->mode = NET_MODE_DHCP;
@@ -119,7 +119,7 @@ void net_save_config(const app_context_t *app) {
 
     char ip[16];
     net_format_ip4(app->net_sta.ip, ip, sizeof(ip));
-    ESP_LOGI(TAG, "Network settings saved: station %s, AP %s",
+    LOGI(TAG, "Network settings saved: station %s, AP %s",
              app->net_sta.mode == NET_MODE_STATIC ? ip : "dhcp",
              app->net_ap.ip ? "static" : "default");
 }
@@ -142,13 +142,13 @@ void save_wifi_sta_bssid(const uint8_t *bssid) {
     }
     nvs_commit(nvs_handle);
     nvs_close(nvs_handle);
-    ESP_LOGI(TAG, "Selected access point %s", bssid ? "stored in NVS" : "cleared");
+    LOGI(TAG, "Selected access point %s", bssid ? "stored in NVS" : "cleared");
 }
 
 /* ── MAC адреса интерфейсов ──────────────────────────────────────────────── */
 
-/* Значение, которое драйвер примет: первый байт без бита групповой адресации
- * (иначе esp_wifi_set_mac отвечает ESP_ERR_WIFI_MAC) и не все нули. */
+/* Значение, которое драйвер примет: первый байт без бита групповой адресации (иначе
+ * ESP_ERR_WIFI_MAC) и не все нули. */
 uint8_t wifi_mac_valid(const uint8_t *mac) {
     static const uint8_t zero[6] = {0};
     if (!mac) return 0;
@@ -168,20 +168,19 @@ void save_wifi_mac_config(uint8_t ap, const uint8_t *mac) {
         esp_err_t err = nvs_set_blob(nvs_handle, key, mac, 6);
         if (err != ESP_OK) ESP_LOGE(TAG, "MAC store failed: %s", esp_err_to_name(err));
     } else {
-        /* «Заводской» — это отсутствие записи, а не шесть нулей: так значение
-         * нельзя перепутать с настоящим адресом. */
+        /* «Заводской» — отсутствие записи, а не шесть нулей: так его не спутать с адресом. */
         esp_err_t err = nvs_erase_key(nvs_handle, key);
         if (err != ESP_OK && err != ESP_ERR_NVS_NOT_FOUND)
             ESP_LOGE(TAG, "MAC erase failed: %s", esp_err_to_name(err));
     }
     nvs_commit(nvs_handle);
     nvs_close(nvs_handle);
-    ESP_LOGI(TAG, "%s MAC %s", ap ? "AP" : "STA",
+    LOGI(TAG, "%s MAC %s", ap ? "AP" : "STA",
              wifi_mac_valid(mac) ? "stored in NVS (applied on reboot)" : "reset to the factory value");
 }
 
-/* Заводские MAC читаются из eFuse ДО первого esp_wifi_set_mac: после подмены
- * адреса интерфейса взять их будет уже неоткуда. */
+/* Заводские MAC читаются из eFuse ДО первого esp_wifi_set_mac: после подмены адреса
+ * взять их будет уже неоткуда. */
 static void _mac_factory_read(app_context_t *app) {
     if (esp_read_mac(app->mac_sta_factory, ESP_MAC_WIFI_STA) != ESP_OK)
         memset(app->mac_sta_factory, 0, sizeof(app->mac_sta_factory));
@@ -220,13 +219,12 @@ static bool _load_config_default(app_context_t *app) {
     strlcpy((char *)app->sta_cnf.sta.ssid,     CONFIG_WIFI_STA_DEFAULT_SSID, sizeof(app->sta_cnf.sta.ssid));
     strlcpy((char *)app->sta_cnf.sta.password, CONFIG_WIFI_STA_DEFAULT_PASS, sizeof(app->sta_cnf.sta.password));
 
-    ESP_LOGI(TAG, "App config loaded default");
+    LOGI(TAG, "App config loaded default");
     return true;
 }
 
 bool load_config(app_context_t *app) {
-    /* Заводские MAC — первым делом: дальше их уже не восстановить (см.
-     * _mac_factory_read). Пустые mac_sta/mac_ap значат «заводские». */
+    /* Заводские MAC — первым делом: дальше их не восстановить (см. _mac_factory_read). */
     _mac_factory_read(app);
     memset(app->mac_sta, 0, sizeof(app->mac_sta));
     memset(app->mac_ap, 0, sizeof(app->mac_ap));
@@ -271,6 +269,6 @@ bool load_config(app_context_t *app) {
 
     nvs_close(nvs_handle);
 
-    ESP_LOGI(TAG, "App config loaded from NVS");
+    LOGI(TAG, "App config loaded from NVS");
     return true;
 }

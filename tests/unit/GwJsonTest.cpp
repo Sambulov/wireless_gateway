@@ -7,6 +7,8 @@
  */
 #include "CppUTest/TestHarness.h"
 
+#include <cstring>
+
 extern "C" {
 #include "GwJson.h"
 }

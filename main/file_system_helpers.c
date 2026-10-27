@@ -14,6 +14,9 @@
 
 #include "app.h"
 
+#define GW_LOG_MODULE GW_LOG_FS
+#include "gw_log.h"
+
 
 /* Littlefs */
 esp_vfs_littlefs_conf_t conf = {
@@ -33,21 +36,19 @@ bool directory_exists(const char *path) {
 
 esp_err_t setup_littlefs(void)
 {
-    // Use settings defined above to initialize and mount LittleFS filesystem.
-    // Note: esp_vfs_littlefs_register is an all-in-one convenience function.
     esp_err_t ret = esp_vfs_littlefs_register(&conf);
 
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to initialize LittleFS (%s)", esp_err_to_name(ret));
     } else {
-        ESP_LOGI(TAG, "Initialize LittleFS success!!!(%s)", esp_err_to_name(ret));
+        LOGI(TAG, "Initialize LittleFS success!!!(%s)", esp_err_to_name(ret));
 	    size_t total = 0, used = 0;
 	    ret = esp_littlefs_info(conf.partition_label, &total, &used);
 	    if (ret != ESP_OK) {
 	        ESP_LOGE(TAG, "Failed to get LittleFS partition information (%s)", esp_err_to_name(ret));
 	        esp_littlefs_format(conf.partition_label);
 	    } else {
-	        ESP_LOGI(TAG, "Partition size: total: %d, used: %d", total, used);
+	        LOGI(TAG, "Partition size: total: %d, used: %d", total, used);
 	    }
     }
 

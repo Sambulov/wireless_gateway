@@ -1,4 +1,7 @@
 /build
+# Отдельный каталог сборки под ESP-IDF v6 (idf.py -B build_v6): в /build лежал
+# устаревший кэш от 5.4.
+/build_v6
 /managed_components
 /.vscode
 # Working notes of the AI agent (tools, network, decisions, pitfalls) — never

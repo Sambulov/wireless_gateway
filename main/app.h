@@ -29,8 +29,6 @@
 
 #include "uart.h"
 #include "connection.h"
-/* Объект веб-сервера интерфейса: приложение поднимает его на каждый интерфейс и
- * регистрирует в нём то, что этому интерфейсу оказано. */
 #include "web_server.h"
 #include "ws_transport.h"
 
@@ -59,9 +57,8 @@ esp_err_t setup_littlefs(void);
 
 /*=======================*/
 
-/* IPv4 configuration of one interface. Addresses are kept in network byte
- * order; 0 means "not set" and falls back to the value lwIP/esp_netif provides
- * by default (DHCP for the station, 192.168.4.1/24 for the access point). */
+/* IPv4 configuration of one interface. Addresses are in network byte order;
+ * 0 means "not set" — falls back to the lwIP/esp_netif default. */
 typedef enum {
     NET_MODE_DHCP   = 0,
     NET_MODE_STATIC = 1,
@@ -78,14 +75,11 @@ typedef struct {
 
 #define WEB_FILE_HANDLER_NAME "/*"
 
-/* Политика «какой сервис каким интерфейсам оказан» применяется при регистрации
- * URI в объекте веб-сервера (web_server.c, таблица — web_iface_policy.c):
- * обработчик сервиса, оказанного не всем, отвечает 404 соединению с
- * неподходящего интерфейса. */
+/* Политика «какой сервис каким интерфейсам оказан» (web_iface_policy.c)
+ * применяется при регистрации URI: сервис, оказанный не всем, отвечает 404. */
 
-/* Файлы читаются по HTTP GET — общим обработчиком-ловушкой, а меняются только
- * через WebSocket-сервисы sys.file.*. Прошивка по HTTP больше не принимается:
- * её принимает служба sys.fw.* (apih_fw.c). */
+/* Файлы читаются по HTTP GET общим обработчиком-ловушкой, а меняются только
+ * через WebSocket-сервисы sys.file.*; прошивку принимает sys.fw.* (apih_fw.c). */
 extern httpd_uri_t file_server;
 extern httpd_uri_t modbus_alias;
 extern httpd_uri_t config_page;
@@ -99,33 +93,29 @@ typedef struct {
     /* IPv4 settings of the two interfaces, see net_iface_cnf_t */
     net_iface_cnf_t net_sta;
     net_iface_cnf_t net_ap;
-    /* Точка доступа, которую выбрал пользователь (BSSID конкретного радио).
-     * Все нули — не выбирал: подключаемся к любой точке с этим именем, выбирая
-     * сильнейшую. Адрес привязан к имени сети: сменилось имя — привязка не
-     * действует. */
+    /* Точка доступа, которую выбрал пользователь. Все нули — не выбирал:
+     * подключаемся к любой точке с этим именем, выбирая сильнейшую. Привязка
+     * действует только для того же имени сети. */
     uint8_t sta_bssid[6];
-    /* MAC адреса интерфейсов. mac_sta/mac_ap — то, что ЗАКАЗАЛ пользователь
-     * (все нули — «как с завода»); mac_sta_factory/mac_ap_factory — заводские
-     * значения из eFuse, прочитанные до первого esp_wifi_set_mac. Драйвер
-     * принимает новый MAC только на остановленном интерфейсе, поэтому смена
-     * действует со следующей перезагрузки (см. net_wifi_init). */
+    /* mac_sta/mac_ap — то, что ЗАКАЗАЛ пользователь (нули — «как с завода»);
+     * *_factory — заводские из eFuse, снятые до первого esp_wifi_set_mac.
+     * Драйвер принимает новый MAC только на остановленном интерфейсе, поэтому
+     * смена действует со следующей перезагрузки (см. net_wifi_init). */
     uint8_t mac_sta[6];
     uint8_t mac_ap[6];
     uint8_t mac_sta_factory[6];
     uint8_t mac_ap_factory[6];
-    /* Веб-серверы интерфейсов: объект на интерфейс, по одному на точку доступа и
-     * станцию. Сокетный слой (web_httpd.c) у них общий — httpd на порт. */
+    /* Веб-серверы интерфейсов: свой на точку доступа и на станцию. Сокетный
+     * слой (web_httpd.c) у них общий — httpd на порт. */
     web_server_t *web_ap;
     web_server_t *web_sta;
 #ifdef CONFIG_QEMU_BUILD
     /* В сборке для QEMU единственный сетевой интерфейс — проводной. */
     web_server_t *web_eth;
 #endif
-    /* Ядра API этого приложения — по одному на транспорт (точка доступа и
-     * станция). Дескрипторы заводит app_main, а сервисы регистрируют на
-     * КОНКРЕТНОМ ядре свои обработчики FID: запрос приходит вызовом обработчика,
-     * ответ уходит из обработчика через дескриптор вызова (api_reply и
-     * api_broadcast) — очередей у ядра нет. */
+    /* Ядра API — по одному на транспорт. Сервисы регистрируют свои обработчики
+     * FID на КОНКРЕТНОМ ядре: запрос приходит вызовом обработчика, ответ уходит
+     * через дескриптор вызова (api_reply и api_broadcast) — очередей у ядра нет. */
     api_t *api_ap;
     api_t *api_sta;
     struct {
@@ -145,9 +135,9 @@ void save_wifi_sta_config(const char *ssid, const char *password);
 /* BSSID выбранной точки (6 байт); NULL или нули — «любая точка с этим именем» */
 void save_wifi_sta_bssid(const uint8_t *bssid);
 void save_wifi_ap_config(const char *ssid, const char *password);
-/* Персональный MAC интерфейса: mac == NULL (или все нули) — вернуть заводской,
- * ключ в NVS стирается. Значение проверяется по тем же правилам, что и в
- * драйвере: первый байт без бита групповой адресации, не все нули. */
+/* Персональный MAC интерфейса: mac == NULL или нули — вернуть заводской, ключ в
+ * NVS стирается. Проверка как в драйвере: первый байт без бита групповой
+ * адресации, не все нули. */
 void save_wifi_mac_config(uint8_t ap, const uint8_t *mac);
 uint8_t wifi_mac_valid(const uint8_t *mac);
 /* Per-device softAP credentials: "WG-<3 MAC bytes>" + password derived from the
@@ -155,60 +145,46 @@ uint8_t wifi_mac_valid(const uint8_t *mac);
 void wifi_ap_credentials_default(char *ssid, size_t ssid_size, char *pass, size_t pass_size);
 /* Empty password means an open network; WPA2 needs 8..63 characters. */
 uint8_t wifi_password_valid(const char *pass);
-/* Поднимает сеть прибора в порядке, заданном сборкой (connection.c): учёт
- * соединений и скан подписываются на события драйвера, затем Wi-Fi (в сборке для
- * QEMU — проводной интерфейс), затем адреса интерфейсов. */
+/* Поднимает сеть прибора в порядке, заданном сборкой (connection.c): подписки
+ * на события драйвера, затем Wi-Fi (в QEMU — проводной), затем адреса. */
 void net_init(app_context_t *app);
-/* Applies the IPv4 settings of both interfaces (station and access point).
- * Called once after Wi-Fi init and whenever the configuration page changes
- * them; falls back to DHCP/esp_netif defaults where nothing is configured. */
+/* Applies the IPv4 settings of both interfaces: called after Wi-Fi init and on
+ * every change; falls back to DHCP/esp_netif defaults where nothing is set. */
 void net_apply_config(const app_context_t *app);
-/* Persists the IPv4 settings in NVS */
 void net_save_config(const app_context_t *app);
 
 /*==========================*/
 
 /* FID — текстовое имя "<подсистема>.<действие>", а не код: имя видно в кадре
- * клиента и в ответе, и по нему же вызов маршрутизируется. Один и тот же вызов
- * используется и как одноразовый запрос, и как подписка (FLAGS:4). */
+ * клиента и в ответе, и по нему же вызов маршрутизируется. Один вызов — и
+ * одноразовый запрос, и подписка (FLAGS:4). */
 #define ESP_WS_API_ECHO_ID           "echo"
 /* Device configuration API (see apih_sys.c and config_page.html):
  *   wifi.ap    GET/SET AP credentials — a write is accepted only while exactly
- *              one station is associated with the softAP (see below)
+ *              one station is associated with the softAP
  *   sys.info   GET device status: MACs, IPs, AP client count, heap, filesystem
- *   sys.reboot reboot the gateway after the response has been delivered; the
- *              HTTP policy allows it from any interface, so the station core
- *              registers it with a writable context too
+ *   sys.reboot reboot after the response has been delivered; allowed from any
+ *              interface, so the station core registers it writable too
  *   sys.files  GET LittleFS file listing
- *   sys.file.write  PUT a file in chunks: PATH, OFFSET, DATA (base64), LAST —
- *              written to a temporary file and renamed over the target on LAST
- *   sys.file.delete DELETE a file: PATH
- *   sys.file.rename RENAME a file: FROM, TO (refused when TO already exists)
- *   sys.net    GET/SET IPv4 settings of the station and access point interfaces
- *              (DHCP or static address, mask, gateway, DNS)
- *   wifi.mac   GET/SET the MAC of one interface (IF = STA|AP, MAC = address or
- *              "factory"): the driver takes a new MAC only while the interface is
- *              stopped, so the change is stored in NVS and applied on reboot
- *   wifi.scan  GET the list of networks around (SSID, RSSI, channel, security);
- *              a helper for filling the SSID field — credentials are still typed
- *              by hand
- *   sys.fw.begin  PUT start a firmware upload: SIZE (bytes) — the next OTA
- *              partition is erased and an OTA session is opened; the answer
+ *   sys.file.write  PATH, OFFSET, DATA (base64), LAST — written to a temporary
+ *              file and renamed over the target on LAST
+ *   sys.file.delete PATH
+ *   sys.file.rename FROM, TO (refused when TO already exists)
+ *   sys.net    GET/SET IPv4 settings of the station and access point
+ *   wifi.mac   IF = STA|AP, MAC = address or "factory": the driver takes a new
+ *              MAC only while the interface is stopped, so it applies on reboot
+ *   wifi.scan  GET the list of networks around (SSID, RSSI, channel, security)
+ *   sys.fw.begin  SIZE (bytes) — the next OTA partition is erased, the answer
  *              carries SESSION:1
- *   sys.fw.write  PUT one chunk: SEQ (strictly the next chunk number) and DATA
- *              (base64); the answer carries the number of bytes accepted so far
- *              (WRITTEN). The call stays open until the next chunk is asked for,
- *              which is how the service detects a stalled upload
- *   sys.fw.end    PUT verify and boot: MD5 (optional, 32 hex digits of the image
- *              itself), then esp_ota_end + set_boot_partition + reboot
- *   sys.fw.abort  PUT drop the upload opened by sys.fw.begin
- *   Прошивка (sys.fw.*) зарегистрирована ТОЛЬКО на AP-ядре (apih_fw.c), и
- *   порция принимается, только пока на точке доступа ровно один клиент.
+ *   sys.fw.write  SEQ (strictly the next chunk number) and DATA (base64); the
+ *              answer carries WRITTEN. The call stays open until the next chunk
+ *              is asked for, which is how a stalled upload is detected
+ *   sys.fw.end    MD5 (optional, 32 hex digits of the image), then esp_ota_end +
+ *              set_boot_partition + reboot
+ *   sys.fw.abort  drop the upload opened by sys.fw.begin
  *
- * Сервисы регистрируются на КОНКРЕТНОМ ядре (см. api.h): «только точка доступа»
- * — это регистрация на AP-ядре, а не маска интерфейсов. Файловый менеджер
- * (sys.files и sys.file.*) и echo есть на обоих ядрах одинаково — они доступны
- * с любого интерфейса. */
+ * Прошивка (sys.fw.*) зарегистрирована ТОЛЬКО на AP-ядре (apih_fw.c): «только
+ * точка доступа» — это регистрация на AP-ядре, а не маска интерфейсов. */
 #define ESP_WS_API_SYS_WIFI_STA      "wifi.sta"
 #define ESP_WS_API_SYS_WIFI_AP       "wifi.ap"
 #define ESP_WS_API_SYS_INFO          "sys.info"
@@ -226,8 +202,8 @@ void net_save_config(const app_context_t *app);
 #define ESP_WS_API_SYS_NET           "sys.net"
 #define ESP_WS_API_SYS_WIFI_MAC      "wifi.mac"
 #define ESP_WS_API_SYS_WIFI_SCAN     "wifi.scan"
-/* Регистрирует обработчики системных FID на обоих ядрах (задачи у службы нет:
- * их зовёт такт ядра, который крутит задача приложения) */
+/* Регистрирует обработчики системных FID на обоих ядрах: задачи у службы нет,
+ * их зовёт такт ядра. */
 esp_err_t api_sys_run(app_context_t *app);
 
 #define ESP_WS_API_UART0_CNF         "uart0.config"

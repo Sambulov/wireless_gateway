@@ -1,10 +1,8 @@
 /* Файловый менеджер: sys.files и sys.file.write/delete/rename/mkdir/rmdir.
  *
  * Политики на клиента у этих методов нет (контекста регистрации им не дают):
- * регистрируются они одинаково на обоих ядрах — доступны с любого интерфейса, как
- * и отдача файлов по HTTP. Условие «сколько клиентов на точке доступа» к правке
- * файлов не относится. Общая обвязка — apih_sys_common.c, точка сборки —
- * apih_sys.c.
+ * регистрируются одинаково на обоих ядрах — доступны с любого интерфейса, как и
+ * отдача файлов по HTTP. Общая обвязка — apih_sys_common.c, сборка — apih_sys.c.
  */
 #include <dirent.h>
 #include <stdio.h>
@@ -19,24 +17,23 @@
 
 #include "apih_sys_internal.h"
 
-/* ── sys.files: filesystem listing ───────────────────────────────────────────── */
+#define GW_LOG_MODULE GW_LOG_API
+#include "gw_log.h"
 
-/* Путь внутри файловой системы ("/maps/x.jsonc") и он же с базовым префиксом
- * монтирования ("/lfs/maps/x.jsonc"): и листингу, и записи нужны оба. Разбор
- * клиентского пути — общий для всех файловых сервисов, он в fs_path.c: своей,
- * более мягкой проверки здесь быть не должно. */
+/* Путь с базовым префиксом монтирования ("/lfs/maps/x.jsonc") нужен и листингу, и
+ * записи. Разбор клиентского пути общий, в fs_path.c: своей, более мягкой проверки
+ * здесь быть не должно. */
 #define FS_PATH_MAX 256
 #define FS_FULL_MAX (FS_PATH_MAX + 64)
 
-/* Путь целиком в смонтированной ФС: base_path + нормализованный путь. */
+/* Путь целиком в смонтированной ФС: base_path + нормализованный путь */
 static uint8_t fs_full_path(const char *path, char *out, size_t out_size) {
     int written = snprintf(out, out_size, "%s%s", conf.base_path, path);
     return (written > 0) && (written < (int)out_size);
 }
 
 /* Проверить путь из ARG и собрать отказ в ответ, если он недопустим. field —
- * имя поля запроса (PATH, FROM, TO): по нему страница и человек понимают, что
- * именно не понравилось. */
+ * имя поля запроса (PATH, FROM, TO): по нему видно, что именно не понравилось. */
 static uint8_t fs_path_check(const char *requested, const char *field,
                              char *path, size_t path_size) {
     if (!requested || !fs_path_sanitize(requested, path, path_size) ||
@@ -77,7 +74,7 @@ static void handle_files(const uint8_t *data, uint32_t len) {
     }
     gw_jsonw_str(&sys_w, "PATH", path);
 
-    /* Каталог выше по дереву, чтобы страница могла нарисовать «наверх» */
+    /* каталог выше по дереву, чтобы страница могла нарисовать «наверх» */
     char parent[FS_PATH_MAX];
     strlcpy(parent, path, sizeof(parent));
     if (strcmp(parent, "/") != 0) {
@@ -117,7 +114,7 @@ static void handle_files(const uint8_t *data, uint32_t len) {
         if (stat(item_path, &st) != 0)
             continue;
 
-        /* Буфер не резиновый: как только он кончился, прекращаем перечисление. */
+        /* буфер не резиновый: как только он кончился, прекращаем перечисление */
         if (!gw_jsonw_ok(&sys_w))
             break;
 
@@ -132,47 +129,36 @@ static void handle_files(const uint8_t *data, uint32_t len) {
 
 /* ── sys.file.write / sys.file.delete / sys.file.rename ────────────────────── *
  *
- * Изменение файлов идёт вызовами по WebSocket (эти три сервиса); отдача файлов
- * по HTTP GET не тронута — именно так браузер получает страницы и карты
- * регистров. Листинг — sys.files.
+ * Изменение файлов идёт вызовами по WebSocket; отдача файлов по HTTP GET не тронута
+ * — именно так браузер получает страницы и карты регистров.
  *
- * Файл в одно сообщение не влезает: транспорт держит кадр и собранное сообщение
- * в 16 КБ (TRANSPORT_MESSAGE_MAX_LEN), а двоичные данные идут ещё и в base64
- * (4/3). Поэтому файл передаётся порциями: ARG
+ * Файл в одно сообщение не влезает (транспорт держит 16 КБ, а двоичные данные идут
+ * ещё и в base64), поэтому ARG
  * {"PATH":"/maps/x.jsonc","OFFSET":<сколько байт уже принято>,"DATA":"<base64>",
- * "LAST":0|1}. Порция с OFFSET 0 начинает запись ЗАНОВО, LAST 1 завершает приём;
- * OFFSET каждой следующей порции обязан совпасть с числом принятых байт — иначе
- * порция потерялась бы молча.
+ * "LAST":0|1}: OFFSET 0 начинает запись ЗАНОВО, LAST 1 завершает приём, а OFFSET
+ * каждой следующей порции обязан совпасть с числом принятых байт — иначе порция
+ * потерялась бы молча.
  *
- * Пишем не в цель, а во ВРЕМЕННЫЙ файл рядом с ней (".<имя>.part"; листинг имена
- * с точки не показывает) и только на LAST переименовываем его в цель.
- * Переименование заменяет файл целиком, поэтому оборванная передача не оставляет
- * полуфайл вместо рабочего, а целевой файл живёт до последней порции. Недописанный
- * полуфабрикат убирается, когда начинается следующая запись того же пути.
+ * Пишем не в цель, а во ВРЕМЕННЫЙ файл рядом (".<имя>.part"; листинг имена с точки не
+ * показывает) и только на LAST переименовываем в цель: переименование заменяет файл
+ * целиком, поэтому оборванная передача не оставляет полуфайл вместо рабочего.
  *
- * Состояние приёма — одно на прибор: обработчики ядра API гоняет одна задача, по
- * одному вызову за такт (см. sys_w в apih_sys_internal.h), а незавершённая
- * запись на приборе одна. Порция пишется синхронно в этой же задаче, но порция
- * маленькая (в кадр больше 12 КБ данных не влезет), поэтому задержка для
- * остальных вызовов — на время записи в flash.
- *
- * Порция, на которую рассчитан сервис, — около 6 КБ данных: это 8 КБ base64, и
- * запрос вместе с путём и обёрткой влезает в предел сообщения с запасом (страница
- * шлёт ровно столько, см. FILE_CHUNK в config_page.html). Больше тоже можно —
- * сколько влезет в кадр: своего предела здесь нет, его держит транспорт.
+ * Состояние приёма одно на прибор: обработчики ядра гоняет одна задача, по одному
+ * вызову за такт, и незавершённая запись одна. Порция пишется синхронно в этой же
+ * задаче, поэтому задержка для остальных вызовов — на время записи в flash.
  */
 
-/* Раскодируем порцию блоками по 4 символа base64: память под данные не зависит
- * от размера порции. */
+/* раскодируем порцию блоками по 4 символа base64: память под данные не зависит от
+ * размера порции */
 #define FS_B64_BLOCK   512
-/* Предел размера файла: файловая система одна на страницы, карты и настройки,
- * забить её целиком нельзя. */
+/* предел размера файла: файловая система одна на страницы, карты и настройки,
+ * забить её целиком нельзя */
 #define FS_FILE_MAX     (500 * 1024)
 #define FS_FILE_MAX_STR "500 KB"
 
 typedef struct {
-    uint8_t  active;              /* 1 — файл открыт, приём идёт */
-    char     path[FS_PATH_MAX];   /* нормализованный путь цели */
+    uint8_t  active;
+    char     path[FS_PATH_MAX];
     char     tmp[FS_PATH_MAX];    /* временный файл рядом с целью */
     FILE    *fp;
     uint32_t written;             /* сколько байт уже принято */
@@ -198,7 +184,7 @@ static void fs_upload_close(uint8_t unlink_tmp) {
     fs_up.tmp[0]  = '\0';
 }
 
-/* Начать приём в path (уже проверенный): временный файл создаётся заново. */
+/* Начать приём в path (уже проверенный): временный файл создаётся заново */
 static uint8_t fs_upload_begin(const char *path) {
     char tmp[FS_PATH_MAX];
     char full[FS_FULL_MAX];
@@ -237,8 +223,8 @@ static uint8_t fs_upload_append(const char *b64, size_t b64_len) {
         const uint8_t *src = (const uint8_t *)b64 + done;
         int32_t expect  = base64_decode_buffer_required(src, (uint32_t)n);
         int32_t decoded = base64_decode(buf, sizeof(buf), src, (uint32_t)n);
-        /* decoded != expect означает мусор в середине строки: декодер
-         * останавливается на первом '=' и молча отдал бы обрезанный файл. */
+        /* decoded != expect — мусор в середине строки: декодер останавливается на
+         * первом '=' и молча отдал бы обрезанный файл. */
         if (expect < 0 || decoded != expect)
             return 0;
         if (decoded > 0 && fwrite(buf, 1, (size_t)decoded, fs_up.fp) != (size_t)decoded)
@@ -337,8 +323,8 @@ static void handle_file_write(const uint8_t *data, uint32_t len) {
         return;
     }
 
-    /* LAST: временный файл встаёт на место цели. Существующий файл переименование
-     * заменяет целиком — до этого места он не изменён ни на байт. */
+    /* LAST: временный файл встаёт на место цели. Переименование заменяет
+     * существующий файл целиком — до этого места он не изменён ни на байт. */
     char tmp_full[FS_FULL_MAX], dst_full[FS_FULL_MAX];
     if (!fs_full_path(fs_up.tmp, tmp_full, sizeof(tmp_full)) ||
         !fs_full_path(fs_up.path, dst_full, sizeof(dst_full))) {
@@ -356,7 +342,7 @@ static void handle_file_write(const uint8_t *data, uint32_t len) {
         return;
     }
     fs_upload_close(0);
-    ESP_LOGI(TAG, "Файл %s записан (%lu байт)", dst_full, (unsigned long)written);
+    LOGI(TAG, "Файл %s записан (%lu байт)", dst_full, (unsigned long)written);
     resp_ok();
     gw_jsonw_uint(&sys_w, "WRITTEN", (uint64_t)written);
 }
@@ -400,14 +386,14 @@ static void handle_file_delete(const uint8_t *data, uint32_t len) {
         resp_error(SYS_INTERNAL, "FS", "Failed to delete the file");
         return;
     }
-    ESP_LOGI(TAG, "Файл %s удалён", full);
+    LOGI(TAG, "Файл %s удалён", full);
     resp_ok();
     gw_jsonw_str(&sys_w, "PATH", path);
 }
 
-/* Переименование: ARG {"FROM":"/maps/x.jsonc","TO":"/maps/y.jsonc"}.
- * TO может быть и коротким именем — тогда файл остаётся в каталоге FROM.
- * Переименование на существующее имя — отказ.
+/* Переименование: ARG {"FROM":"/maps/x.jsonc","TO":"/maps/y.jsonc"}. TO может быть
+ * и коротким именем — тогда файл остаётся в каталоге FROM; переименование на
+ * существующее имя — отказ.
  * Ответ: {"STA":"0x00000000","FROM":"...","TO":"..."} */
 static void handle_file_rename(const uint8_t *data, uint32_t len) {
     char from_req[FS_PATH_MAX], to_req[FS_PATH_MAX], to_arg[FS_PATH_MAX];
@@ -436,7 +422,7 @@ static void handle_file_rename(const uint8_t *data, uint32_t len) {
     if (to_req[0] == '/') {
         strlcpy(to_arg, to_req, sizeof(to_arg));
     } else {
-        /* Короткое имя: тот же каталог, что у FROM */
+        /* короткое имя: тот же каталог, что у FROM */
         const char *slash = strrchr(from, '/');
         size_t dir_len = slash ? (size_t)(slash - from) + 1 : 0;
         if (dir_len + strlen(to_req) + 1 > sizeof(to_arg)) {
@@ -468,7 +454,7 @@ static void handle_file_rename(const uint8_t *data, uint32_t len) {
         resp_error(SYS_INTERNAL, "FS", "Failed to rename the file");
         return;
     }
-    ESP_LOGI(TAG, "Файл %s переименован в %s", src, dst);
+    LOGI(TAG, "Файл %s переименован в %s", src, dst);
     resp_ok();
     gw_jsonw_str(&sys_w, "FROM", from);
     gw_jsonw_str(&sys_w, "TO", to);
@@ -511,12 +497,10 @@ static void handle_file_mkdir(const uint8_t *data, uint32_t len) {
         resp_error(SYS_INTERNAL, "FS", "Failed to create the directory");
         return;
     }
-    ESP_LOGI(TAG, "Каталог %s создан", path);
+    LOGI(TAG, "Каталог %s создан", path);
     resp_ok();
     gw_jsonw_str(&sys_w, "PATH", path);
 }
-
-/* ── sys.file.rmdir: удаление пустого каталога ─────────────────────────────── */
 
 static void handle_file_rmdir(const uint8_t *data, uint32_t len) {
     char path_req[FS_PATH_MAX], path[FS_PATH_MAX];
@@ -547,28 +531,24 @@ static void handle_file_rmdir(const uint8_t *data, uint32_t len) {
         resp_error(SYS_BAD_ARG, "PATH", "Directory does not exist");
         return;
     }
-    /* rmdir сам откажет, если каталог не пуст: так и не нужно отдельно считать
-     * содержимое — файловая система это уже знает. */
+    /* rmdir сам откажет, если каталог не пуст: считать содержимое не нужно —
+     * файловая система это уже знает. */
     if (rmdir(full) != 0) {
         ESP_LOGW(TAG, "Не удалось удалить каталог %s (возможно, он не пуст)", full);
         resp_error(SYS_BAD_ARG, "NOTEMPTY", "Directory is not empty");
         return;
     }
-    ESP_LOGI(TAG, "Каталог %s удалён", path);
+    LOGI(TAG, "Каталог %s удалён", path);
     resp_ok();
     gw_jsonw_str(&sys_w, "PATH", path);
 }
 
 /* ── Обработчики вызовов ─────────────────────────────────────────────────── *
  *
- * Контракт (api.h): обработчик не блокирующий, отвечает сам и возвращает 0 —
- * вызов завершён. call == NULL — принудительное завершение: освобождать нечего
- * (контекст — статический экземпляр сервиса), поэтому просто сообщаем, что
- * завершились. Ответ отправляется ровно один раз за вызов.
- *
- * Файловые сервисы изменения — без политики на клиента: их, как и листинг,
- * оказывают только точке доступа (маска регистрации), а условия «сколько
- * клиентов на точке доступа» к правке файлов не относятся. */
+ * Контракт (api.h): обработчик не блокирующий, отвечает сам и возвращает 0; call ==
+ * NULL — вызов сняли. Ответ отправляется ровно один раз за вызов. Файловые сервисы
+ * изменения — без политики на клиента: условия «сколько клиентов на точке доступа» к
+ * правке файлов не относятся. */
 
 static uint8_t sys_files_handler(void *call, void **context, uint8_t *data, uint32_t data_len) {
     (void)context;
@@ -624,21 +604,16 @@ static uint8_t sys_file_rmdir_handler(void *call, void **context, uint8_t *data,
     return 0;
 }
 
-/* ── Регистрация методов файлового менеджера ─────────────────────────────── */
-
 esp_err_t apih_files_run(app_context_t *app) {
     uint8_t ok = 1;
     api_t *ap  = app->api_ap;
     api_t *sta = app->api_sta;
 
-    /* Файловый менеджер — листинг, запись порциями, удаление, переименование,
-     * каталоги: доступен с ЛЮБОГО интерфейса, как и отдача файлов по HTTP,
-     * поэтому регистрируется на обоих ядрах одинаково. Открыт им не из
-     * невнимательности: страницы, карты регистров и прошивку кладут и правят как
-     * раз с рабочего места в сети, а не только с самой точки доступа: изменение
-     * файлов идёт вызовами по WebSocket. Перестройка самого шлюза по-прежнему
-     * только у администратора точки доступа: wifi.sta/ap и sys.net на STA-ядре
-     * зарегистрированы с контекстом «только чтение». */
+    /* Файловый менеджер доступен с ЛЮБОГО интерфейса, как и отдача файлов по HTTP,
+     * поэтому регистрируется на обоих ядрах одинаково: страницы, карты регистров и
+     * прошивку правят с рабочего места в сети, а не только с самой точки доступа.
+     * Перестройка шлюза по-прежнему только у администратора точки доступа: wifi.sta/ap
+     * и sys.net на STA-ядре — с контекстом «только чтение». */
     ok &= register_service(ap,  sys_files_handler,       ESP_WS_API_SYS_FILES,       NULL);
     ok &= register_service(sta, sys_files_handler,       ESP_WS_API_SYS_FILES,       NULL);
     ok &= register_service(ap,  sys_file_write_handler,  ESP_WS_API_SYS_FILE_WRITE,  NULL);

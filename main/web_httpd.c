@@ -15,6 +15,9 @@
 #include "web_httpd.h"
 #include "web_server.h"
 
+#define GW_LOG_MODULE GW_LOG_HTTP
+#include "gw_log.h"
+
 static const char *TAG = "web_httpd";
 
 /* Сколько путей может быть в одном порту (страницы, файлы, прошивка, WS-точки) */
@@ -24,8 +27,7 @@ static const char *TAG = "web_httpd";
  * регистрации, а шаблон может прийти из временной структуры. */
 #define WEB_URI_MAX             32
 
-/* Запись на сессию порта: дескриптор, объект, который её обслуживает, и момент
- * последнего успеха отправки (по нему считается бюджет). */
+/* Запись на сессию порта. */
 #define WEB_HTTPD_SESSIONS_MAX  32
 
 #define WEB_SEND_STEP_MS        10
@@ -104,27 +106,19 @@ static void session_drop(web_httpd_t *port, int fd) {
 /* ── Отправка без бесконечного ожидания ─────────────────────────────────────
  *
  * esp_http_server обслуживает все сессии одного экземпляра ОДНОЙ задачей, а её
- * штатная отправка блокирующая: если клиент запросил файл и перестал читать,
- * буфер отправки забивается, задача залипает в send() и перестаёт обслуживать
- * всех остальных — сервер замолкает на десятки секунд (замерено: ≥45 с на карте
- * 122 КБ, до бесконечности при заполненном пуле сокетов).
+ * штатная отправка блокирующая: клиент, переставший читать, залипает в send() и
+ * останавливает обслуживание всех остальных. Поэтому здесь своя отправка с
+ * бюджетом порта.
  *
- * Поэтому у вызова отправки есть бюджет порта: как только байты пошли, вызов
- * сразу возвращается, и бюджет начинается заново. Нечитающий клиент не отдаёт
- * ничего вообще, и его сессия закрывается по этому же бюджету.
- *
- * Состояние по сессиям здесь, а не в объекте: бюджеты — свойство сокета. Ключ —
- * дескриптор, выданный VFS; он не ограничен CONFIG_LWIP_MAX_SOCKETS (в логах
- * встречался fd=36), поэтому таблица с проверкой ключа, а не массив по fd. */
+ * Ключ сессии — дескриптор, выданный VFS; он не ограничен
+ * CONFIG_LWIP_MAX_SOCKETS, поэтому таблица с проверкой ключа, а не массив по fd. */
 static int send_bounded(web_httpd_t *port, int fd, const char *buf, size_t len,
                         int flags, uint32_t budget_ms) {
     web_httpd_session_t *s = session_take(port, fd);
     TickType_t call_start = xTaskGetTickCount();
     /* Сессия могла просто простоять (keep-alive у браузера — до 30 с), и тогда
-     * «последний успех» у неё старый. Это не залипание: окно отсчёта должно
-     * начинаться заново, иначе первый же запрос после паузы будет убит как
-     * нечитающий. Настоящее залипание до этой точки не доживает — его сессия
-     * закрывается по бюджету прямо в вызове. */
+     * «последний успех» у неё старый: окно отсчёта начинается заново, иначе первый
+     * же запрос после паузы будет убит как нечитающий. */
     if (s && (call_start - s->last_ok) > pdMS_TO_TICKS(WEB_SEND_IDLE_RESET_MS))
         s->last_ok = call_start;
     for (;;) {
@@ -161,10 +155,8 @@ static int send_bounded(web_httpd_t *port, int fd, const char *buf, size_t len,
  * допишет сам, у него своя копия); -1 — сокет сломан (не EAGAIN, а настоящая
  * ошибка), писать в него больше нельзя.
  *
- * Ждать «пока влезет всё» здесь нельзя: вызывающий — такт сервисов, и один
- * нечитающий клиент не должен его задерживать. Поэтому одна попытка без
- * ожидания, а если что-то уже записано — короткая (stall_ms) попытка добрать
- * остаток: частично записанный кадр хуже, чем задержка в единицы миллисекунд. */
+ * Ждать «пока влезет всё» нельзя: вызывающий — такт сервисов, и один нечитающий
+ * клиент не должен его задерживать. */
 int web_httpd_write(web_httpd_t *port, int fd, const char *buf, size_t len,
                     uint32_t stall_ms) {
     if ((port == NULL) || (fd <= 0) || (buf == NULL) || (len == 0)) return -1;
@@ -223,14 +215,11 @@ static esp_err_t port_session_open(httpd_handle_t hd, int sockfd) {
         ESP_LOGW(TAG, "Учёт сессий интерфейса %lu: мест нет, fd=%d",
                  (unsigned long)iface, sockfd);
 
-    /* TCP_NODELAY. Без него мелкие ответы (а их тут большинство: ответы JSON API
-     * и кадры WebSocket) ждут подтверждения по алгоритму Нейгла вместе с
-     * задержанным ACK, и ЛЮБОЙ запрос стоит 100-250 мс независимо от объёма —
-     * замерено: 1 регистр 250 мс, 16 регистров 112 мс, тогда как сама передача
-     * по 9600 бод занимает десятки миллисекунд. Именно это и ощущается как
-     * «контроллер еле дышит». esp_http_server включает TCP_NODELAY только для
-     * сообщений об ошибках (и лишь при CONFIG_HTTPD_ERR_RESP_NO_DELAY), обычные
-     * ответы и кадры WS идут через Нейгла. Ставим один раз на сессию. */
+    /* TCP_NODELAY. Без него мелкие ответы (JSON API и кадры WebSocket) ждут
+     * подтверждения по Нейглу вместе с задержанным ACK, и любой запрос стоит
+     * 100-250 мс независимо от объёма. esp_http_server включает TCP_NODELAY только
+     * для сообщений об ошибках, обычные ответы и кадры WS идут через Нейгла.
+     * Ставим один раз на сессию. */
     int one = 1;
     if (setsockopt(sockfd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one)) < 0)
         ESP_LOGW(TAG, "TCP_NODELAY для fd=%d не включился (%d)", sockfd, errno);
@@ -255,14 +244,10 @@ static void port_session_close(httpd_handle_t hd, int sockfd) {
 
 /* ── Развод запроса по объекту ──────────────────────────────────────────────
  *
- * httpd различает только «путь → обработчик»: масок сетевых интерфейсов у него
- * нет. Поэтому каждый путь зарегистрирован в httpd через эту обёртку: она
- * узнаёт у соединения его интерфейс (gw_iface_of_socket), находит объект
- * веб-сервера этого интерфейса и передаёт запрос ему. Что именно оказано —
- * решает объект: у него таблица путей и политика доступа (web_server.c).
- *
- * user_ctx обёртки — запись пути на порту: по ней видны и порт, и шаблон,
- * которым httpd выбрал обработчик. */
+ * httpd различает только «путь → обработчик»: масок интерфейсов у него нет.
+ * Поэтому каждый путь зарегистрирован в httpd через эту обёртку: она узнаёт
+ * интерфейс соединения (gw_iface_of_socket) и передаёт запрос объекту веб-сервера
+ * этого интерфейса. user_ctx обёртки — запись пути на порту. */
 static esp_err_t port_guard(httpd_req_t *req) {
     web_httpd_route_t *reg = (web_httpd_route_t *)req->user_ctx;
     web_httpd_t *port = (reg != NULL) ? reg->port : NULL;
@@ -279,10 +264,9 @@ static esp_err_t port_guard(httpd_req_t *req) {
     return web_server_handle(srv, port->kind, reg->uri, req);
 }
 
-/* Рукопожатие WebSocket httpd зовёт сам, минуя port_guard (см. httpd_uri.c):
- * req->user_ctx в этот момент — запись пути на порту, а не контекст обработчика.
- * Поэтому обёртка нужна и здесь: объект находится по интерфейсу соединения, а
- * контекст обработчика подставляет уже он. */
+/* Рукопожатие WebSocket httpd зовёт сам, минуя port_guard: req->user_ctx в этот
+ * момент — запись пути на порту, а не контекст обработчика, поэтому объект
+ * находится по интерфейсу соединения и контекст подставляет уже он. */
 static esp_err_t port_guard_handshake(httpd_req_t *req) {
     web_httpd_route_t *reg = (web_httpd_route_t *)req->user_ctx;
     web_httpd_t *port = (reg != NULL) ? reg->port : NULL;
@@ -310,33 +294,32 @@ static void port_event_handler(void *arg, esp_event_base_t event_base,
             ESP_LOGW(TAG, "error: '%08lx'", (unsigned long)(uintptr_t)event_data);
             break;
         case HTTP_SERVER_EVENT_START:
-            ESP_LOGW(TAG, "started");
+            LOGI(TAG, "started");
             break;
         case HTTP_SERVER_EVENT_ON_CONNECTED: /* int (fd) */
-            ESP_LOGD(TAG, "new connection: fd=%d", *(int *)event_data);
+            LOGD(TAG, "new connection: fd=%d", *(int *)event_data);
             break;
         case HTTP_SERVER_EVENT_ON_HEADER:
-            ESP_LOGD(TAG, "on header: '%08lx'", (unsigned long)(uintptr_t)event_data);
+            LOGD(TAG, "on header: '%08lx'", (unsigned long)(uintptr_t)event_data);
             break;
         case HTTP_SERVER_EVENT_HEADERS_SENT:
-            ESP_LOGD(TAG, "headers sent: '%08lx'", (unsigned long)(uintptr_t)event_data);
+            LOGD(TAG, "headers sent: '%08lx'", (unsigned long)(uintptr_t)event_data);
             break;
         /* Эти два события приходят НА КАЖДУЮ порцию данных в обе стороны.
-         * Логировать их на уровне WARN нельзя: вывод на консоль синхронный,
-         * 115200 бод, и на файл в 122 КБ (30 порций по 4096) уходило больше
-         * двухсот миллисекунд блокировки задачи httpd прямо посреди отдачи. */
+         * Логировать их на уровне WARN нельзя: вывод в консоль синхронный и
+         * тормозит задачу httpd прямо посреди отдачи файла. */
         case HTTP_SERVER_EVENT_ON_DATA:
         case HTTP_SERVER_EVENT_SENT_DATA:
-            ESP_LOGD(TAG, "%s: fd=%d len=%d",
+            LOGD(TAG, "%s: fd=%d len=%d",
                      (event_id == HTTP_SERVER_EVENT_ON_DATA) ? "on data" : "data sent",
                      ((esp_http_server_event_data *)event_data)->fd,
                      ((esp_http_server_event_data *)event_data)->data_len);
             break;
         case HTTP_SERVER_EVENT_DISCONNECTED: /* int (fd) */
-            ESP_LOGD(TAG, "disconnected: fd=%d", *(int *)event_data);
+            LOGD(TAG, "disconnected: fd=%d", *(int *)event_data);
             break;
         case HTTP_SERVER_EVENT_STOP:
-            ESP_LOGW(TAG, "stopped");
+            LOGI(TAG, "stopped");
             break;
         default:
             break;
@@ -362,20 +345,16 @@ static uint8_t port_start(web_httpd_t *port, const web_httpd_config_t *cfg) {
     config.max_uri_handlers  = cfg->max_uri_handlers;
     config.max_open_sockets  = cfg->max_open_sockets;
     config.keep_alive_enable = true;
-    /* Брошенное соединение держит сокет из общего пула: браузер, ушедший со
-     * страницы, оставлял его на 30 с, а сокетов всего CONFIG_LWIP_MAX_SOCKETS.
-     * Когда пул кончался, httpd писал "error in accept (23)" (ENFILE) и отвечал
-     * сбросом на всё подряд. 10 секунд — достаточно для догрузки ресурсов
-     * страницы и заметно быстрее освобождает пул. */
+    /* Брошенное соединение держит сокет из общего пула, а сокетов всего
+     * CONFIG_LWIP_MAX_SOCKETS: когда пул кончался, httpd отвечал сбросом на всё
+     * подряд (ENFILE). 10 секунд — достаточно для догрузки ресурсов страницы. */
     config.keep_alive_idle     = 10;
     config.keep_alive_interval = 5;
     config.keep_alive_count    = 3;
 
-    /* Вытеснение по LRU здесь ОТКЛЮЧЕНО: оно закрывает уже принятые сессии,
-     * чтобы впустить новую, и при быстром клиенте с keep-alive это рвёт живые
-     * соединения (замерено: с ним 2 из 25 запросов, без него 22 из 25). Вместо
-     * него пул сокетов увеличен, а брошенные соединения отпускаются быстрее
-     * (keep_alive_idle). */
+    /* Вытеснение по LRU ОТКЛЮЧЕНО: оно закрывает уже принятые сессии, чтобы
+     * впустить новую, и при быстром клиенте с keep-alive рвёт живые соединения.
+     * Вместо него пул сокетов увеличен. */
     config.lru_purge_enable = false;
 
     /* Своя отправка с бюджетом и закрытие сессии с освобождением её слота. */
@@ -387,13 +366,12 @@ static uint8_t port_start(web_httpd_t *port, const web_httpd_config_t *cfg) {
     config.global_user_ctx          = port;
     config.global_user_ctx_free_fn  = port_ctx_release;
 
-    /* Every httpd instance defaults to the SAME ctrl_port (internal UDP
-     * control channel for cross-task signalling); two instances sharing one
-     * ctrl_port would cross-talk. Give the WebSocket port its own. */
+    /* Все экземпляры httpd по умолчанию делят ОДИН ctrl_port (внутренний UDP-канал
+     * межзадачной сигнализации), поэтому порту WebSocket нужен свой. */
     if (port->kind == WEB_ROUTE_WS)
         config.ctrl_port = ESP_HTTPD_DEF_CTRL_PORT + 1;
 
-    ESP_LOGI(TAG, "Starting server on port: '%d'", config.server_port);
+    LOGI(TAG, "Starting server on port: '%d'", config.server_port);
     if (httpd_start(&port->handle, &config) != ESP_OK) {
         port->handle = NULL;
         ESP_LOGE(TAG, "Error starting server on port '%d'", config.server_port);
@@ -487,8 +465,8 @@ uint8_t web_httpd_register(web_httpd_t *port, const web_route_t *route) {
         }
         if ((reg->method == route->method) && (strcmp(reg->uri, route->uri) == 0)) {
             /* Путь уже в httpd: его предложил другой объект. Обработчик у порта
-             * один на оба объекта (port_guard), поэтому регистрировать нечего —
-             * считаем, сколько объектов предлагают путь. */
+             * один на всех (port_guard), поэтому регистрировать нечего — считаем
+             * ссылки. */
             reg->refs++;
             return 1;
         }

@@ -1,12 +1,9 @@
 /* net_link.c — учёт соединений: записи о клиентах точки доступа (MAC и адрес) и
  * связка «сокет ↔ сетевой интерфейс».
  *
- * Запись о клиенте живёт от выдачи ему адреса до обрыва линка и нужна затем,
- * чтобы предупредить тех, кто этого клиента обслуживает: сервис подписывает своё
- * соединение на запись и по событию закрывает его, не дожидаясь, пока сетевой
- * стек заметит пропажу. Транспорт спрашивает у этого же файла, через какой
- * интерфейс пришло соединение (gw_iface_of_socket) — от ответа зависит, какое
- * ядро API и какая веб-политика его обслуживают. */
+ * Запись живёт от выдачи адреса до обрыва линка: сервис подписывает на неё своё
+ * соединение и закрывает по событию, не дожидаясь, пока стек заметит пропажу.
+ * gw_iface_of_socket отвечает, через какой интерфейс пришло соединение. */
 
 #include <string.h>
 #include "net_iface.h"
@@ -21,11 +18,12 @@
 #include "connection.h"
 #include "net_internal.h"
 
+#define GW_LOG_MODULE GW_LOG_LINK
+#include "gw_log.h"
+
 /* ── Записи о клиентах точки доступа ─────────────────────────────────────────
- *
- * Пул фиксированного размера: своей памяти запись не просит, а исчерпание пула
- * — не сбой, а повод отказать клиенту в линке (его отключают от радио: пустить
- * его без учёта значило бы не узнать об обрыве). */
+ * Пул фиксированного размера: своей памяти запись не просит, а исчерпание пула —
+ * повод отказать клиенту в линке: без учёта мы не узнаем об обрыве. */
 #define LINKS_MAX_AMOUNT  4
 
 typedef struct {
@@ -52,8 +50,7 @@ static uint8_t net_link_mac_match(linked_list_item_t *item, void *arg) {
     return mem_cmp(link->mac, mac, 6) == 0;
 }
 
-/* Отключить клиента по MAC: им пользуются, когда записи для клиента нет, а
- * пустить его в сеть без учёта нельзя. */
+/* Отключить клиента по MAC: нужен, когда записи нет, а пустить без учёта нельзя. */
 static esp_err_t sta_disconnect(uint8_t *mac_addr) {
     uint16_t aid;
     esp_err_t err = esp_wifi_ap_get_sta_aid(mac_addr, &aid);
@@ -63,11 +60,10 @@ static esp_err_t sta_disconnect(uint8_t *mac_addr) {
 }
 
 /* Клиент ушёл: будим подписчиков и возвращаем запись в пул. Будить надо ДО
- * возврата записи — иначе следующий клиент занял бы её под живое соединение и
- * получил бы чужой обрыв. */
+ * возврата записи — иначе следующий клиент занял бы её под живое соединение. */
 static void net_link_drop(linked_list_item_t *item) {
     link_t *link = linked_list_get_object(link_t, item);
-    ESP_LOGI(TAG, "Wi-Fi AP client link down IP: " IPSTR " MAC: " MACSTR,
+    LOGI(TAG, "Wi-Fi AP client link down IP: " IPSTR " MAC: " MACSTR,
              IP2STR(&link->ip), MAC2STR(link->mac));
     event_raise(&link->event, NULL, NULL);
     event_clear(&link->event);
@@ -75,15 +71,14 @@ static void net_link_drop(linked_list_item_t *item) {
 }
 
 /* Адрес выдан клиенту точки доступа: заводим запись, а если адрес у того же MAC
- * сменился — обновляем её и будим подписчиков, чтобы соединения с прежнего
- * адреса закрылись. */
+ * сменился — обновляем и будим подписчиков, чтобы старые соединения закрылись. */
 static void net_link_assigned(esp_netif_t *netif, esp_ip4_addr_t *ip, uint8_t *mac) {
     linked_list_t item = linked_list_find_first(links_active, &net_link_mac_match, mac);
 
     if (!item) {
         if (!links_free) {
             /* we must never get here */
-            ESP_LOGI(TAG, "Drop Wi-Fi AP client MAC: " MACSTR, MAC2STR(mac));
+            LOGI(TAG, "Drop Wi-Fi AP client MAC: " MACSTR, MAC2STR(mac));
             sta_disconnect(mac);
             return;
         }
@@ -97,21 +92,20 @@ static void net_link_assigned(esp_netif_t *netif, esp_ip4_addr_t *ip, uint8_t *m
 
     link_t *link = linked_list_get_object(link_t, item);
     if (mem_cmp(&link->ip, ip, sizeof(esp_ip4_addr_t))) {
-        ESP_LOGI(TAG, "Wi-Fi AP client new IP assignned");
+        LOGI(TAG, "Wi-Fi AP client new IP assignned");
         mem_cpy(&link->ip, ip, sizeof(esp_ip4_addr_t));
         event_raise(&link->event, NULL, NULL); /* drop connections */
         event_clear(&link->event);
     }
 }
 
-/* События линков точки доступа приходят от драйвера (клиент подключился/ушёл) и
- * от esp_netif (клиенту выдан адрес). Записи ведёт этот обработчик, других
- * владельцев у них нет. */
+/* События линков точки доступа: от драйвера (клиент подключился/ушёл) и от esp_netif
+ * (клиенту выдан адрес). Записи ведёт только этот обработчик. */
 static void net_link_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id,
                                void *event_data) {
     if ((event_base == WIFI_EVENT) && (event_id == WIFI_EVENT_AP_STADISCONNECTED)) {
         wifi_event_ap_stadisconnected_t *data = (wifi_event_ap_stadisconnected_t *)event_data;
-        ESP_LOGI(TAG, "Wi-Fi AP client disconnect MAC: " MACSTR, MAC2STR(data->mac));
+        LOGI(TAG, "Wi-Fi AP client disconnect MAC: " MACSTR, MAC2STR(data->mac));
         linked_list_item_t *item = linked_list_find_first(links_active, &net_link_mac_match, data->mac);
         if (item != NULL)
             net_link_drop(item);
@@ -119,20 +113,17 @@ static void net_link_event_handler(void *arg, esp_event_base_t event_base, int32
 
     if ((event_base == WIFI_EVENT) && (event_id == WIFI_EVENT_AP_STACONNECTED)) {
         wifi_event_ap_staconnected_t *data = (wifi_event_ap_staconnected_t *)event_data;
-        /* Второй линк того же MAC и клиент, которому не нашлось записи (пул
-         * занят), остаются без учёта — такого клиента отключаем. */
+        /* Второй линк того же MAC или клиент без записи (пул занят) — отключаем. */
         if (!links_free ||
             linked_list_find_first(links_active, &net_link_mac_match, data->mac)) {
-            ESP_LOGI(TAG, "Reject Wi-Fi AP client MAC: " MACSTR, MAC2STR(data->mac));
+            LOGI(TAG, "Reject Wi-Fi AP client MAC: " MACSTR, MAC2STR(data->mac));
             esp_wifi_deauth_sta(data->aid);
         }
     }
 
-    /* Событие назначения адреса клиенту точки доступа: IP_EVENT со значением
-     * IP_EVENT_ASSIGNED_IP_TO_CLIENT. */
     if ((event_base == IP_EVENT) && (event_id == IP_EVENT_ASSIGNED_IP_TO_CLIENT)) {
         ip_event_assigned_ip_to_client_t *data = (ip_event_assigned_ip_to_client_t *)event_data;
-        ESP_LOGI(TAG, "Wi-Fi AP client assigned IP: " IPSTR " MAC: " MACSTR,
+        LOGI(TAG, "Wi-Fi AP client assigned IP: " IPSTR " MAC: " MACSTR,
                  IP2STR(&data->ip), MAC2STR(data->mac));
         net_link_assigned(data->esp_netif, &data->ip, data->mac);
     }
@@ -151,8 +142,7 @@ void net_link_init(void) {
 /* ── Интерфейс, через который пришло соединение ────────────────────────────── */
 
 /* Адрес IPv4 в сетевом порядке байт из адреса сокета. lwIP здесь dual-stack:
- * соединение по IPv4 приходит и как AF_INET, и как ::FFFF:a.b.c.d (AF_INET6) —
- * разбираем оба вида. 0 — это не IPv4. */
+ * IPv4 приходит и как AF_INET, и как ::FFFF:a.b.c.d (AF_INET6). 0 — это не IPv4. */
 static uint32_t sockaddr_ip4(const struct sockaddr_storage *ss) {
     if (ss->ss_family == AF_INET)
         return ((const struct sockaddr_in *)ss)->sin_addr.s_addr;
@@ -169,11 +159,10 @@ static uint32_t sockaddr_ip4(const struct sockaddr_storage *ss) {
     return 0;
 }
 
-/* Через какой интерфейс пришло соединение с этим сокетом. Локальный адрес
- * сокета — адрес того интерфейса, с которого нас достигли: клиент точки доступа
- * попал на адрес AP, клиент из сети, куда подключена наша станция, — на адрес
- * STA. Спрашивается один раз при установлении соединения: транспорт запоминает
- * ответ в дескрипторе и больше сеть не дёргает. */
+/* Через какой интерфейс пришло соединение с этим сокетом. Локальный адрес сокета —
+ * адрес того интерфейса, с которого нас достигли: клиент точки доступа попал на адрес
+ * AP, клиент сети станции — на адрес STA. Спрашивается один раз, ответ запоминается
+ * в дескрипторе. */
 uint32_t gw_iface_of_socket(int fd) {
     if (fd < 0) return GW_IFACE_NONE;
 
@@ -211,13 +200,11 @@ uint32_t gw_iface_of_socket(int fd) {
 /* ── Подписка сокета на обрыв линка ────────────────────────────────────────── */
 
 /* Подписывает соединение на запись его клиента: как только линк оборвётся (или
- * клиенту выдадут другой адрес), делегат получит событие, и транспорт закроет
- * соединение сам. Адрес берём у peer'а сокета: клиент точки доступа известен по
- * тому адресу, который ему выдал DHCP. 0 — запись не нашлась: соединение пришло
- * не от клиента точки доступа (из сети станции или по проводу), и следить за
- * его линком нечем. */
+ * клиенту выдадут другой адрес), делегат получит событие и транспорт закроет
+ * соединение сам. Адрес берём у peer'а: клиент точки доступа известен по адресу,
+ * который выдал ему DHCP. 0 — соединение не от клиента точки доступа. */
 uint8_t net_link_subscribe(int sock, delegate_t *delegate) {
-    ESP_LOGI(TAG, "Socket try get peer");
+    LOGI(TAG, "Socket try get peer");
 
     struct sockaddr_storage peer_addr;
     socklen_t peer_addr_len = sizeof(peer_addr);
@@ -230,11 +217,11 @@ uint8_t net_link_subscribe(int sock, delegate_t *delegate) {
     if (peer_addr.ss_family == AF_INET) {
         const struct sockaddr_in *addr4 = (const struct sockaddr_in *)&peer_addr;
         inet_ntop(AF_INET, &addr4->sin_addr, ip_str, sizeof(ip_str));
-        ESP_LOGI(TAG, "Socket IPv4: %s", ip_str);
+        LOGI(TAG, "Socket IPv4: %s", ip_str);
     } else if (peer_addr.ss_family == AF_INET6) {
         const struct sockaddr_in6 *addr6 = (const struct sockaddr_in6 *)&peer_addr;
         inet_ntop(AF_INET6, &addr6->sin6_addr, ip_str, sizeof(ip_str));
-        ESP_LOGI(TAG, "Socket IPv6: %s", ip_str);
+        LOGI(TAG, "Socket IPv6: %s", ip_str);
     }
 
     uint32_t peer_ip4 = sockaddr_ip4(&peer_addr);
@@ -242,14 +229,14 @@ uint8_t net_link_subscribe(int sock, delegate_t *delegate) {
         return false;
 
     esp_ip4_addr_t peer_esp = { .addr = peer_ip4 };
-    ESP_LOGI(TAG, "Socket peer IPv4: " IPSTR, IP2STR(&peer_esp));
+    LOGI(TAG, "Socket peer IPv4: " IPSTR, IP2STR(&peer_esp));
 
-    ESP_LOGI(TAG, "Try find socket link");
+    LOGI(TAG, "Try find socket link");
     linked_list_item_t *item = linked_list_find_first(links_active, &net_link_ip_match, &peer_esp);
     if (item == NULL)
         return false;
 
-    ESP_LOGI(TAG, "Link found, subscribe event");
+    LOGI(TAG, "Link found, subscribe event");
     link_t *link = linked_list_get_object(link_t, item);
     event_subscribe(&link->event, delegate);
     return true;

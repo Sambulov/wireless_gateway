@@ -8,9 +8,7 @@
 #define MB_PAYLOAD_SIZE    255
 #define MB_DEFAULT_AWT_MS  500
 
-/* Токенов на разбор ARG: ключи ADR/FN/RA/RVC/AWT — по два токена, плюс "RD" и
- * его элементы. Список значений на запись длиннее этого отвергается разбором
- * (клиент шлёт регистры маленькими пачками). */
+/* токенов на разбор ARG: ADR/FN/RA/RVC/AWT и список RD; длиннее — отказ разбора */
 #define MB_ARG_MAX_TOKENS  48
 
 static uint32_t mb_timer_fn(const void *ctx) {
@@ -18,9 +16,8 @@ static uint32_t mb_timer_fn(const void *ctx) {
     return xTaskGetTickCount() * portTICK_PERIOD_MS;
 }
 
-/* Приём устроен так: библиотека не читает линию сама, а получает байты через
- * modbus_receive_data (см. mb_rx_handler). В интерфейсе — только передача и
- * таймер. */
+/* приём: байты линии библиотеке отдаёт mb_rx_handler, в интерфейсе — передача и
+ * таймер */
 static const modbus_iface_t mb_iface = {
     .pfWrite = gw_uart_write,
     .pfTimer = mb_timer_fn,
@@ -28,52 +25,48 @@ static const modbus_iface_t mb_iface = {
 
 typedef struct mb_call_ctx mb_call_ctx_t;
 
-/* Порт и его очередь запросов. Драйвер один на порт, поэтому «кто просит»
- * обработчику не важно — важно, в каком порядке запросы пришли: голова очереди
- * отдаётся драйверу, когда он освободится. */
+/* порт и его очередь запросов: голова очереди отдаётся драйверу, когда он
+ * освободится, поэтому важен порядок прихода, а не «кто просит» */
 typedef struct {
     modbus_t           mb;
     uint8_t            payload[MB_PAYLOAD_SIZE];
     struct app_uart_t *app_uart;
     int                port_no;
-    delegate_t         rx_delegate;  /* приём байт линии в библиотеку Modbus */
-    mb_call_ctx_t     *head;         /* очередь запросов порта */
+    delegate_t         rx_delegate;
+    mb_call_ctx_t     *head;
     mb_call_ctx_t     *tail;
     uint8_t            queue_len;
     mb_call_ctx_t     *active;       /* чья транзакция сейчас на линии */
 } modbus_worker_t;
 
-/* Сколько запросов порт готов держать в очереди. Ждём линии сколько нужно, но
- * копить вызовы бесконечно нельзя: каждый это контекст в куче. Кто не влез —
- * получает отказ «занято» и может повторить. */
+/* сколько запросов порт держит в очереди: каждый — контекст в куче, копить их
+ * бесконечно нельзя. Кто не влез — получает отказ «занято» и может повторить. */
 #define MB_QUEUE_MAX 8
 
-/* Коды ошибок в ответе клиенту. Отличать их от кода исключения Modbus важно:
- * ERR из кадра прибора — это код исключения прибора, а здесь — отказ каркаса. */
-#define MB_ERR_BUSY    5    /* линия занята чужой транзакцией дольше, чем ждал вызов */
-#define MB_ERR_TIMEOUT 4    /* прибор не ответил */
-#define MB_ERR_START   3    /* транзакция не запустилась */
-#define MB_ERR_ARG     2    /* ARG не разобран */
-#define MB_ERR_MEM     1    /* не хватило памяти */
+/* отказы каркаса в ответе клиенту; ERR в кадре прибора — другое: код исключения
+ * прибора */
+#define MB_ERR_BUSY    5
+#define MB_ERR_TIMEOUT 4
+#define MB_ERR_START   3
+#define MB_ERR_ARG     2
+#define MB_ERR_MEM     1
 
 /* Состояние одного вызова API: разобранный запрос и место в очереди порта.
  * Живёт в контексте вызова, который принадлежит обработчику. Ответ клиенту
- * формирует и отправляет драйвер из своего колбэка — тогда же он помечает
- * контекст done, и обработчик сообщает ядру, что вызов обработан.
- * Ядро ответу не нужно: ответ адресован дескриптору вызова, и api_reply берёт
- * ядро из него — прямо в колбэке драйвера. */
+ * формирует и отправляет драйвер из своего колбэка: api_reply берёт ядро из
+ * дескриптора вызова, поэтому ядро обработчику не нужно. */
 #define MB_CTX_MAGIC 0x4d424354u   /* 'MBCT' — признак своего контекста */
 
 struct mb_call_ctx {
     uint32_t         magic;
     void            *call;                      /* NULL — вызов уже снят ядром */
     modbus_worker_t *worker;
-    modbus_frame_t   req;                       /* разобранный запрос клиента */
+    modbus_frame_t   req;
     uint8_t          wr_buf[MB_PAYLOAD_SIZE];
     uint16_t         awt_ms;
-    TickType_t       deadline;                  /* таймаут самой транзакции */
-    mb_call_ctx_t   *next;                      /* очередь порта */
-    uint8_t          queued;                    /* стоит в очереди порта */
+    TickType_t       deadline;
+    mb_call_ctx_t   *next;
+    uint8_t          queued;
     volatile uint8_t done;                      /* драйвер ответил, ответ отправлен */
 };
 
@@ -82,10 +75,9 @@ static modbus_worker_t mb_workers[2];
 static void send_mb_frame(void *call, modbus_frame_t *f);
 
 
-/* Колбэк драйвера: транзакция закончилась (есть ответ, ошибка прибора или
- * таймаут). Здесь же уходит ответ клиенту — драйвер знает результат лучше
- * кого-либо, — и ставится отметка, по которой обработчик сообщит ядру API, что
- * вызов обработан: ядро либо закроет вызов, либо повторит его (подписка). */
+/* Колбэк драйвера: транзакция закончилась (ответ, ошибка прибора или таймаут).
+ * Здесь уходит ответ клиенту и ставится отметка done, по которой обработчик
+ * сообщит ядру API, что вызов обработан: ядро либо закроет его, либо повторит. */
 static void mb_on_complete(modbus_frame_t *frame, modbus_t *mb, void *ctx) {
     (void)mb;
     mb_call_ctx_t *c = (mb_call_ctx_t *)ctx;
@@ -104,8 +96,6 @@ static void mb_on_complete(modbus_frame_t *frame, modbus_t *mb, void *ctx) {
         free(c);
     }
 }
-
-/* ── Очередь порта ───────────────────────────────────────────────────────── */
 
 static void mb_queue_push(modbus_worker_t *w, mb_call_ctx_t *c) {
     c->next   = NULL;
@@ -144,8 +134,7 @@ static void mb_queue_remove(modbus_worker_t *w, mb_call_ctx_t *c) {
     }
 }
 
-/* Отдать голову очереди драйверу. 0 — драйвер занят: вызов остаётся в очереди
- * и подождёт следующего такта, ожидания внутри обработчика нет. */
+/* отдать голову очереди драйверу; 0 — драйвер занят, вызов подождёт такта */
 static uint8_t mb_worker_start(modbus_worker_t *w) {
     mb_call_ctx_t *c = w->head;
     if (!c || modbus_busy(&w->mb))
@@ -166,7 +155,6 @@ static uint8_t mb_worker_start(modbus_worker_t *w) {
     return 1;
 }
 
-/* Байты из UART отдаём библиотеке сами. */
 static void mb_rx_handler(void *trigger, void *sender, void *context) {
     (void)sender;
     modbus_worker_t *w = (modbus_worker_t *)context;
@@ -176,7 +164,6 @@ static void mb_rx_handler(void *trigger, void *sender, void *context) {
     }
 }
 
-/* Ответ клиенту отправляем через сам вызов — ядро само обрамит его в FID/SID. */
 static void send_mb_msg(void *call, const char *json_str, size_t len) {
     if (json_str && len > 0)
         api_reply(call, (const uint8_t *)json_str, len);
@@ -194,7 +181,7 @@ static void send_mb_frame(void *call, modbus_frame_t *f) {
     uint8_t code = 0, amount = 0, size = 0;
     uint8_t *regs = pucModbusExtructFrameData(f, &code, &amount, &size);
 
-    /* Estimate buffer: header ~80 bytes + per-register up to 7 bytes each */
+    /* запас под заголовок ~80 байт и до 9 байт на регистр в ответе */
     size_t buf_sz = 96 + (amount > 0 ? (size_t)(amount) * 9 : 0);
     char  *buf    = malloc(buf_sz);
     if (!buf) {
@@ -244,9 +231,8 @@ static uint8_t mb_call_parse(mb_call_ctx_t *ctx, uint8_t *data, uint32_t len) {
         return 0;
     }
 
-    /* Разбор ARG: jsmn, без дерева и без выделения памяти на элемент. Массив
-     * RD ограничен числом токенов, а не кучей: слишком длинный список значений
-     * отвергается разбором. */
+    /* разбор ARG — jsmn, без дерева и без памяти на элемент: слишком длинный
+     * список значений отвергается разбором, а не кучей */
     GW_JSON_TOKENS(toks, MB_ARG_MAX_TOKENS);
     gw_json_t json;
     if (!gw_json_parse(&json, (const char *)data, len, toks, MB_ARG_MAX_TOKENS)) {
@@ -298,9 +284,8 @@ static uint8_t mb_call_parse(mb_call_ctx_t *ctx, uint8_t *data, uint32_t len) {
         return 0;
     }
 
-    /* Линию здесь НЕ трогаем: сброс и настройка делаются в момент старта
-     * транзакции. Иначе разбор второго одновременного запроса сбрасывал бы
-     * линию под уже идущей транзакцией первого, и таймаут получали все. */
+    /* Линию здесь НЕ трогаем: сброс и настройка — в момент старта транзакции.
+     * Иначе разбор второго запроса сбрасывал бы линию под транзакцией первого. */
     ctx->req       = frame;                 /* pucData уже указывает на wr_buf */
     ctx->awt_ms    = (uint16_t)awt_ms;
     ctx->done      = 0;
@@ -308,27 +293,23 @@ static uint8_t mb_call_parse(mb_call_ctx_t *ctx, uint8_t *data, uint32_t len) {
     return 1;
 }
 
-/* Обработчик по контракту API:
- *   data != NULL — запрос клиента (первичный или переопрос подписки): разбираем
- *                  ARG и ставим вызов в очередь порта;
- *   data == NULL — такт работы: двигаем свою транзакцию, если она на линии, и
- *                  сообщаем ядру о завершении, когда драйвер ответил;
- *   call == NULL — вызов снимают: убираем его из очереди и освобождаем.
- * Никаких ожиданий внутри: пока линия занята, обработчик просто возвращает TRUE. */
+/* Обработчик по контракту API: data != NULL — запрос клиента (первичный или
+ * переопрос подписки), разбираем ARG и ставим вызов в очередь порта; data == NULL
+ * — такт работы, двигаем транзакцию и сообщаем ядру о завершении; call == NULL —
+ * вызов снимают, убираем его из очереди и освобождаем. Никаких ожиданий внутри:
+ * пока линия занята, обработчик возвращает TRUE. */
 static uint8_t mb_api_handler(void *call, void **context, uint8_t *data, uint32_t data_len) {
     if (!call) {
         mb_call_ctx_t *c = (mb_call_ctx_t *)*context;
-        /* В *context лежит либо наш контекст вызова, либо контекст регистрации
-         * (воркер порта) — различить их можно только по метке. */
+        /* в *context лежит либо наш контекст вызова, либо контекст регистрации
+         * (воркер порта): различить их можно только по метке */
         if (c && c->magic == MB_CTX_MAGIC) {
             if (c->worker) {
                 if (c->worker->active == c) {
                     /* Транзакция уже на линии, а вызов снят: гасим её и
                      * освобождаем контекст сразу. Ждать колбэк нельзя — после
-                     * сброса драйвер его не позовёт (замерено: 40 оборванных
-                     * запросов оставляли ~12 КБ висящих контекстов), а линия
-                     * оставалась «занятой» мёртвой транзакцией (страница
-                     * показывала ответ 4001 мс вместо 90). */
+                     * сброса драйвер его не позовёт, а линия осталась бы
+                     * «занятой» мёртвой транзакцией. */
                     modbus_worker_t *w = c->worker;
                     modbus_reset(&w->mb);
                     w->active = NULL;
@@ -350,8 +331,8 @@ static uint8_t mb_api_handler(void *call, void **context, uint8_t *data, uint32_
 
     if (data != NULL) {
         if (c && c->magic == MB_CTX_MAGIC) {
-            /* Переопрос подписки: если предыдущий запрос ещё в очереди или на
-             * линии, второй раз его не ставим — он уже будет выполнен. */
+            /* переопрос подписки: если запрос ещё в очереди или на линии, второй
+             * раз его не ставим — он уже будет выполнен */
             if (c->queued || (c->worker && c->worker->active == c))
                 return 1;
             c->done = 0;
@@ -368,7 +349,6 @@ static uint8_t mb_api_handler(void *call, void **context, uint8_t *data, uint32_
         }
 
         if (!mb_call_parse(c, data, data_len)) {
-            /* ARG не разобрали — ответ уже отправлен, вызов завершён */
             *context = c->worker;
             free(c);
             return 0;
@@ -381,19 +361,18 @@ static uint8_t mb_api_handler(void *call, void **context, uint8_t *data, uint32_
             return 0;
         }
         mb_queue_push(c->worker, c);
-        /* Попробуем отдать драйверу прямо сейчас; если он занят — очередь
-         * подождёт такта работы, а обработчик не блокирует задачу. */
+        /* Попробуем отдать драйверу сразу; если занят — очередь подождёт такта
+         * работы, а обработчик задачу не блокирует. */
         mb_worker_start(c->worker);
         return 1;
     }
 
-    /* Такт работы */
     if (!c)
         return 0;
 
     if (c->done) {
         /* Драйвер ответил и ответ уже ушёл клиенту: говорим ядру, что вызов
-         * обработан. Ядро само решит — закрыть его или повторить (подписка). */
+         * обработан — закрыть его или повторить (подписка) решает оно. */
         *context = c->worker;
         free(c);
         return 0;
@@ -427,8 +406,8 @@ static uint8_t mb_api_handler(void *call, void **context, uint8_t *data, uint32_
     return 1;
 }
 
-/* Регистрация обоих FID на одном ядре. Оба обязательны: половина портов,
- * зарегистрированная молча, выглядела бы как «порт не отвечает». */
+/* оба FID обязательны: порт, зарегистрированный молча, выглядел бы как «не
+ * отвечает» */
 static uint8_t mb_register(api_t *api) {
     uint8_t ok = 1;
     ok &= api_register_handler(api, mb_api_handler, ESP_WS_API_UART1_MODBUS_REQ, &mb_workers[0]);
@@ -469,13 +448,11 @@ esp_err_t ws_modbus_run(app_context_t *app) {
         gw_uart_on_receive_subscribe(&w->app_uart->desc, &w->rx_delegate);
     }
 
-    /* Запросы к прибору идут через ядро API: оно само вызывает обработчик и в
-     * такте работы, поэтому своей задачи и очереди здесь нет.
-     * Контекст регистрации — рабочий поток порта: по нему обработчик понимает,
-     * каким портом управляет. Политики по интерфейсам у Modbus нет, поэтому оба
-     * FID регистрируются на ОБОИХ ядрах: клиент точки доступа и клиент станции
-     * обслуживаются каждый своим ядром, а ответ уходит по дескриптору вызова
-     * через то ядро, на котором вызов пришёл. */
+    /* Запросы к прибору идут через ядро API (оно зовёт обработчик и в такте
+     * работы), поэтому своей задачи и очереди здесь нет; контекст регистрации —
+     * воркер порта. Политики по интерфейсам у Modbus нет, поэтому оба FID
+     * регистрируются на ОБОИХ ядрах, а ответ уходит через то ядро, откуда пришёл
+     * вызов. */
     if (!mb_register(app->api_ap) || !mb_register(app->api_sta)) {
         ESP_LOGE(TAG, "не удалось зарегистрировать обработчики Modbus");
         return ESP_FAIL;
