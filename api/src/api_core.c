@@ -411,6 +411,13 @@ static uint8_t api_dispatch(api_private_t *core, api_call_t *call,
     if(core == NULL) return 0;
 
     transport_result_t res = TRANSPORT_INVALID;
+    /* Сколько подписчиков кадр ПРИНЯЛО. Итог рассылки — «принял хотя бы один»:
+     * один нечитающий клиент не должен останавливать поток для всех остальных.
+     * Раньше возвращался результат последнего подписчика, и залипшее соединение
+     * (браузерная вкладка в фоне) превращало удачную отдачу кадра в «транспорт
+     * занят», сервис держал кадр, повторял, отбрасывал — и кольцо приёма
+     * наполнялось, хотя данные исправно уходили живым клиентам. */
+    uint32_t sent_ok = 0;
     const char *fid_out = (call != NULL) ? call->fid : group_name;
     uint32_t sid = (call != NULL) ? call->id : 0;
 
@@ -465,18 +472,21 @@ static uint8_t api_dispatch(api_private_t *core, api_call_t *call,
 
         if(call != NULL) {
             send_to_session(core, call, resp, &res);
+            sent_ok = (res == TRANSPORT_OK) ? 1u : 0u;
         } else {
             LinkedListItem_t *item = pxLinkedListFindFirst(core->waiting, call_fid_match, (void *)group_name);
             while(item != NULL) {
                 api_call_t *sub = LinkedListGetObject(api_call_t, item);
                 item = pxLinkedListFindNextNoOverlap(item, call_fid_match, (void *)group_name);
                 send_to_session(core, sub, resp, &res);
+                if(res == TRANSPORT_OK) sent_ok++;
             }
             item = pxLinkedListFindFirst(core->calls, call_fid_match, (void *)group_name);
             while(item != NULL) {
                 api_call_t *sub = LinkedListGetObject(api_call_t, item);
                 item = pxLinkedListFindNextNoOverlap(item, call_fid_match, (void *)group_name);
                 send_to_session(core, sub, resp, &res);
+                if(res == TRANSPORT_OK) sent_ok++;
             }
         }
     } else {
@@ -484,7 +494,7 @@ static uint8_t api_dispatch(api_private_t *core, api_call_t *call,
     }
 
     api_unlock(core);
-    return (res == TRANSPORT_OK);
+    return (sent_ok > 0);
 }
 
 /* Ответ конкретному вызову. Ядро берётся из самого вызова: отвечающему (в том
