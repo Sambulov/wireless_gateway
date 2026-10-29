@@ -25,9 +25,10 @@ static const char *TAG = "web_server";
 #define WEB_SERVER_TRANSPORTS_MAX 4
 
 /* Сколько соединений интерфейса объект может учитывать одновременно (страницы и
- * WebSocket вместе). Предел больше суммы слотов портов, чтобы «нет места» не
- * наступало раньше, чем у httpd кончатся сокеты. */
-#define WEB_SERVER_SESSIONS_MAX  24
+ * WebSocket вместе) — из конфигурации проекта, с запасом на слоты обоих портов:
+ * «нет места» не должно наступать раньше, чем у httpd кончатся сокеты. */
+#define WEB_SERVER_SESSIONS_MAX \
+    (CONFIG_WEB_SERVER_MAX_CLIENTS + CONFIG_WEB_SOCKET_MAX_CLIENTS)
 
 struct web_server {
     uint32_t iface;                  /* какой интерфейс обслуживает объект */

@@ -49,8 +49,11 @@ static const char *TAG = "ws_transport";
 /* Экземпляр транспорта. Объявлен заранее — дескриптор соединения знает, чей он. */
 typedef struct ws_transport_module_s ws_transport_module_t;
 
-/* Сколько соединений экземпляр держит в списке. */
-#define WS_CONN_MAX   8
+/* Сколько соединений экземпляр держит в списке — из конфигурации проекта.
+ * Больше, чем слотов у WS-порта, смысла нет: сокеты выдаёт он. */
+#define WS_CONN_MAX   CONFIG_WS_TRANSPORT_MAX_CONNS
+_Static_assert(CONFIG_WS_TRANSPORT_MAX_CONNS <= CONFIG_WEB_SOCKET_MAX_CLIENTS,
+               "соединений транспорта больше, чем слотов WS-порта");
 
 
 /* Дескриптор соединения: ядру непрозрачен — это ключ его сессии. */

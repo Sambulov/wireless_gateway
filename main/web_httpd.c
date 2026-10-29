@@ -27,8 +27,10 @@ static const char *TAG = "web_httpd";
  * регистрации, а шаблон может прийти из временной структуры. */
 #define WEB_URI_MAX             32
 
-/* Запись на сессию порта. */
-#define WEB_HTTPD_SESSIONS_MAX  32
+/* Запись на сессию порта: таблица размером с самый большой из пулов портов —
+ * столько сессий одновременно не бывает, а лишние записи ничего не стоят. */
+#define WEB_HTTPD_SESSIONS_MAX \
+    (CONFIG_WEB_SERVER_MAX_CLIENTS + CONFIG_WEB_SOCKET_MAX_CLIENTS)
 
 #define WEB_SEND_STEP_MS        10
 

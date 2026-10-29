@@ -1,15 +1,39 @@
 menu "Project Configuration"
+    config WEB_SERVER_MAX_CLIENTS
+        int "HTTP page port sockets"
+        range 4 24
+        default 20
+        help
+            Сколько соединений держит порт страниц (HTTP). Браузер открывает до
+            шести на вкладку и держит их в keep-alive, поэтому на три открытые
+            страницы (конфигурация + два терминала) нужно ~18. Когда слоты
+            кончаются, httpd перестаёт принимать новые соединения и страница
+            «висит».
+    config WEB_SOCKET_MAX_CLIENTS
+        int "WebSocket port sockets"
+        range 2 16
+        default 10
+        help
+            Сколько соединений держит порт WebSocket. Порт общий для обоих
+            интерфейсов (AP и STA), поэтому это и есть предел одновременных
+            WebSocket-клиентов. Лишние получают не отказ, а молчание: httpd
+            просто перестаёт слушать.
+    config WS_TRANSPORT_MAX_CONNS
+        int "WebSocket connections per transport"
+        range 2 16
+        default 10
+        help
+            Сколько соединений держит экземпляр транспорта (у каждого интерфейса
+            свой). Не больше WEB_SOCKET_MAX_CLIENTS: сокеты выдаёт порт. На
+            соединение может уйти до 8 КБ исходящего буфера и до 16 КБ на сборку
+            сообщения, поэтому большой запас — это и запас по куче, не только
+            по сокетам.
     config WEB_SERVER_PORT
         int "Web server port"
         range 0 65535
         default 80
         help
             Set server port number used by web serer.
-    config WEB_SERVER_MAX_CLIENTS
-        int "Web server connections"
-        default 10
-        help
-            Maximum allowed web clients connections.
     config WEB_SOCKET_SERVER_PORT
         int "WebSocket server port"
         range 0 65535

@@ -182,21 +182,34 @@ void app_main(void)
 
     /* Сокетный слой: по одному httpd на порт (CONFIG_WEB_SERVER_PORT для
      * страниц, CONFIG_WEB_SOCKET_SERVER_PORT для WebSocket). Привязать httpd к
-     * интерфейсу нельзя, поэтому развод делает объект веб-сервера за портом. */
+     * интерфейсу нельзя, поэтому развод делает объект веб-сервера за портом.
+     * Размеры пулов — из конфигурации проекта (main/Kconfig.projbuild). */
     static const web_httpd_config_t port_config[WEB_ROUTE_KINDS] = {
         [WEB_ROUTE_HTTP] = {
             .port             = CONFIG_WEB_SERVER_PORT,
-            .max_open_sockets = 12,
+            .max_open_sockets = CONFIG_WEB_SERVER_MAX_CLIENTS,
             .max_uri_handlers = 20,
             .send_budget_ms   = WEB_SEND_BUDGET_FILE_MS,
         },
         [WEB_ROUTE_WS] = {
             .port             = CONFIG_WEB_SOCKET_SERVER_PORT,
-            .max_open_sockets = 8,
+            .max_open_sockets = CONFIG_WEB_SOCKET_MAX_CLIENTS,
             .max_uri_handlers = 8,
             .send_budget_ms   = WEB_SEND_BUDGET_WS_MS,
         },
     };
+    /* Пул сокетов lwIP один на всё: два listen-сокета httpd, их ctrl-каналы,
+     * DHCP-сервер точки доступа и DNS. Если пулы портов его перерастут, httpd
+     * начнёт молча не принимать новые соединения — поэтому проверяем при сборке.
+     * Отдельно проверяем потолок ОДНОВРЕМЕННЫХ TCP-соединений (MAX_ACTIVE_TCP):
+     * HTTP и WebSocket делят его, и при умолчании 16 три открытые вкладки уже не
+     * оставляют места ни новой странице, ни WebSocket. */
+    _Static_assert(CONFIG_WEB_SERVER_MAX_CLIENTS + CONFIG_WEB_SOCKET_MAX_CLIENTS + 4
+                   <= CONFIG_LWIP_MAX_SOCKETS,
+                   "пулы соединений не влезают в CONFIG_LWIP_MAX_SOCKETS");
+    _Static_assert(CONFIG_WEB_SERVER_MAX_CLIENTS + CONFIG_WEB_SOCKET_MAX_CLIENTS + 2
+                   <= CONFIG_LWIP_MAX_ACTIVE_TCP,
+                   "пулы соединений не влезают в CONFIG_LWIP_MAX_ACTIVE_TCP");
     if (!web_httpd_start(port_config))
         ESP_LOGE(TAG, "Сокетный слой веб-сервера поднялся не полностью");
 

@@ -16,7 +16,20 @@ CONFIG_HTTPD_WS_POST_HANDSHAKE_CB_SUPPORT=y
 # start_webserver()/start_ws_server() in main/web_server.c) share this single
 # global socket pool; the IDF default of 10 is not enough headroom for two
 # httpd instances at once.
-CONFIG_LWIP_MAX_SOCKETS=32
+CONFIG_LWIP_MAX_SOCKETS=48
+# Потолок ОДНОВРЕМЕННЫХ TCP-соединений (MEMP_NUM_TCP_PCB). Умолчание 16 — это
+# ровно то, из-за чего три открытые вкладки (по шесть keep-alive соединений) уже
+# не оставляли места ни новым страницам, ни WebSocket: HTTP и WS делят один
+# счётчик. 40 соответствует сумме пулов веб-слоя плюс запас.
+CONFIG_LWIP_MAX_ACTIVE_TCP=40
+# Пулы веб-слоя (значения по умолчанию те же, что в main/Kconfig.projbuild):
+# порт страниц 20 (три вкладки браузера по шесть keep-alive соединений),
+# порт WebSocket 10 (он общий для AP и STA), соединений транспорта 10.
+# Сумма пулов плюс запас на служебные сокеты обязана влезать в MAX_SOCKETS —
+# это проверяется _Static_assert в main/app.c.
+CONFIG_WEB_SERVER_MAX_CLIENTS=20
+CONFIG_WEB_SOCKET_MAX_CLIENTS=10
+CONFIG_WS_TRANSPORT_MAX_CONNS=10
 # В эфире 2.4 ГГц потери — норма (соседние сети, свой же softAP на том же
 # канале). При минимальном RTO 1,5 с каждый потерянный сегмент останавливает
 # окно на полторы секунды, и отдача файла в 0,5 МБ растягивается на десятки
