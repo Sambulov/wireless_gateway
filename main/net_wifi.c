@@ -262,6 +262,10 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
         sta_pin_miss = 0;
         sta_retry_ms = STA_RETRY_FIRST_MS;
         esp_timer_stop(sta_retry_timer);
+        /* Энергосбережение выключено всегда: питание от сети, а WIFI_PS_MIN_MODEM
+         * роняет отдачу до одного окна TCP на DTIM. Драйвер возвращает умолчание
+         * при переподключении, поэтому настройку повторяем. */
+        esp_wifi_set_ps(WIFI_PS_NONE);
         ap_follow_sta();
     }
     /* Сопряжение клиента точки доступа: станция в это время молчит (см. AP_QUIET_MS). */
