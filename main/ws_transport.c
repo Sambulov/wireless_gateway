@@ -63,6 +63,11 @@ typedef struct {
     /* Чей это экземпляр: веб-сервер передал его контекстом обработчика. По нему
      * находятся подписчик и веб-сервер, которому принадлежит сессия. */
     ws_transport_module_t *module;
+    /* Занят ли слот пула (см. conn_alloc/conn_release) и его поколение: снимок,
+     * сделанный тактом до переиспользования слота, узнаётся по номеру и
+     * отбрасывается. */
+    uint8_t  busy;
+    uint32_t gen;
     /* Сборка сообщения из фрагментов (первый кадр с FIN=0, дальше продолжения).
      * Буфер живёт до возврата из обработчика события RECEIVED. */
     uint8_t *msg;
@@ -71,7 +76,7 @@ typedef struct {
     /* Сколько отправок в работе: дескриптор нельзя освободить, пока хоть одна не
      * завершилась — колбэк приходит позже закрытия сессии. */
     uint32_t sends_in_flight;
-    /* Сессия закрыта, но отправки ещё в работе: память освободит последний колбэк. */
+    /* Сессия закрыта, но отправки ещё в работе: освободит последний колбэк. */
     uint8_t  detached;
     /* Колбэк сейчас уведомляет ядро, а ядро вправе закрыть соединение прямо
      * отсюда: тогда обработчик закрытия дескриптор не освобождает. */
@@ -100,10 +105,59 @@ typedef struct {
  * соединения: буфер переиспользуется следующим сообщением. */
 typedef struct ws_transport_recv_s {
     struct ws_transport_recv_s *next;
-    ws_transport_conn_t *conn;   /* дескриптор живёт, пока жива запись (recv_queued) */
+    ws_transport_conn_t *conn;   /* дескриптор из пула; слот мог быть переиспользован */
+    uint32_t gen;                /* поколение дескриптора на момент приёма */
     uint32_t len;
     uint8_t  data[];             /* само сообщение + '\0' в конце */
 } ws_transport_recv_t;
+
+/* ── Пул дескрипторов соединений ──────────────────────────────────────────────
+ *
+ * Дескрипторы НЕ освобождаются: такт ядра (ws_httpd_poll → ws_out_pump) работает
+ * по снимку указателей, сделанному до того, как задача веб-сервера закроет
+ * сессию, а освобождённый дескриптор в этом снимке — LoadProhibited (поймано
+ * штормом переподключений: несколько паник за минуту). Поэтому дескриптор живёт
+ * в пуле, а «освобождение» — это возврат слота: буферы отдаются, fd становится -1,
+ * busy снимается, номер поколения растёт. Записи очереди приёма запоминают
+ * поколение и доставляются только своему дескриптору.
+ *
+ * Пул на два экземпляра (AP и STA): столько же соединений, сколько у них всего. */
+static ws_transport_conn_t ws_conn_pool[WS_CONN_MAX * 2];
+static platform_mutex_t    ws_pool_lock;
+static uint32_t            ws_conn_gen;
+
+static ws_transport_conn_t *conn_alloc(void) {
+    ws_transport_conn_t *conn = NULL;
+    if (ws_pool_lock == NULL) return NULL;
+    platform_mutex_take(ws_pool_lock, PLATFORM_WAIT_FOREVER);
+    for (size_t i = 0; i < sizeof(ws_conn_pool) / sizeof(ws_conn_pool[0]); i++) {
+        if (ws_conn_pool[i].busy) continue;
+        conn = &ws_conn_pool[i];
+        memset(conn, 0, sizeof(*conn));
+        conn->busy = 1;
+        conn->gen  = ++ws_conn_gen;
+        conn->fd   = -1;
+        break;
+    }
+    platform_mutex_give(ws_pool_lock);
+    return conn;
+}
+
+/* Вернуть слот в пул. Зовётся, когда на дескриптор уже никто не ссылается:
+ * отправок в работе нет, очередь приёма пуста. */
+static void conn_release(ws_transport_conn_t *conn) {
+    if ((conn == NULL) || !conn->busy) return;
+    free(conn->out);
+    conn->out = NULL;
+    free(conn->msg);
+    conn->msg = NULL;
+    conn->fd  = -1;
+    conn->busy = 0;
+    conn->detached = 0;
+    conn->in_callback = 0;
+    conn->sends_in_flight = 0;
+    conn->recv_queued = 0;
+}
 
 /* ── Экземпляр транспорта ───────────────────────────────────────────────────
  *
@@ -190,6 +244,17 @@ static int conn_list_snapshot(ws_transport_module_t *m, ws_transport_conn_t **ou
     return n;
 }
 
+/* Сколько соединений держит экземпляр: по нему решается вежливый отказ. */
+static int conn_list_count(ws_transport_module_t *m) {
+    int n = 0;
+    if((m == NULL) || (m->conn_lock == NULL)) return 0;
+    platform_mutex_take(m->conn_lock, PLATFORM_WAIT_FOREVER);
+    for(size_t i = 0; i < WS_CONN_MAX; i++)
+        if(m->conns[i] != NULL) n++;
+    platform_mutex_give(m->conn_lock);
+    return n;
+}
+
 /* free_ctx у httpd принимает void*, поэтому обёртка над типизированным дескриптором. */
 static void session_free_ctx(void *ctx) {
     ws_transport_conn_t *conn = (ws_transport_conn_t *)ctx;
@@ -215,12 +280,12 @@ static void session_free_ctx(void *ctx) {
     notify_event(conn, &ev);
 
     if(conn->sends_in_flight || conn->in_callback || conn->recv_queued) {
-        /* Дескриптором ещё пользуются отправки и уведомляющий колбэк — память
-         * освободит последний из них. */
+        /* Дескриптором ещё пользуются отправки и уведомляющий колбэк — слот
+         * вернёт последний из них. */
         conn->detached = 1;
         return;
     }
-    free(conn);
+    conn_release(conn);
 }
 
 static void link_event_handler(void *event_trigger, void *sender, void *context) {
@@ -256,6 +321,12 @@ static void ws_httpd_poll(const void *self) {
         if(rec == NULL) return;
 
         ws_transport_conn_t *conn = rec->conn;
+        /* Запись могла пережить своё соединение: слот из пула уже переиспользован
+         * под другого клиента. Доставляем только своему дескриптору. */
+        if ((conn == NULL) || !conn->busy || (conn->gen != rec->gen)) {
+            free(rec);
+            continue;
+        }
         transport_event_trigger_t ev = { .event = TRANSPORT_RECEIVED };
         ev.data.ptr    = rec->data;
         ev.data.length = rec->len;
@@ -267,7 +338,7 @@ static void ws_httpd_poll(const void *self) {
         uint8_t release = (conn != NULL) && conn->detached && !conn->sends_in_flight
                           && !conn->recv_queued && !conn->in_callback;
         free(rec);
-        if(release) free(conn);
+        if(release) conn_release(conn);
     }
 }
 
@@ -282,7 +353,7 @@ static void ws_out_pump(ws_transport_module_t *m) {
 
     for(int i = 0; i < n; i++) {
         ws_transport_conn_t *conn = list[i];
-        if(conn->out == NULL) continue;
+        if(!conn->busy || (conn->fd < 0) || (conn->out == NULL)) continue;
         uint32_t before = conn->out_off;
         int rc = out_flush(conn);
         if(rc < 0 || ((conn->out != NULL) && (conn->out_off == before) &&
@@ -475,7 +546,7 @@ static transport_result_t ws_httpd_begin_send(const void *self, const void *data
     if(queued == -2) {
         /* Данные остаются у вызывающего, поэтому объявлять нечего — только BUSY,
          * по нему отправка повторится. */
-        if(conn->detached && !conn->sends_in_flight && !conn->recv_queued) free(conn);
+        if(conn->detached && !conn->sends_in_flight && !conn->recv_queued) conn_release(conn);
         return TRANSPORT_BUSY;
     }
 
@@ -492,7 +563,7 @@ static transport_result_t ws_httpd_begin_send(const void *self, const void *data
     conn->in_callback = 1;
     notify_event(conn, &ev);
     conn->in_callback = 0;
-    if(conn->detached && !conn->sends_in_flight && !conn->recv_queued) free(conn);
+    if(conn->detached && !conn->sends_in_flight && !conn->recv_queued) conn_release(conn);
     return TRANSPORT_OK;
 }
 
@@ -583,6 +654,7 @@ static void deliver_message(ws_transport_conn_t *conn) {
     }
     rec->next = NULL;
     rec->conn = conn;
+    rec->gen  = conn->gen;
     rec->len  = conn->msg_len;
     memcpy(rec->data, conn->msg, conn->msg_len);
     rec->data[conn->msg_len] = '\0';   /* ядру удобно видеть строку в логе */
@@ -756,8 +828,20 @@ static ws_transport_conn_t *conn_open(httpd_req_t *req, int fd) {
         return NULL;
     }
 
-    conn = calloc(1, sizeof(ws_transport_conn_t));
-    if (!conn) return NULL;
+    /* Слотов у экземпляра столько, сколько задано конфигурацией проекта. Порт
+     * держит на один сокет больше, поэтому лишний клиент доходит сюда — и
+     * получает вежливый отказ (кадр CLOSE 1013), а не молчание. */
+    if (conn_list_count(module) >= (int)CONFIG_WEB_SOCKET_MAX_CLIENTS) {
+        ESP_LOGW(TAG, "WS-клиентов уже %d, отказываю fd=%d",
+                 conn_list_count(module), fd);
+        return NULL;
+    }
+
+    conn = conn_alloc();
+    if (!conn) {
+        ESP_LOGW(TAG, "Пул соединений исчерпан — закрываю fd=%d", fd);
+        return NULL;
+    }
     conn->fd = fd;
     conn->module = module;
     conn->delegate.handler = link_event_handler;
@@ -772,7 +856,8 @@ static ws_transport_conn_t *conn_open(httpd_req_t *req, int fd) {
         ESP_LOGE(TAG, "Ядро не подписано на интерфейсе %lu, закрываю fd=%d",
                  (unsigned long)web_server_iface(module->server), fd);
         event_unsubscribe(&conn->delegate);
-        free(conn);
+        conn_list_remove(module, conn);
+        conn_release(conn);
         return NULL;
     }
 
@@ -785,11 +870,31 @@ static ws_transport_conn_t *conn_open(httpd_req_t *req, int fd) {
 }
 
 #if WS_CONN_FROM_POST_HANDSHAKE_CB
+/* Вежливый отказ: слотов нет. Рукопожатие httpd уже подтвердил, поэтому
+ * HTTP-ошибку отдать нечем — отправляем штатный кадр CLOSE с кодом 1013
+ * (Try Again Later, RFC 6455 §7.4.1) прямо в сокет: клиент видит причину сразу,
+ * а не висит до своего таймаута. */
+static void ws_refuse_busy(httpd_req_t *req) {
+    ws_transport_module_t *m = (ws_transport_module_t *)req->user_ctx;
+    static const char reason[] = "busy: too many WebSocket clients";
+    uint8_t frame[2 + 2 + sizeof(reason) - 1];
+    frame[0] = 0x88;                        /* FIN + CLOSE */
+    frame[1] = (uint8_t)(2 + sizeof(reason) - 1);
+    frame[2] = 0x03;                        /* код 1013 */
+    frame[3] = 0xF5;
+    memcpy(&frame[4], reason, sizeof(reason) - 1);
+
+    if ((m != NULL) && (m->server != NULL))
+        web_server_write(m->server, httpd_req_to_sockfd(req),
+                         (const char *)frame, sizeof(frame), 0);
+}
+
 /* Ответ рукопожатия уже отправлен: сокет с этого момента — WebSocket. */
 static esp_err_t ws_httpd_post_handshake(httpd_req_t *req) {
     int fd = httpd_req_to_sockfd(req);
     if (!conn_open(req, fd)) {
-        ESP_LOGE(TAG, "WS session not created, fd=%d", fd);
+        ESP_LOGW(TAG, "WS session not created, fd=%d", fd);
+        ws_refuse_busy(req);
         return ESP_FAIL;
     }
     LOGI(TAG, "WS session opened, fd=%d", fd);
@@ -804,6 +909,10 @@ static esp_err_t ws_httpd_post_handshake(httpd_req_t *req) {
  * активацию делает open, после того как назначен обработчик событий. */
 transport_t *ws_transport_create(web_server_t *server, const char *uri) {
     if((server == NULL) || (uri == NULL)) return NULL;
+
+    /* Пул дескрипторов общий на все экземпляры: замок заводится один раз. */
+    if(ws_pool_lock == NULL) ws_pool_lock = platform_mutex_create();
+    if(ws_pool_lock == NULL) return NULL;
 
     ws_transport_module_t *m = calloc(1, sizeof(*m));
     if(m == NULL) return NULL;

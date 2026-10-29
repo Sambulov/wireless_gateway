@@ -30,7 +30,7 @@ static const char *TAG = "web_httpd";
 /* Запись на сессию порта: таблица размером с самый большой из пулов портов —
  * столько сессий одновременно не бывает, а лишние записи ничего не стоят. */
 #define WEB_HTTPD_SESSIONS_MAX \
-    (CONFIG_WEB_SERVER_MAX_CLIENTS + CONFIG_WEB_SOCKET_MAX_CLIENTS)
+    (CONFIG_WEB_SERVER_MAX_CLIENTS + CONFIG_WEB_SOCKET_MAX_CLIENTS + 2)
 
 #define WEB_SEND_STEP_MS        10
 
@@ -58,6 +58,10 @@ struct web_httpd {
     web_route_kind_t kind;           /* назначение порта: страницы или WebSocket */
     uint16_t port;
     uint32_t send_budget_ms;
+    /* С какого числа занятых сессий порт отвечает отказом. httpd выдаёт на один
+     * слот больше этого предела — иначе при полном порте он просто перестаёт
+     * слушать, и лишний клиент висит до своего таймаута вместо быстрого «занято». */
+    uint16_t refuse_above;
     web_httpd_route_t routes[WEB_HTTPD_ROUTES_MAX];
     web_httpd_session_t sessions[WEB_HTTPD_SESSIONS_MAX];
     /* Объекты веб-сервера, привязанные к порту: по одному на интерфейс. */
@@ -97,6 +101,15 @@ static web_httpd_session_t *session_take(web_httpd_t *port, int fd) {
     return NULL;                     /* таблица полна — работаем без прогресса */
 }
 
+/* Сколько сессий занято сейчас: по нему порт решает, отвечать ли отказом. */
+static uint16_t session_count(const web_httpd_t *port) {
+    uint16_t n = 0;
+    if (port == NULL) return 0;
+    for (size_t i = 0; i < WEB_HTTPD_SESSIONS_MAX; i++)
+        if (port->sessions[i].fd != 0) n++;
+    return n;
+}
+
 static void session_drop(web_httpd_t *port, int fd) {
     web_httpd_session_t *s = session_find(port, fd);
     if (s != NULL) {
@@ -133,10 +146,18 @@ static int send_bounded(web_httpd_t *port, int fd, const char *buf, size_t len,
         if (ret < 0 && errno != EAGAIN && errno != EWOULDBLOCK &&
             errno != EINTR && errno != ENOMEM && errno != ENOBUFS)
             return -1;
+        /* Разные причины «не принято» и терпение разное:
+         *   EAGAIN/EWOULDBLOCK — полон буфер сокета, то есть клиент не читает:
+         *     тут бюджет короткий, иначе нечитающая вкладка держит всю задачу;
+         *   ENOMEM/ENOBUFS — кончились pbuf у самой lwIP (нагрузка, много
+         *     соединений): клиент ни при чём, ждём дольше и не рвём передачу,
+         *     иначе файл приходит обрезанным. */
+        uint8_t local = (ret < 0) && ((errno == ENOMEM) || (errno == ENOBUFS));
+        uint32_t limit = local ? (budget_ms * 4) : budget_ms;
         TickType_t base = s ? s->last_ok : call_start;
-        if ((xTaskGetTickCount() - base) > pdMS_TO_TICKS(budget_ms)) {
-            ESP_LOGW(TAG, "fd=%d не принимает данные %lu мс, закрываю сессию",
-                     fd, (unsigned long)budget_ms);
+        if ((xTaskGetTickCount() - base) > pdMS_TO_TICKS(limit)) {
+            ESP_LOGW(TAG, "fd=%d не принимает данные %lu мс (%s), закрываю сессию",
+                     fd, (unsigned long)limit, local ? "нет pbuf" : "клиент не читает");
             if (s) {
                 /* Сессия закрывается — освобождаем и запись прогресса, и учёт в
                  * объекте: повторно его снимет уже нечего. */
@@ -180,8 +201,12 @@ int web_httpd_write(web_httpd_t *port, int fd, const char *buf, size_t len,
             return (done == 0) ? -1 : (int)done;
         }
         /* Места нет. Что-то записано — ждём недолго и добираем; не записано
-         * ничего — сразу отдаём 0, пусть вызывающий решает сам. */
-        if ((done == 0) || ((xTaskGetTickCount() - base) > pdMS_TO_TICKS(stall_ms)))
+         * ничего — сразу отдаём 0, пусть вызывающий решает сам. Нехватка pbuf у
+         * lwIP (ENOMEM/ENOBUFS) — заминка самой стеки, клиент ни при чём:
+         * терпим её дольше, иначе крупный файл приходит обрезанным. */
+        uint8_t local = (ret < 0) && ((errno == ENOMEM) || (errno == ENOBUFS));
+        uint32_t limit = local ? (stall_ms * 4) : stall_ms;
+        if ((done == 0) || ((xTaskGetTickCount() - base) > pdMS_TO_TICKS(limit)))
             return (int)done;
         vTaskDelay(pdMS_TO_TICKS(1));
     }
@@ -263,6 +288,15 @@ static esp_err_t port_guard(httpd_req_t *req) {
                  reg->uri, (unsigned long)iface, fd);
         return ESP_FAIL;             /* httpd закроет сессию */
     }
+    /* Все слоты заняты (свободен только резервный, под отказ): отвечаем сразу и
+     * понятно, а не заставляем клиента ждать своего таймаута. */
+    if ((port->kind == WEB_ROUTE_HTTP) && (session_count(port) > port->refuse_above)) {
+        LOGI(TAG, "Порт занят (%u сессий) — отказ %s", (unsigned)session_count(port), reg->uri);
+        httpd_resp_set_status(req, "503 Service Unavailable");
+        httpd_resp_set_hdr(req, "Retry-After", "1");
+        httpd_resp_set_type(req, "text/plain");
+        return httpd_resp_send(req, "busy\n", HTTPD_RESP_USE_STRLEN);
+    }
     return web_server_handle(srv, port->kind, reg->uri, req);
 }
 
@@ -340,6 +374,9 @@ static uint8_t port_start(web_httpd_t *port, const web_httpd_config_t *cfg) {
 
     port->port           = cfg->port;
     port->send_budget_ms = cfg->send_budget_ms;
+    /* Один слот держим резервным: он нужен, чтобы принять соединение и вежливо
+     * отказать, а не молчать (httpd при полном порте перестаёт слушать). */
+    port->refuse_above   = (cfg->max_open_sockets > 1) ? (uint16_t)(cfg->max_open_sockets - 1) : 1;
     /* Шаблоны путей — свои: httpd выбирает обработчик по шаблону (см. ниже), а
      * что именно оказано соединению, решает объект веб-сервера. */
     config.uri_match_fn      = httpd_uri_match_wildcard;

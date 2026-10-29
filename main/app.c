@@ -183,17 +183,20 @@ void app_main(void)
     /* Сокетный слой: по одному httpd на порт (CONFIG_WEB_SERVER_PORT для
      * страниц, CONFIG_WEB_SOCKET_SERVER_PORT для WebSocket). Привязать httpd к
      * интерфейсу нельзя, поэтому развод делает объект веб-сервера за портом.
-     * Размеры пулов — из конфигурации проекта (main/Kconfig.projbuild). */
+     * Размеры пулов — из конфигурации проекта (main/Kconfig.projbuild).
+     * Каждому порту httpd выдаёт на один слот больше пула: этот резервный слот
+     * нужен, чтобы принять лишнее соединение и ответить отказом (503 для
+     * страниц, CLOSE 1013 для WebSocket), а не молчать до таймаута клиента. */
     static const web_httpd_config_t port_config[WEB_ROUTE_KINDS] = {
         [WEB_ROUTE_HTTP] = {
             .port             = CONFIG_WEB_SERVER_PORT,
-            .max_open_sockets = CONFIG_WEB_SERVER_MAX_CLIENTS,
+            .max_open_sockets = CONFIG_WEB_SERVER_MAX_CLIENTS + 1,
             .max_uri_handlers = 20,
             .send_budget_ms   = WEB_SEND_BUDGET_FILE_MS,
         },
         [WEB_ROUTE_WS] = {
             .port             = CONFIG_WEB_SOCKET_SERVER_PORT,
-            .max_open_sockets = CONFIG_WEB_SOCKET_MAX_CLIENTS,
+            .max_open_sockets = CONFIG_WEB_SOCKET_MAX_CLIENTS + 1,
             .max_uri_handlers = 8,
             .send_budget_ms   = WEB_SEND_BUDGET_WS_MS,
         },
@@ -204,10 +207,10 @@ void app_main(void)
      * Отдельно проверяем потолок ОДНОВРЕМЕННЫХ TCP-соединений (MAX_ACTIVE_TCP):
      * HTTP и WebSocket делят его, и при умолчании 16 три открытые вкладки уже не
      * оставляют места ни новой странице, ни WebSocket. */
-    _Static_assert(CONFIG_WEB_SERVER_MAX_CLIENTS + CONFIG_WEB_SOCKET_MAX_CLIENTS + 4
+    _Static_assert(CONFIG_WEB_SERVER_MAX_CLIENTS + CONFIG_WEB_SOCKET_MAX_CLIENTS + 6
                    <= CONFIG_LWIP_MAX_SOCKETS,
                    "пулы соединений не влезают в CONFIG_LWIP_MAX_SOCKETS");
-    _Static_assert(CONFIG_WEB_SERVER_MAX_CLIENTS + CONFIG_WEB_SOCKET_MAX_CLIENTS + 2
+    _Static_assert(CONFIG_WEB_SERVER_MAX_CLIENTS + CONFIG_WEB_SOCKET_MAX_CLIENTS + 4
                    <= CONFIG_LWIP_MAX_ACTIVE_TCP,
                    "пулы соединений не влезают в CONFIG_LWIP_MAX_ACTIVE_TCP");
     if (!web_httpd_start(port_config))
