@@ -74,6 +74,12 @@ uint8_t gw_uart_get_echo(void *desc) {
     return g_slots[find_slot(desc)].echo;
 }
 
+/* На хосте драйвер принятое не теряет: потерь нет. */
+uint8_t gw_uart_take_rx_loss(void *desc) {
+    (void)desc;
+    return 0;
+}
+
 void gw_uart_on_receive_subscribe(void *desc, delegate_t *d) {
     (void)desc; (void)d;
 }

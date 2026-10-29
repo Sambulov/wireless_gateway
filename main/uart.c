@@ -18,6 +18,10 @@ typedef struct {
     uint8_t echo_enabled;
     uint8_t mode;                 /* gw_uart_mode_t: режим работы порта */
     volatile uint8_t rx_locked;
+    /* 1 — драйвер потерял принятое (переполнение FIFO/кольца). Флаг снимает
+     * потребитель приёма и отдаёт эту потерю клиенту меткой, чтобы поток не
+     * выглядел ровным при дыре в нём. */
+    volatile uint8_t rx_lost;
 } gw_uart_private_t;
 
 #define ASSERRT_STRUCTURE_CAST(private_type, public_type, prv_size_def, def_file)   _Static_assert(sizeof(private_type) == sizeof(public_type), "In "def_file" data structure size of "#public_type" doesn't match, check "#prv_size_def)
@@ -166,6 +170,7 @@ static void uart_event_task(void *pvParameters) {
             static uint32_t ovf_ms[3];
             uint8_t  p = (uint8_t)uart->port;
             uint32_t now = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+            uart->rx_lost = 1;          /* потерю отдадим клиенту меткой */
             ovf_count[p]++;
             if ((now - ovf_ms[p]) >= 1000) {
                 ESP_LOGW(TAG, "UART%d: переполнение приёма (событий %lu за %lu мс): часть принятого потеряна",
@@ -429,6 +434,15 @@ void gw_uart_set_echo(void *desc, uint8_t enabled) {
 uint8_t gw_uart_get_echo(void *desc) {
     gw_uart_private_t *uart = (gw_uart_private_t *) desc;
     return uart->echo_enabled;
+}
+
+/* 1 — с прошлого вызова драйвер терял принятое. Флаг снимается при чтении: одна
+ * потеря сообщается клиенту один раз. */
+uint8_t gw_uart_take_rx_loss(void *desc) {
+    gw_uart_private_t *uart = (gw_uart_private_t *) desc;
+    if (uart == NULL || !uart->rx_lost) return 0;
+    uart->rx_lost = 0;
+    return 1;
 }
 
 void gw_uart_lock_rx(void *desc) {

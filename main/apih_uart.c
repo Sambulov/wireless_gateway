@@ -103,6 +103,9 @@ typedef struct {
     uint16_t storage_size;
     platform_mutex_t lock;
     uint8_t port;               /* 0 — "uart1", 1 — "uart2" */
+    /* Дескриптор порта: нужен, чтобы спросить у драйвера, не потерял ли он
+     * принятое (переполнение приёма) — потеря должна уйти клиенту меткой. */
+    void *desc;
     /* Ядро — не здесь, а в uart_apis: ядер у сервиса два. */
 } uart_subscription_context_t;
 
@@ -144,6 +147,11 @@ static void uart_event_on_rx(void *event_trigger, void *sender, void *context) {
     uint16_t taken;
 
     platform_mutex_take(buf_desc->lock, PLATFORM_WAIT_FOREVER);
+    /* Драйвер сам потерял часть принятого (переполнение FIFO/кольца — типично на
+     * высокой скорости): помечаем потерю ДО данных, чтобы клиент увидел разрыв, а
+     * не «ровный» поток с дырой неизвестно где. */
+    if (gw_uart_take_rx_loss(&buf_desc->desc))
+        seg_ring_write(&buf_desc->ring, NULL, 0, 1);
     taken = seg_ring_write(&buf_desc->ring, data->buf, (uint16_t)sz, data->b_end);
     if (taken < sz) {
         /* Переполнение: закрываем сегмент пустой меткой СРАЗУ. Иначе признак
@@ -387,10 +395,21 @@ static uint8_t uart_rx_flush(uart_handler_ctx_t *hc)
 			uart_rx_pending[port] = 0;
 		} else if ((uint32_t)(platform_tick() - uart_rx_pending_tick[port]) >=
 			   platform_ms_to_ticks(UART_RX_PENDING_HOLD_MS)) {
-			/* Транспорт молчит дольше отведённого — кадр отпускаем. */
-			LOGI(TAG, "UART rx: кадр (%u Б) отброшен, транспорт не принял\n",
+			/* Транспорт не принял кадр за отведённое время: данные из кольца уже
+			 * забраны, вернуть их некуда. Молча терять нельзя — сообщаем
+			 * подписчикам пустым кадром с меткой потери ('~'): клиент увидит,
+			 * что часть потока не дошла, и его счётчики не соврут. */
+			LOGI(TAG, "UART rx: кадр (%u Б) не принят транспортом — помечен как потеря\n",
 			     (unsigned)uart_rx_pending_len[port]);
 			uart_rx_pending[port] = 0;
+			gw_jsonw_t w;
+			gw_jsonw_init(&w, uart_raw_buf[port], sizeof(uart_raw_buf[port]));
+			gw_jsonw_obj(&w, NULL);
+			gw_jsonw_str(&w, "RX", "~");
+			uint8_t mark_ok = gw_jsonw_ok(&w);
+			size_t  mark_len = gw_jsonw_finish(&w);
+			if (mark_ok && mark_len)
+				uart_broadcast_built(hc->fid, uart_raw_buf[port], mark_len);
 		}
 		return 1;
 	}
@@ -608,12 +627,26 @@ static uint8_t uart_cmd_tx(uart_handler_ctx_t *hc, void *call,
 		int32_t decoded = base64_decode(buf, buf_size, b64, b64_len);
 
 		if (decoded > 0) {
-			int32_t written = gw_uart_write(&hc->app->uart.port[hc->port].desc, buf, decoded);
+			/* Порт принимает данные ТОЛЬКО по подтверждению: в ответе всегда
+			 * число реально принятых драйвером байт и остаток. Пишем столько,
+			 * сколько влезает в передающий буфер, и не ждём линию — иначе
+			 * блокирующая запись держит задачу API (она же отдаёт кадры
+			 * приёма), кольцо приёма переполняется, и эхо теряется молча.
+			 * Клиент дошлёт остаток: "written" — принято, "left" — осталось. */
+			int32_t room = gw_uart_available_write(&hc->app->uart.port[hc->port].desc);
+			int32_t to_write = (room < 0) ? 0 : ((room < decoded) ? room : decoded);
+			int32_t written  = (to_write > 0)
+					 ? gw_uart_write(&hc->app->uart.port[hc->port].desc,
+							 buf, (uint32_t)to_write)
+					 : 0;
+			if (written < 0) written = 0;
 
 			gw_jsonw_t w;
 			gw_jsonw_init(&w, uart_resp_buf, sizeof(uart_resp_buf));
 			gw_jsonw_obj(&w, NULL);
 			gw_jsonw_int(&w, "written", written);
+			gw_jsonw_int(&w, "left", decoded - written);
+			gw_jsonw_int(&w, "offer", decoded);
 			uart_send_to(call, hc->fid, &w);
 			free(buf);
 			return 0;
@@ -708,6 +741,7 @@ static void uart_ports_init(app_context_t *app)
                 /* Номер порта в службе — аппаратный (uart0/uart1/uart2), поэтому
                  * и кольцо, и драйвер адресуются одним и тем же номером. */
                 uart_context[i].port         = i;
+                uart_context[i].desc         = &app->uart.port[i].desc;
                 uart_context[i].storage      = ring_storage[i];
                 uart_context[i].storage_size = UART_RX_ACC_SIZE;
                 seg_ring_init(&uart_context[i].ring, uart_context[i].storage,
