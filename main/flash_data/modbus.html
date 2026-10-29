@@ -438,7 +438,7 @@ function wsSend(fid, arg, timeout = 4000) {
         const key = '0x' + id.toString(16).padStart(8, '0');
         const timer = setTimeout(() => { pending.delete(key); resolve(null); }, timeout);
         pending.set(key, arg2 => { clearTimeout(timer); resolve(arg2); });
-        ws.send(JSON.stringify({ FID: fid, FLAGS: 0, SID: id, ARG: arg }));
+        ws.send(JSON.stringify({ FID: fid, SID: id, ARG: arg }));
     });
 }
 

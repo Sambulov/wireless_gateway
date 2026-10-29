@@ -1,7 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdbool.h>
 #include <stddef.h>
 #include <stdarg.h>
 
@@ -11,10 +10,21 @@
 
 static const char *TAG = "api";
 
-/* Скопировать имя FID в буфер вызова. 0 — имя пустое или длиннее предела: такое
- * имя обработчику отдавать нельзя, иначе оно молча обрежется и вызов уйдёт «не
- * тому», кто его ждал. Хелпер живёт здесь, а не в api.h: снаружи он не нужен
- * никому — имя FID проверяет само ядро при регистрации. */
+/* ── Механика ядра ──────────────────────────────────────────────────────────
+ *
+ * Дескриптор вызова ходит по спискам free → incoming → executing → free.
+ * Пир — одно соединение транспорта: своя очередь кадров, живёт, пока на него
+ * ссылается вызов. Буфер кадра разделяется получателями рассылки и
+ * освобождается последним. */
+
+#define API_CALL_POOL_SIZE   32      /* дескрипторов вызовов на ядро */
+#define API_TX_QUEUE_MAX      8      /* кадров в очереди одного пира (голова в работе) */
+#define API_FRAME_OVERHEAD   64      /* FID, SID, скобки ARG/STA и терминатор */
+#define API_ARG_PROP        "\"ARG\":"
+#define API_ARG_PROP_LEN      6      /* без открывающей скобки: её пишет кадр */
+#define API_FRAME_MAX_TOKENS 48
+
+/* Скопировать имя FID в буфер. 0 — пустое или слишком длинное имя. */
 static uint8_t api_fid_set(char *dst, const char *name) {
     if(!dst || !name || !name[0]) return 0;
     size_t n = 0;
@@ -25,171 +35,79 @@ static uint8_t api_fid_set(char *dst, const char *name) {
     return 1;
 }
 
+typedef struct api_peer api_peer_t;
+
+/* Готовый кадр со счётчиком владельцев: один буфер уходит нескольким пирам,
+ * освобождает его последний. */
 typedef struct {
-    __LinkedListObject__
+    uint32_t holders;
+    int32_t  len;
+    char     buf[];
+} api_frame_buffer_t;
+
+typedef struct api_frame_t {
+    struct api_frame_t *next;
+    api_frame_buffer_t *data;
+} api_frame_t;
+
+typedef struct {
+    __linked_list_object__
     api_handler_t handler;
     char fid[API_FID_NAME_MAX];
-    void *handler_ctx;
+    void *context;                    /* родной контекст, приходит первому вызову */
 } api_handler_item_t;
 
-/* Сессия ядра — соединение транспорта, к которому привязаны вызовы. Дескриптор
- * соединения (self) для ядра непрозрачен: это ключ, который транспорт вернёт в
- * событиях, и больше ничего — тип соединения транспорта ядру неизвестен. */
-typedef struct {
-    __LinkedListObject__
-    const void *self;
-    /* Числовой идентификатор соединения, который даёт транспорт (для сокетного
-     * транспорта — номер сокета). Ядро берёт его только ради журнала: по нему в
-     * строках ядра видно, о каком соединении речь. Адресатом ответа он не
-     * служит — адресат это дескриптор вызова. */
-    int peer_id;
-} api_session_t;
-
-typedef enum
-{
-    CALL_FLAG_NEW       = (1 << 0),
-    CALL_FLAG_LONG_TERM = (1 << 2),
-    CALL_FLAG_TO_DELETE = (1 << 3)
-} call_flags_t;
-
-/* Вызов клиента. Ядро помнит СВОЁ ядро: ответ и статус адресованы вызову, а
- * берутся из него же (api_reply не передают дескриптор ядра). */
-typedef struct {
-    __LinkedListObject__
+typedef struct api_call_s {
+    __linked_list_object__
     api_t *api;
-    api_session_t *session;
-    uint8_t *req_data;
-    uint32_t req_data_len;
-    uint32_t id;
-    /* SID назначает клиент: он необязателен, и сервер лишь возвращает его в
-     * ответе. Без него ответ уходит без поля SID (публичные подписки). */
-    uint8_t  has_sid;
-    void *handler_ctx;
-    api_handler_t handler;
+    api_peer_t *peer;                 /* соединение, которому принадлежит вызов */
     char fid[API_FID_NAME_MAX];
-    /* Обработчику уже отдали первичный запрос: только после этого его можно
-     * дёргать тактом работы, иначе он получит data == NULL раньше запроса. */
-    uint8_t  handler_started;
-    call_flags_t flags;
-    /* Темп переспроса подписки: ARG.RDL клиента (мс) и момент, раньше которого
-     * вызов не отдают обработчику снова. У вызовов без RDL оба нуля — опрос
-     * идёт сразу. */
-    uint32_t poll_interval_ms;
-    uint32_t next_poll_ms;
+    api_handler_t handler;
+    uint32_t sid;
+    uint8_t  has_sid;
+    void *context;                    /* per-call контекст, владеет обработчик */
+    uint8_t *arg_data;                /* копия ARG, живёт до исполнения */
+    uint32_t arg_len;
+    uint8_t  teardown;                /* просили снять: зов обработчика с NULL */
 } api_call_t;
 
-/* Блок ответа. Счётчик получателей лежит ПЕРЕД полезной нагрузкой не случайно:
- * транспорт в событии завершения возвращает ровно тот указатель, который получил
- * в begin_send (то есть payload), — по нему и находится счётчик. Кадр ответа
- * собирает транспорт, ядру о кадрах знать нечего. */
-typedef struct {
-    uint32_t counter;
-    uint32_t len;
-    uint8_t  payload[1];
-} api_data_t;
+/* Пир — соединение транспорта. Дескриптор соединения для ядра непрозрачен. */
+struct api_peer {
+    __linked_list_object__
+    const void *conn;
+    api_frame_t *tx_frames;
+    uint32_t calls;                   /* сколько дескрипторов ссылается на пир */
+    uint8_t  tx_busy;                 /* голова очереди у транспорта */
+    uint8_t  closed;                  /* соединения уже нет: ждёт уборки */
+};
 
-/* Из указателя, вернувшегося в событии завершения, — к своему блоку ответа. */
-static api_data_t *api_data_from_payload(const void *payload) {
-    return (api_data_t *)(uintptr_t)((const uint8_t *)payload - offsetof(api_data_t, payload));
-}
-
-/* Размер сборки обработчиков такта.
- *
- * Обработчиков нельзя звать под мьютексом (см. api_work_cycle), поэтому их
- * указатели сначала собираются в пачку, а дёргаются уже без мьютекса. Пачка —
- * состояние ядра: освобождать вызовы может лишь та же задача, что их собрала,
- * так что собранные указатели остаются валидными. */
-#define API_WORK_BATCH 16
-
-/* ── Состояние одного ядра ──────────────────────────────────────────────────
- *
- * Всё состояние ядра живёт в дескрипторе, который выделяет и освобождает само
- * ядро (api_init / api_deinit). Наружу дескриптор отдаётся неполным типом api_t
- * (см. api.h), а настоящая раскладка — здесь.
- *
- * Всё состояние под ОДНИМ мьютексом: списки вызовов, регистраций и сессий
- * связаны ссылками (вызов → сессия), и трогать их порознь нельзя. Мьютекс —
- * единственная синхронизация ядра: ни очередей, ни ожиданий у него нет. */
+/* ── Состояние ядра ──────────────────────────────────────────────────────── */
 typedef struct api_private_s {
-    /* Объект транспорта, к которому подключено ядро (api_init): методы и контекст
-     * реализации — он же идентификатор экземпляра. Дальше ядро работает только
-     * через него — обращений к платформе в ядре нет, всё платформенное живёт в
-     * транспорте. Один объект на ядро: «методы от одного экземпляра, контекст от
-     * другого» невозможны. */
-    const transport_t *transport;
-    /* Подписка ядра — делегат CodeLibrary, а не пара «обработчик + контекст» в
-     * транспорте. Живёт в дескрипторе, потому что принадлежит ЯДРУ: context
-     * делегата — сам дескриптор, handler — api_transport_event, а снимает подписку
-     * ядро само (event_unsubscribe в api_deinit). Транспорту для этого ничего не
-     * нужно, и «висячей» подписки на освобождённое ядро не остаётся. */
-    delegate_t delegate;
-
-    /* Система — три операции и её контекст, которые дал вызывающий (api_init).
-     * Своей задачи, своей очереди и своих задержек у ядра нет: их отсутствие и
-     * есть причина, по которой таблица нужна целиком, а не по частям. */
+    const transport_t *transport;     /* объект экземпляра (api_init) */
+    delegate_t delegate;              /* подписка ядра на события транспорта */
     const api_system_t *system;
-    /* Мьютекс состояния. Создаёт его система (api_system_t.mutex_create), тип для
-     * ядра непрозрачен: ядро только берёт и отпускает. */
     void *mutex;
 
-    /* Регистрации обработчиков; вызовы, отданные обработчику (он же и есть
-     * периферия); вызовы, которые он ещё не завершил, — тот же список; сессии
-     * соединений. Доставка запроса идёт только вызовом обработчика, отдельного
-     * списка очередей у ядра нет. */
-    LinkedList_t handlers;
-    LinkedList_t calls;
-    LinkedList_t waiting;
-    LinkedList_t sessions;
+    linked_list_t handlers;
+    linked_list_t peers;               /* живые соединения */
+    linked_list_t dead_peers;          /* закрытые, ждут уборки */
+    linked_list_t free_calls;
+    linked_list_t incoming;
+    linked_list_t executing;
 
-    /* Момент последнего такта работы: такт ограничен по частоте (см.
-     * API_WORK_PERIOD_MS в api.h) — вызывающий вправе звать api_worker чаще,
-     * чем обработчику есть что делать. */
-    uint32_t last_work_tick;
-
-    /* Сбор вызовов на такт работы (см. api_collect_handled / api_collect_finish):
-     * обработчиков нельзя звать под мьютексом, поэтому сначала собираем их
-     * указатели, а дёргаем уже без мьютекса. */
-    api_call_t *work_batch[API_WORK_BATCH];
-    api_call_t *finish_batch[API_WORK_BATCH];
+    api_call_t pool[API_CALL_POOL_SIZE];
+    uint32_t pulse_timer;
 } api_private_t;
 
-/* Дескриптор ядра — ровно это состояние и ничего сверх него. Наружу он отдаётся
- * как api_t (неполный тип), поэтому «сколько байт» и «какая раскладка» остаются
- * внутренним делом ядра. */
 struct api_s {
     api_private_t core;
 };
 
-/* Приведение дескриптора к настоящему состоянию. Поле core — единственное и
- * лежит в начале, поэтому указатели совпадают: вызов обработчика события
- * получает ровно тот api_t, который вернул api_init. Обратный переход (состояние
- * → дескриптор) — тот же адрес, и он нужен ровно в одном месте: при создании
- * вызова (см. api_session_on_message). */
 static api_private_t *api_private(const api_t *api) {
     return (api_private_t *)(void *)api;
 }
 
-/* Методы и контекст транспорта ВСЕГДА берутся из одного объекта — транспорт
- * приходит в api_init одним объектом, и половины от разных экземпляров
- * разойтись не могут. */
-static const transport_iface_t *api_transport_iface(const api_private_t *core) {
-    return (core->transport != NULL) ? core->transport->iface : NULL;
-}
-
-static void *transport_self(const api_private_t *core) {
-    return (core->transport != NULL) ? core->transport->context : NULL;
-}
-
-/* ── Система ────────────────────────────────────────────────────────────────
- *
- * Ядро берёт системное ТОЛЬКО из таблицы, и ниже — все места, где оно к ней
- * обращается. Так видно, что ядру на самом деле нужно от системы (мьютекс,
- * время, журнал), и не расползаются системные вызовы: ни в этом файле, ни в
- * api.h нет ни FreeRTOS, ни ESP-IDF, ни platform.h.
- *
- * Строка журнала собирается ЗДЕСЬ, а таблица принимает varargs — поэтому
- * реализация системы не обязана уметь работать с va_list. Длинный текст
- * режется по размеру буфера. */
+/* ── Система ──────────────────────────────────────────────────────────────── */
 static void api_log(const api_private_t *core, int level, const char *fmt, ...) {
     if((core == NULL) || (core->system == NULL) || (core->system->log == NULL)) return;
     char buf[160];
@@ -200,9 +118,6 @@ static void api_log(const api_private_t *core, int level, const char *fmt, ...) 
     core->system->log(core->system->context, level, TAG, "%s", buf);
 }
 
-/* Мьютекс ядра. Система отдаёт управление уже с взятым мьютексом (в прошивке —
- * без предела ожидания), поэтому спрашивать «взялся ли» нечего: «не взялся» —
- * ошибка системы, разбирать её ядру нечем. */
 static void api_lock(api_private_t *core) {
     core->system->mutex_take(core->system->context, core->mutex);
 }
@@ -211,158 +126,263 @@ static void api_unlock(api_private_t *core) {
     core->system->mutex_give(core->system->context, core->mutex);
 }
 
-/* Время — в миллисекундах, как и ARG.RDL у подписки: пересчитывать тики не
- * нужно, система отдаёт их сама. Чтение времени — не ожидание: ядро только
- * сравнивает разности, а «подождать» для него значит вернуть управление. */
 static uint32_t api_time(const api_private_t *core) {
     return core->system->time_ms(core->system->context);
 }
 
-/* У ядра нет файловых переменных состояния: всё, что ядро помнит, лежит в его
- * дескрипторе. Стоит здесь завести любую static-переменную с состоянием — и два
- * ядра (точка доступа и станция) начнут её делить, то есть перестанут быть
- * независимыми. */
+/* Методы берутся из объекта экземпляра, а адресат — соединение: для этого
+ * копия объекта с подменённым контекстом (см. transport.h). */
+static transport_t api_transport_of(const api_private_t *core, const void *self) {
+    if(core->transport == NULL) {
+        const transport_t empty = { NULL, NULL };
+        return empty;
+    }
+    transport_t tr = *core->transport;
+    tr.context = (void *)self;
+    return tr;
+}
 
-/* --- Соединения ---------------------------------------------------------- */
+/* ── Кадры ────────────────────────────────────────────────────────────────── */
 
-/* Поиск сессии по дескриптору соединения. Дескриптор сравнивается как ключ:
- * ядро в него не заглядывает, тип соединения транспорта ему неизвестен. */
-static api_session_t *api_session_find(api_private_t *core, const void *self) {
-    LinkedListItem_t *item = pxLinkedListFindFirst(core->sessions, NULL, NULL);
+static api_frame_buffer_t *api_frame_buffer_new(uint32_t cap) {
+    api_frame_buffer_t *fb = malloc(sizeof(api_frame_buffer_t) + cap);
+    if(fb != NULL) {
+        fb->holders = 0;
+        fb->len     = 0;
+    }
+    return fb;
+}
+
+static api_frame_t *api_frame_release(api_frame_t *frame) {
+    if(frame == NULL) return NULL;
+    api_frame_t *next = frame->next;
+    api_frame_buffer_t *fb = frame->data;
+    free(frame);
+    if(fb != NULL) {
+        if(fb->holders) fb->holders--;
+        if(!fb->holders) free(fb);
+    }
+    return next;
+}
+
+/* Освободить одну ссылку на буфер (без кадра): так владелец отдаёт свою. */
+static void api_buffer_release(api_frame_buffer_t *fb) {
+    if(fb == NULL) return;
+    if(fb->holders) fb->holders--;
+    if(!fb->holders) free(fb);
+}
+
+/* Статус: {"FID":"…","SID":"0x…","STA":"0x…"} — SID печатается только у
+ * названного вызова; статус и данные в одном кадре не совмещаются. */
+static api_frame_buffer_t *api_frame_buffer_status(const char *fid, uint8_t has_sid,
+                                                   uint32_t sid, uint32_t sta) {
+    if(fid == NULL) fid = "";
+    uint32_t cap = (uint32_t)strlen(fid) + API_FRAME_OVERHEAD + 32;
+    api_frame_buffer_t *fb = api_frame_buffer_new(cap);
+    if(fb != NULL) {
+        fb->len = has_sid
+                ? sprintf(fb->buf, "{\"FID\":\"%s\",\"SID\":\"0x%08lx\",\"STA\":\"0x%08lX\"}",
+                          fid, (unsigned long)sid, (unsigned long)sta)
+                : sprintf(fb->buf, "{\"FID\":\"%s\",\"STA\":\"0x%08lX\"}", fid, (unsigned long)sta);
+    }
+    return fb;
+}
+
+/* Данные: {"FID":"…","SID":"0x…","ARG":<json>}. Пустое тело уходит как null. */
+static api_frame_buffer_t *api_frame_buffer_json(const char *fid, uint8_t has_sid,
+                                                 uint32_t sid, const char *arg, uint32_t arg_len) {
+    if((arg == NULL) || (arg_len == 0)) {
+        arg     = "null";
+        arg_len = 4;
+    }
+    uint32_t cap = (uint32_t)strlen(fid) + arg_len + API_FRAME_OVERHEAD + 32;
+    api_frame_buffer_t *fb = api_frame_buffer_new(cap);
+    if(fb != NULL) {
+        int n = has_sid
+              ? sprintf(fb->buf, "{\"FID\":\"%s\",\"SID\":\"0x%08lx\",\"ARG\":", fid, (unsigned long)sid)
+              : sprintf(fb->buf, "{\"FID\":\"%s\",\"ARG\":", fid);
+        memcpy(fb->buf + n, arg, arg_len);
+        fb->buf[n + arg_len] = '}';
+        fb->len = n + (int32_t)arg_len + 1;
+    }
+    return fb;
+}
+
+/* Переход от области ARG (её отдаёт api_call_begin_response) к буферу кадра:
+ * перед ней лежит открывающая скобка и префикс. */
+#define API_RESPONSE_TO_FB(resp) \
+    (api_frame_buffer_t *)(void *)((char *)(resp) - API_ARG_PROP_LEN - 1 \
+                                   - offsetof(api_frame_buffer_t, buf))
+
+/* ── Очередь пира ─────────────────────────────────────────────────────────── */
+
+static void api_tx_drop_head(api_peer_t *peer) {
+    if(peer->tx_frames == NULL) return;
+    peer->tx_frames = api_frame_release(peer->tx_frames);
+}
+
+static void api_tx_clear(api_peer_t *peer) {
+    while(peer->tx_frames != NULL) api_tx_drop_head(peer);
+    peer->tx_busy = 0;
+}
+
+/* Отдать голову очереди транспорту. С этого момента кадр принадлежит транспорту
+ * и освобождается только по завершению отправки. */
+static void api_peer_tx_action(api_private_t *core, api_peer_t *peer) {
+    while(!peer->tx_busy && (peer->tx_frames != NULL)) {
+        /* Признак «кадр в работе» ставим ДО вызова: транспорт вправе завершить
+         * отправку синхронно, и событие застало бы пустую голову. */
+        peer->tx_busy = 1;
+        api_frame_t *frame = peer->tx_frames;
+        transport_t tr = api_transport_of(core, peer->conn);
+        transport_result_t res = transport_send_zero_copy(&tr, frame->data->buf,
+                                                          (uint32_t)frame->data->len);
+        if(res == TRANSPORT_OK) return;
+        peer->tx_busy = 0;
+        if(res == TRANSPORT_BUSY) return;         /* остаётся в очереди, повтор тактом */
+        api_log(core, API_LOG_WARN, "Peer %p send failed (%d), frame dropped",
+                peer->conn, (int)res);
+        api_tx_drop_head(peer);
+    }
+}
+
+/* Поставить кадр в очередь пира. FALSE — пира нет или очередь полна. Владение
+ * буфером переходит очереди: каждая удачная постановка держит свою ссылку. */
+static uint8_t api_send_frame(api_private_t *core, api_peer_t *peer, api_frame_buffer_t *fb) {
+    if(fb == NULL) return HDL_FALSE;
+    if((peer == NULL) || peer->closed) {
+        api_buffer_release(fb);
+        return HDL_FALSE;
+    }
+    api_frame_t *frame = malloc(sizeof(api_frame_t));
+    if(frame == NULL) {
+        api_buffer_release(fb);
+        return HDL_FALSE;
+    }
+    frame->next = NULL;
+    frame->data = fb;
+    fb->holders++;
+
+    api_frame_t **slot = &peer->tx_frames;
+    uint32_t queued = 0;
+    while((*slot != NULL) && (queued < API_TX_QUEUE_MAX)) {
+        slot = &(*slot)->next;
+        queued++;
+    }
+    if(queued >= API_TX_QUEUE_MAX) {
+        api_log(core, API_LOG_WARN, "Peer %p tx queue full, frame dropped", peer->conn);
+        api_frame_release(frame);
+        return HDL_FALSE;
+    }
+    *slot = frame;
+    api_peer_tx_action(core, peer);               /* голова уходит сразу */
+    return HDL_TRUE;
+}
+
+/* ── Пул вызовов ──────────────────────────────────────────────────────────── */
+
+static void api_call_release(api_private_t *core, api_call_t *call) {
+    if(call == NULL) return;
+    free(call->arg_data);
+    call->arg_data = NULL;
+    if(call->peer != NULL) {
+        /* Последний ссылающийся вызов позволяет пиру быть снятым. */
+        call->peer->calls--;
+        call->peer = NULL;
+    }
+    memset(call, 0, sizeof(*call));
+    linked_list_insert_last(&core->free_calls, linked_list_item(call));
+}
+
+static api_call_t *api_call_alloc(api_private_t *core) {
+    linked_list_item_t *item = linked_list_find_first(core->free_calls, NULL, NULL);
+    if(item == NULL) return NULL;
+    api_call_t *call = linked_list_get_object(api_call_t, item);
+    linked_list_unlink(item);
+    memset(call, 0, sizeof(*call));
+    return call;
+}
+
+/* ── Пиры ─────────────────────────────────────────────────────────────────── */
+
+static api_peer_t *api_peer_find(api_private_t *core, const void *conn) {
+    linked_list_item_t *item = linked_list_find_first(core->peers, NULL, NULL);
     while(item != NULL) {
-        api_session_t *sess = LinkedListGetObject(api_session_t, item);
-        if(sess->self == self) return sess;
-        item = pxLinkedListFindNextNoOverlap(item, NULL, NULL);
+        api_peer_t *peer = linked_list_get_object(api_peer_t, item);
+        if(peer->conn == conn) return peer;
+        item = linked_list_find_next_no_overlap(item, NULL, NULL);
     }
     return NULL;
 }
 
-static void api_break_call_by_session(LinkedListItem_t *item, void *arg) {
-    api_session_t *session = (api_session_t *)arg;
-    api_call_t *call = LinkedListGetObject(api_call_t, item);
-    if(call->session == session) {
-        api_log(api_private(call->api), API_LOG_INFO, "Break call id:%lu", call->id);
-        call->session = NULL;
+static api_peer_t *api_peer_create(api_private_t *core, const void *conn) {
+    api_peer_t *peer = malloc(sizeof(api_peer_t));
+    if(peer == NULL) return NULL;
+    memset(peer, 0, sizeof(*peer));
+    peer->conn = conn;
+    linked_list_insert_last(&core->peers, linked_list_item(peer));
+    return peer;
+}
+
+/* Пир снимается только когда его вызовы уже завершены: соединения нет, а
+ * обработчику ещё нужно освободить своё состояние. */
+static void api_peer_destroy(api_private_t *core, api_peer_t *peer) {
+    api_tx_clear(peer);
+    linked_list_unlink(linked_list_item(peer));
+    free(peer);
+    (void)core;
+}
+
+static void api_peers_reap(api_private_t *core) {
+    api_lock(core);
+    linked_list_item_t *item = linked_list_find_first(core->dead_peers, NULL, NULL);
+    api_peer_t *peer = NULL;
+    while(item != NULL) {
+        api_peer_t *candidate = linked_list_get_object(api_peer_t, item);
+        if(candidate->calls == 0) { peer = candidate; break; }
+        item = linked_list_find_next_no_overlap(item, NULL, NULL);
     }
+    if(peer != NULL) api_peer_destroy(core, peer);
+    api_unlock(core);
 }
 
-/* Вызовы снятого соединения: клиент ушёл — отвечать некому. Сами вызовы
- * освободит такт работы, и лишь после FALSE обработчика. */
-static void api_break_calls_by_session(api_private_t *core, api_session_t *sess) {
-    ulLinkedListDoForeach(core->calls, api_break_call_by_session, sess);
-    ulLinkedListDoForeach(core->waiting, api_break_call_by_session, sess);
-}
+/* ── Регистрация методов ──────────────────────────────────────────────────── */
 
-static uint8_t handler_fid_match(LinkedListItem_t *item, void *arg) {
+static uint8_t handler_fid_match(linked_list_item_t *item, void *arg) {
     const char *name = (const char *)arg;
-    api_handler_item_t *hd = LinkedListGetObject(api_handler_item_t, item);
+    api_handler_item_t *hd = linked_list_get_object(api_handler_item_t, item);
     return (name != NULL) && (strcmp(hd->fid, name) == 0);
 }
 
-/* Регистрация этого имени на этом ядре. NULL — сервис на этом ядре не
- * зарегистрирован, и вызов получит NO_HANDLER: на другом ядре то же имя может
- * быть зарегистрировано свободно (оно обслуживает другой транспорт). */
 static api_handler_item_t *api_handler_find(api_private_t *core, const char *name) {
-    LinkedListItem_t *item = pxLinkedListFindFirst(core->handlers, handler_fid_match, (void *)name);
-    return item ? LinkedListGetObject(api_handler_item_t, item) : NULL;
+    linked_list_item_t *item = linked_list_find_first(core->handlers, handler_fid_match, (void *)name);
+    return item ? linked_list_get_object(api_handler_item_t, item) : NULL;
 }
 
-/* Ключ снятия вызова: соединение + FID + SID. Совпадения только по FID и SID
- * мало — у одного клиента бывает несколько вызовов одного FID с разными SID, и
- * снятие одного не должно задевать соседний. */
-typedef struct {
-    api_session_t *session;
-    const char   *fid;
-    uint32_t      id;
-} delete_key_t;
-
-static uint8_t call_delete_match(LinkedListItem_t *item, void *arg) {
-    const delete_key_t *key = (const delete_key_t *)arg;
-    api_call_t *call = LinkedListGetObject(api_call_t, item);
-    return (call->session == key->session)
-        && (call->id == key->id)
-        && (strcmp(call->fid, key->fid) == 0);
-}
-
-/* Ищем вызов в обоих списках: он бывает и в работе (ждёт такта переспроса), и в
- * ожидании ответа периферии. */
-static api_call_t *api_call_find_to_delete(api_private_t *core, api_session_t *sess,
-                                           const char *fid, uint32_t id) {
-    delete_key_t key = { sess, fid, id };
-    LinkedListItem_t *item = pxLinkedListFindFirst(core->calls, call_delete_match, &key);
-    if(!item)
-        item = pxLinkedListFindFirst(core->waiting, call_delete_match, &key);
-    return item ? LinkedListGetObject(api_call_t, item) : NULL;
-}
-
-/* Рассылка по имени FID: получатель — живой (с соединением) вызов этого FID
- * на этом ядре. Сервис зарегистрирован на конкретном ядре, и подписчик с этого
- * ядра получает данные этого ядра.
- *
- * Вызов и не может появиться у соединения, которому сервис не оказан (такой
- * запрос получил бы NO_HANDLER), — проверка держит это свойство явным и не
- * полагается на то, что вызов уже проверили при создании. */
-static uint8_t call_fid_match(LinkedListItem_t *item, void *arg) {
-    const char *name = (const char *)arg;
-    api_call_t *call = LinkedListGetObject(api_call_t, item);
-    if((name == NULL) || (call->session == NULL)) return 0;
-    return strcmp(call->fid, name) == 0;
-}
-
-/* Объявлено заранее: завершение вызова зовётся из обслуживания, описано ниже. */
-static uint8_t api_call_teardown(api_call_t *call);
-/* Отправка статуса — внутренняя: снаружи статус отправлять нечем и незачем
- * (см. api.h), а ядро само закрывает приём, разбор и отсутствие обработчика. */
-static uint8_t api_send_status(api_call_t *call, uint32_t status);
-
-/* Такт обслуживания вызова. Ядро не пингует клиента: управляющие кадры — дело
- * транспорта, а живость соединения видна по событиям TRANSFER_ERR (отправка не
- * прошла) и CLOSED (соединение разорвано). */
-static void api_serve_call(LinkedListItem_t *item, void *arg) {
-    (void)arg;
-    api_call_t *call = LinkedListGetObject(api_call_t, item);
-    if(call->session) return;   /* соединение живо — делать нечего */
-
-    /* Клиента нет (отключился или ответ уже отправлен): просим снять вызов.
-     * Сам вызов освободит такт работы — и только после того, как обработчик
-     * вернёт FALSE. */
-    api_log(api_private(call->api), API_LOG_DEBUG, "Api call complete, id: %lu", call->id);
-    call->flags |= CALL_FLAG_TO_DELETE;
-}
-
-/* Принудительное завершение вызова: по контракту обработчик получает call == NULL
- * и обязан освободить свой контекст, возвращая FALSE.
- *
- * ЯДРО НЕ СНИМАЕТ ВЫЗОВ, ПОКА ОБРАБОТЧИК НЕ ВЕРНУЛ РЕЗУЛЬТАТ. Одна попытка за
- * такт: если обработчик завершается пошагово (вернул TRUE), вызов остаётся в
- * списках и его спросят снова следующим тактом — освобождать память вызова,
- * пока обработчик ещё держит своё состояние, нельзя. */
-static uint8_t api_call_teardown(api_call_t *call) {
-    if(!call || !call->handler || !call->handler_started) return 1;  /* завершать нечего */
-    return call->handler(NULL, &call->handler_ctx, NULL, 0) ? 0 : 1;
-    /* handler_ctx НЕ обнуляем: обработчик сам решает, что там оставить.
-     * Для подписки (FLAGS:4) вызов после завершения живёт дальше и при
-     * следующем переопросе должен снова получить свой контекст регистрации —
-     * иначе он не знает, какой периферией управляет. */
-}
-
-uint8_t api_register_handler(api_t *api, api_handler_t handler, const char *name,
-                             void *context) {
+uint8_t api_call_register(api_t *api, api_handler_t handler, const char *fid, void *context) {
     if(api == NULL) return 0;
     api_private_t *core = api_private(api);
-    char fid[API_FID_NAME_MAX];
-    /* Имя обязательно: «нет FID» — это пустая строка или NULL, и оба случая
-     * регистрацией не считаются. */
-    if((handler == NULL) || !api_fid_set(fid, name)) return 0;
-    api_lock(core);
+    char name[API_FID_NAME_MAX];
+    if(!api_fid_set(name, fid)) return 0;
 
-    /* Имя на этом ядре уже занято — вторая такая же регистрация неразличима.
-     * На ДРУГОМ ядре то же имя регистрируется свободно: там свой транспорт и
-     * свой контекст (см. api.h). */
-    api_handler_item_t *registered = api_handler_find(core, fid);
-    if(registered != NULL) {
+    api_lock(core);
+    api_handler_item_t *existing = api_handler_find(core, name);
+    if(handler == NULL) {
+        /* Снятие метода: активные вызовы доживают со своим обработчиком. */
+        if(existing != NULL) {
+            linked_list_unlink(linked_list_item(existing));
+            free(existing);
+        }
         api_unlock(core);
-        return 0;
+        api_log(core, API_LOG_INFO, "Api method %s unregistered", name);
+        return 1;
+    }
+    if(existing != NULL) {
+        existing->handler = handler;
+        existing->context = context;
+        api_unlock(core);
+        api_log(core, API_LOG_INFO, "Api method %s updated", name);
+        return 1;
     }
     api_handler_item_t *hd = malloc(sizeof(api_handler_item_t));
     if(hd == NULL) {
@@ -370,745 +390,501 @@ uint8_t api_register_handler(api_t *api, api_handler_t handler, const char *name
         return 0;
     }
     hd->handler = handler;
-    mem_cpy(hd->fid, fid, sizeof(hd->fid));
-    hd->handler_ctx = context;
-    vLinkedListInsertLast(&core->handlers, LinkedListItem(hd));
-    api_log(core, API_LOG_INFO, "Api handler registered %s", hd->fid);
+    mem_cpy(hd->fid, name, sizeof(hd->fid));
+    hd->context = context;
+    linked_list_insert_last(&core->handlers, linked_list_item(hd));
     api_unlock(core);
+    api_log(core, API_LOG_INFO, "Api method %s registered", name);
     return 1;
 }
 
-/* Отправка через транспорт: ядро отдаёт СООБЩЕНИЕ, кадры строит транспорт.
- * Результат отправки приходит событием TRANSFER_COMPLETE/TRANSFER_ERR, поэтому
- * блок ответа живёт до него (в событии транспорт вернёт тот же указатель). */
-static void send_to_session(api_private_t *core, api_call_t *sub, api_data_t *resp,
-                            transport_result_t *res) {
-    /* Операции СОЕДИНЕНИЯ получают дескриптор соединения (self), а методы — из
-     * объекта транспорта этого ядра (см. api_transport_iface): «методы одного
-     * экземпляра, соединение другого» невозможно. */
-    *res = api_transport_iface(core)->begin_send(sub->session->self, resp->payload, resp->len);
-    api_log(core, API_LOG_DEBUG, "Api call %lu json sending with result: %d", sub->id, *res);
-    if(*res != TRANSPORT_OK) {
-        /* Кадр не ушёл — клиент его не увидит. Молчать об этом нельзя: снаружи
-         * это «данные пропали», и искать причину будет негде. */
-        api_log(core, API_LOG_WARN, "send of call %lu (%lu B) failed: result %d",
-                sub->id, (unsigned long)resp->len, (int)*res);
-        /* Транспорт отправку не принял — события не будет, освобождаем сами. */
-        if((!resp->counter) || !(--resp->counter))
-            free(resp);
+/* ── Диспетчеризация ──────────────────────────────────────────────────────── */
+
+/* ARG клиента обработчику: при отсутствии ARG — указатель на пустую нагрузку,
+ * но не NULL: NULL отдан рабочему циклу (пульсу). */
+static uint8_t api_empty_arg[1] = { 0 };
+
+/* Вызов дескриптора. FALSE от обработчика — вызов завершён, дескриптор
+ * освобождается сразу, повторного вызова не будет. */
+static void api_invoke(api_private_t *core, api_call_t *call, uint8_t *arg, uint32_t arg_len) {
+    uint8_t *data = (arg != NULL) ? arg : api_empty_arg;
+    api_unlock(core);
+    uint8_t active = call->handler(call, &call->context, data, arg_len);
+    api_lock(core);
+    if(!active) {
+        linked_list_unlink(linked_list_item(call));
+        api_call_release(core, call);
     }
 }
 
-/* Ответ конкретному вызову (call != NULL) или рассылка всем вызовам с этим
- * именем (call == NULL, задано имя). Смешивать нельзя: вызов уже знает своё имя,
- * а рассылка — нет. */
-static uint8_t api_dispatch(api_private_t *core, api_call_t *call,
-                                const char *group_name, const uint8_t *json,
-                                uint32_t data_len) {
-    if(((call == NULL) && ((group_name == NULL) || !group_name[0])) ||
-       ((call != NULL) && (group_name != NULL))) return 0;
+/* Кадр называют живой вызов парой (FID, SID): только она и ищется. Номер сам по
+ * себе ничего не значит — не нашлось пары, значит это новый вызов. */
+static uint8_t call_pair_match(linked_list_item_t *item, void *arg) {
+    const api_call_t *want = (const api_call_t *)arg;
+    const api_call_t *call = linked_list_get_object(api_call_t, item);
+    return !call->teardown && call->has_sid && want->has_sid
+           && (call->peer == want->peer) && (call->sid == want->sid)
+           && (strcmp(call->fid, want->fid) == 0);
+}
 
-    if(core == NULL) return 0;
-
-    transport_result_t res = TRANSPORT_INVALID;
-    /* Сколько подписчиков кадр ПРИНЯЛО. Итог рассылки — «принял хотя бы один»:
-     * один нечитающий клиент не должен останавливать поток для всех остальных.
-     * Раньше возвращался результат последнего подписчика, и залипшее соединение
-     * (браузерная вкладка в фоне) превращало удачную отдачу кадра в «транспорт
-     * занят», сервис держал кадр, повторял, отбрасывал — и кольцо приёма
-     * наполнялось, хотя данные исправно уходили живым клиентам. */
-    uint32_t sent_ok = 0;
-    const char *fid_out = (call != NULL) ? call->fid : group_name;
-    uint32_t sid = (call != NULL) ? call->id : 0;
-
+static void api_dispatch(api_private_t *core, api_call_t *call) {
     api_lock(core);
-
-    uint32_t targets;
-    if(call != NULL) {
-        targets = (call->session != NULL) ? 1 : 0;
-    } else {
-        targets = ulLinkedListCount(core->waiting, call_fid_match, (void *)group_name)
-                + ulLinkedListCount(core->calls, call_fid_match, (void *)group_name);
+    api_call_t *active = NULL;
+    if(call->has_sid) {
+        linked_list_item_t *found = linked_list_find_first(core->executing, call_pair_match, call);
+        if(found != NULL) active = linked_list_get_object(api_call_t, found);
     }
 
-    if(targets == 0) {
-        /* Рассылать некому: подписчиков этого FID сейчас нет (вызов снят,
-         * соединение закрыто или подписка ещё не зарегистрирована).
-         *
-         * Уровень — DEBUG, а не INFO: «подписчиков нет» — ОБЫЧНОЕ состояние
-         * (периферия отдаёт кадр на каждое событие линии, а слушателей у неё
-         * может не быть вовсе), и на потоке кадров эта запись шла в консоль по
-         * строке на кадр. Вывод на консоль синхронный, 115200 бод: задача такта
-         * блокировалась на единицы миллисекунд на кадр, переставала успевать за
-         * линией, и кольцо приёма наполнялось. */
-        api_log(core, API_LOG_DEBUG, "broadcast %s: подписчиков нет, кадр (%lu Б) не отправлен",
-                group_name ? group_name : "-", (unsigned long)data_len);
+    if(active != NULL) {
+        /* Продолжение: ARG уходит обработчику живого вызова, а дескриптор
+         * повтора освобождается сразу. */
+        uint8_t *arg = call->arg_data;
+        uint32_t arg_len = call->arg_len;
+        call->arg_data = NULL;
+        api_call_release(core, call);
+        api_invoke(core, active, arg, arg_len);
         api_unlock(core);
-        return 0;
+        free(arg);
+        return;
     }
 
-    /* SID в ответе — только если клиент его назначил. Публичные подписки
-     * (рассылка по FID без конкретного вызова) идут без SID всегда. */
-    uint8_t has_sid = (call != NULL) && call->has_sid;
-    /* В ответе — то же имя, что прислал клиент. Шаблоны с запасом под имя и
-     * SID, длину берём по факту ниже. */
-    char template[] = "{\"FID\":\"%s\",\"SID\":\"0x%08lx\",\"ARG\":";
-    char template_no_sid[] = "{\"FID\":\"%s\",\"ARG\":";
-    uint32_t cap = data_len + sizeof(template) + sizeof(template_no_sid)
-                   + 2 * API_FID_NAME_MAX + 16;
+    api_handler_item_t *reg = api_handler_find(core, call->fid);
+    if(reg == NULL) {
+        api_peer_t *peer = call->peer;
+        uint8_t has_sid = call->has_sid;
+        uint32_t sid = call->sid;
+        char fid[API_FID_NAME_MAX];
+        mem_cpy(fid, call->fid, sizeof(fid));
+        api_call_release(core, call);
+        api_unlock(core);
+        api_log(core, API_LOG_WARN, "No method for FID %s, replied NO_HANDLER", fid);
+        api_send_frame(core, peer, api_frame_buffer_status(fid, has_sid, sid,
+                                                           API_CALL_ERROR_STATUS_NO_HANDLER));
+        return;
+    }
 
-    api_data_t *resp = malloc(sizeof(api_data_t) + cap);
-    if(resp != NULL) {
-        int offset = has_sid
-                   ? sprintf((char *)resp->payload, template, fid_out, (unsigned long)sid)
-                   : sprintf((char *)resp->payload, template_no_sid, fid_out);
-        mem_cpy(&resp->payload[offset], json, data_len);
-        offset += data_len;
-        resp->payload[offset] = '}';
-        resp->counter        = targets;
-        /* Длину берём по факту: шаблон без SID короче, и объявлять сообщение по
-         * длинному шаблону нельзя — клиент получит мусор в хвосте. */
-        resp->len            = (uint32_t)offset + 1;
+    call->handler = reg->handler;
+    call->context = reg->context;
+    linked_list_insert_last(&core->executing, linked_list_item(call));
 
-        if(call != NULL) {
-            send_to_session(core, call, resp, &res);
-            sent_ok = (res == TRANSPORT_OK) ? 1u : 0u;
-        } else {
-            LinkedListItem_t *item = pxLinkedListFindFirst(core->waiting, call_fid_match, (void *)group_name);
-            while(item != NULL) {
-                api_call_t *sub = LinkedListGetObject(api_call_t, item);
-                item = pxLinkedListFindNextNoOverlap(item, call_fid_match, (void *)group_name);
-                send_to_session(core, sub, resp, &res);
-                if(res == TRANSPORT_OK) sent_ok++;
-            }
-            item = pxLinkedListFindFirst(core->calls, call_fid_match, (void *)group_name);
-            while(item != NULL) {
-                api_call_t *sub = LinkedListGetObject(api_call_t, item);
-                item = pxLinkedListFindNextNoOverlap(item, call_fid_match, (void *)group_name);
-                send_to_session(core, sub, resp, &res);
-                if(res == TRANSPORT_OK) sent_ok++;
+    /* ARG живёт до исполнения; дескриптор может исчезнуть внутри api_invoke,
+     * поэтому освобождаем копию отдельным указателем — ровно один раз. */
+    uint8_t *arg = call->arg_data;
+    uint32_t arg_len = call->arg_len;
+    call->arg_data = NULL;
+    api_invoke(core, call, arg, arg_len);
+    api_unlock(core);
+    free(arg);
+}
+
+/* ── Снятие и пульс ───────────────────────────────────────────────────────── */
+
+static uint8_t api_teardown_match(linked_list_item_t *item, void *arg) {
+    (void)arg;
+    return linked_list_get_object(api_call_t, item)->teardown;
+}
+
+/* Одно снятие за такт: обработчик получает call == NULL и возвращает FALSE,
+ * когда освободил контекст; до этого вызов остаётся в списке. */
+static void api_housekeeping(api_private_t *core) {
+    api_lock(core);
+    linked_list_item_t *item = linked_list_find_first(core->executing, api_teardown_match, NULL);
+    if(item != NULL) {
+        api_call_t *call = linked_list_get_object(api_call_t, item);
+        api_unlock(core);
+        uint8_t alive = call->handler(NULL, &call->context, NULL, 0);
+        api_lock(core);
+        if(!alive) {
+            linked_list_unlink(linked_list_item(call));
+            api_call_release(core, call);
+        }
+    }
+    api_unlock(core);
+}
+
+/* Пульс: каждый активный вызов получает data == NULL — там метод делает своё
+ * периодическое дело. FALSE означает «закончил». */
+static void api_pulse(api_private_t *core) {
+    api_lock(core);
+    linked_list_item_t *item = linked_list_find_first(core->executing, NULL, NULL);
+    while(item != NULL) {
+        linked_list_item_t *next = linked_list_find_next_no_overlap(item, NULL, NULL);
+        api_call_t *call = linked_list_get_object(api_call_t, item);
+        if(!call->teardown) {
+            uint8_t alive;
+            api_unlock(core);
+            alive = call->handler(call, &call->context, NULL, 0);
+            api_lock(core);
+            if(!alive) {
+                linked_list_unlink(linked_list_item(call));
+                api_call_release(core, call);
             }
         }
-    } else {
-        res = TRANSPORT_FAULT;
+        item = next;
     }
-
     api_unlock(core);
-    return (sent_ok > 0);
 }
 
-/* Ответ конкретному вызову. Ядро берётся из самого вызова: отвечающему (в том
- * числе тому, кто ответил позже из своего потока) знать его не нужно. */
-uint8_t api_reply(void *call_handle, const uint8_t *json, uint32_t len) {
-    api_call_t *call = (api_call_t *)call_handle;
-    if((call == NULL) || (call->api == NULL)) return 0;
-    return api_dispatch(api_private(call->api), call, NULL, json, len);
-}
-
-/* Статус клиенту: короткий фрагмент ARG, который собирает само ядро. Наружу
- * эта функция не выходит — снаружи статус отправлять нечем (см. api.h), и
- * вызывают её только места ядра, закрывающие приём, разбор и отмену вызова. */
-static uint8_t api_send_status(api_call_t *call, uint32_t status) {
-    uint8_t sta[21];
-    uint32_t len = sprintf((char *)sta, "{\"STA\":\"0x%08lx\"}", (unsigned long)status);
-    return api_dispatch(api_private(call->api), call, NULL, sta, len);
-}
-
-/* Рассылка по имени FID адресована всем подписчикам этого имени на ОДНОМ ядре,
- * поэтому ядро — аргумент, как и у регистрации: чья периферия собрала кадр, то
- * ядро его и рассылает (в прошивке задач периферии столько же, сколько ядер, и
- * каждая знает своё). */
-uint8_t api_broadcast(api_t *api, const char *name, const uint8_t *json,
-                            uint32_t len) {
-    return api_dispatch((api != NULL) ? api_private(api) : NULL, NULL, name, json, len);
-}
-
-/* --- События транспорта --------------------------------------------------- */
-
-/* Сколько токенов отдаём разбору входящего сообщения и разбору ARG. Токен — это
- * ключ, значение или скобка структуры; конверт протокола укладывается в
- * единицы, ARG запроса регистров — в десятки. Выход за предел означает отказ
- * разбора, а не рост памяти: токены лежат на стеке задачи, jsmn не рекурсивен. */
-#define API_FRAME_MAX_TOKENS 48
-#define API_ARG_MAX_TOKENS   48
-
-static void api_session_on_message(api_private_t *core, api_session_t *sess,
-                                   const void *data, uint32_t len);
-
-/* Принято новое соединение: заводим сессию ядра, привязанную к дескриптору
- * транспорта. Больше про соединение ядро ничего не знает — ни интерфейса, ни
- * сокета: интерфейс уже выражен тем, ЧЕЙ это транспорт (у каждого ядра свой).
- *
- * Обработчик события — обработчик делегата, а тот ничего не возвращает, поэтому
- * отказать транспорту ядро не может. Не хватило памяти на сессию — это отказ
- * уже в самом ядре: соединение остаётся без сервиса, а каждое его сообщение
- * отбивается как «неизвестное соединение» (см. TRANSPORT_RECEIVED). */
-static void api_session_open(api_private_t *core, const void *self) {
-    api_session_t *sess = malloc(sizeof(api_session_t));
-    if(sess == NULL) {
-        api_log(core, API_LOG_WARN, "No memory for a session, connection %p left unserved", self);
-        return;
-    }
-    sess->self = self;
-    /* Номер соединения спрашиваем у транспорта — только ради журнала.
-     * peer_id необязателен, поэтому -1 — законное «номера нет». */
-    sess->peer_id = (api_transport_iface(core)->peer_id != NULL)
-                  ? (int)api_transport_iface(core)->peer_id(self) : -1;
-
+/* Кадры, застрявшие из-за занятого транспорта, повторяются тактом. */
+static void api_tx_retry(api_private_t *core) {
     api_lock(core);
-    vLinkedListInsertLast(&core->sessions, LinkedListItem(sess));
-    api_unlock(core);
-
-    api_log(core, API_LOG_INFO, "Connection established (id=%d), session=%p", sess->peer_id, (void *)sess);
-}
-
-/* Соединение разорвано: сессию освобождаем, вызовы этого соединения снимаем —
- * отвечать некому. Сами вызовы освободит такт работы, и лишь после того, как
- * обработчик вернёт FALSE. */
-static void api_session_close(api_private_t *core, const void *self) {
-    api_lock(core);
-    api_session_t *sess = api_session_find(core, self);
-    if(sess != NULL) {
-        vLinkedListUnlink(LinkedListItem(sess));
-        api_break_calls_by_session(core, sess);
+    linked_list_item_t *item = linked_list_find_first(core->peers, NULL, NULL);
+    while(item != NULL) {
+        linked_list_item_t *next = linked_list_find_next_no_overlap(item, NULL, NULL);
+        api_peer_t *peer = linked_list_get_object(api_peer_t, item);
+        if(!peer->tx_busy && (peer->tx_frames != NULL)) api_peer_tx_action(core, peer);
+        item = next;
     }
     api_unlock(core);
-
-    if(sess == NULL) {
-        /* Транспорт вправе сообщить о закрытии соединения, которого ядро не
-         * принимало (например, закрытие после неудачной отправки). */
-        api_log(core, API_LOG_DEBUG, "Closed unknown connection %p", self);
-        return;
-    }
-    api_log(core, API_LOG_INFO, "Connection closed (id=%d), session=%p released", sess->peer_id, (void *)sess);
-    free(sess);
 }
 
-/* Отправка завершилась — успешно или нет. Транспорт вернул ровно тот указатель,
- * который получил в begin_send, поэтому по нему находим блок ответа и
- * освобождаем его, когда последний получатель рассылки закончил отправку. */
-static void api_transfer_done(api_private_t *core, const void *self,
-                              const transport_event_trigger_t *ev) {
-    if(ev->data.ptr == NULL) {
-        api_log(core, API_LOG_WARN, "Transfer event without data, connection %p", self);
-        return;
-    }
-
-    if(ev->event == TRANSPORT_TRANSFER_ERR) {
-        /* Отправка не прошла — соединение считаем мёртвым: вызовы снимаем, а
-         * соединение закрываем. Живость соединения определяется именно так:
-         * ядро не пингует клиента, это дело транспорта. */
-        api_log(core, API_LOG_WARN, "Send failed, closing connection %p", self);
+/* Входящие кадры: разбираются и отдаются обработчикам. */
+static void api_incoming_drain(api_private_t *core) {
+    for(;;) {
         api_lock(core);
-        api_session_t *sess = api_session_find(core, self);
-        if(sess != NULL) api_break_calls_by_session(core, sess);
+        linked_list_item_t *item = linked_list_find_first(core->incoming, NULL, NULL);
+        if(item == NULL) {
+            api_unlock(core);
+            return;
+        }
+        api_call_t *call = linked_list_get_object(api_call_t, item);
+        linked_list_unlink(item);
         api_unlock(core);
-        if(api_transport_iface(core)->close != NULL)
-            api_transport_iface(core)->close(self);
-        /* self транспорту не принадлежит: дальше им не пользуемся */
-    } else {
-        api_log(core, API_LOG_DEBUG, "Transfer complete, connection %p", self);
+        api_dispatch(core, call);
     }
-
-    api_data_t *resp = api_data_from_payload(ev->data.ptr);
-    if((resp->counter == 0) || (--resp->counter == 0))
-        free(resp);
 }
 
-/* Единственная точка входа транспорта в ядро: ядро не знает ни платформы, ни
- * WebSocket — только этот интерфейс.
- *
- * Аргументы делегатные (event_handler_t, см. transport.h): event_trigger —
- * событие транспорта, sender — дескриптор соединения, context — то, что ядро
- * положило в СВОЙ delegate_t (см. api_init), то есть сам дескриптор ядра. Так у
- * каждого поднятого ядра свой обработчик событий, хотя функция одна: чужие
- * соединения и отправки оно не увидит. */
+/* ── Отправка кадров: контракт §3.7 ───────────────────────────────────────── */
+
+uint8_t api_call_send_status(void *call_handle, uint32_t sta) {
+    api_call_t *call = (api_call_t *)call_handle;
+    if((call == NULL) || (call->peer == NULL)) return HDL_FALSE;
+    api_private_t *core = api_private(call->api);
+    return api_send_frame(core, call->peer,
+                          api_frame_buffer_status(call->fid, call->has_sid, call->sid, sta));
+}
+
+uint8_t api_call_send_arg(void *call_handle, const char *arg, uint32_t len) {
+    api_call_t *call = (api_call_t *)call_handle;
+    if((call == NULL) || (call->peer == NULL)) return HDL_FALSE;
+    api_private_t *core = api_private(call->api);
+    return api_send_frame(core, call->peer,
+                          api_frame_buffer_json(call->fid, call->has_sid, call->sid, arg, len));
+}
+
+char *api_call_begin_response(uint32_t arg_len) {
+    if(arg_len == 0) return NULL;
+    api_frame_buffer_t *fb = api_frame_buffer_new(arg_len + API_FRAME_OVERHEAD + API_FID_NAME_MAX);
+    if(fb == NULL) return NULL;
+    fb->len = sprintf(fb->buf, "{" API_ARG_PROP);
+    return fb->buf + fb->len;
+}
+
+void api_call_cancel_response(char *resp) {
+    if(resp != NULL) free(API_RESPONSE_TO_FB(resp));
+}
+
+uint8_t api_call_send_response(void *call_handle, char *resp, uint32_t arg_len) {
+    api_call_t *call = (api_call_t *)call_handle;
+    if((call == NULL) || (resp == NULL) || (arg_len == 0) || (call->peer == NULL))
+        return HDL_FALSE;
+    api_frame_buffer_t *fb = API_RESPONSE_TO_FB(resp);
+    fb->len += (int32_t)arg_len;
+    if(call->has_sid)
+        fb->len += sprintf(fb->buf + fb->len, ",\"FID\":\"%s\",\"SID\":\"0x%08lx\"}",
+                           call->fid, (unsigned long)call->sid);
+    else
+        fb->len += sprintf(fb->buf + fb->len, ",\"FID\":\"%s\"}", call->fid);
+    api_private_t *core = api_private(call->api);
+    return api_send_frame(core, call->peer, fb);
+}
+
+/* Рассылка: один буфер уходит всем активным вызовам имени, без SID. */
+typedef struct {
+    api_private_t *core;
+    const char *fid;
+    api_frame_buffer_t *fb;
+    uint32_t sent;                    /* сколько получателей приняло кадр */
+} group_send_t;
+
+static void api_group_send_action(linked_list_item_t *item, void *arg) {
+    group_send_t *g = (group_send_t *)arg;
+    api_call_t *call = linked_list_get_object(api_call_t, item);
+    if(call->teardown || (strcmp(call->fid, g->fid) != 0)) return;
+    if(api_send_frame(g->core, call->peer, g->fb)) g->sent++;
+}
+
+static uint8_t api_group_send(api_private_t *core, const char *fid, api_frame_buffer_t *fb) {
+    if(fb == NULL) return HDL_FALSE;
+    group_send_t g = { core, fid, fb, 0 };
+    fb->holders++;                        /* наша ссылка: отдадим её в конце */
+    api_lock(core);
+    linked_list_item_t *item = linked_list_find_first(core->executing, NULL, NULL);
+    while(item != NULL) {
+        linked_list_item_t *next = linked_list_find_next_no_overlap(item, NULL, NULL);
+        api_group_send_action(item, &g);
+        item = next;
+    }
+    api_unlock(core);
+    api_buffer_release(fb);               /* получатели держат свои ссылки */
+    return g.sent ? HDL_TRUE : HDL_FALSE;
+}
+
+uint8_t api_call_group_fid_data(api_t *api, const char *fid, const char *data, uint32_t len) {
+    if((api == NULL) || (fid == NULL) || !fid[0]) return HDL_FALSE;
+    api_private_t *core = api_private(api);
+    return api_group_send(core, fid, api_frame_buffer_json(fid, 0, 0, data, len));
+}
+
+uint8_t api_call_group_response(api_t *api, const char *fid, void *resp, uint32_t arg_len) {
+    if((api == NULL) || (fid == NULL) || !fid[0] || (resp == NULL) || (arg_len == 0))
+        return HDL_FALSE;
+    api_private_t *core = api_private(api);
+    api_frame_buffer_t *fb = API_RESPONSE_TO_FB(resp);
+    fb->len += (int32_t)arg_len;
+    fb->len += sprintf(fb->buf + fb->len, ",\"FID\":\"%s\"}", fid);
+    return api_group_send(core, fid, fb);
+}
+
+/* ── События транспорта ───────────────────────────────────────────────────── */
+
+static void api_calls_mark_teardown_action(linked_list_item_t *item, void *arg) {
+    api_call_t *call = linked_list_get_object(api_call_t, item);
+    if(call->peer == arg) call->teardown = 1;
+}
+
+static void api_incoming_drop_action(linked_list_item_t *item, void *arg) {
+    api_call_t *call = linked_list_get_object(api_call_t, item);
+    if(call->peer != arg) return;
+    linked_list_unlink(item);
+    api_call_release(api_private(call->api), call);
+}
+
+/* Соединения нет: пир помечается и передаётся уборке (обработчиков здесь не
+ * зовём — событие приходит из чужой задачи). Вызовы помечаются на снятие,
+ * неразобранные кадры освобождаются сразу. */
+static void api_peer_close(api_private_t *core, const void *conn) {
+    api_lock(core);
+    api_peer_t *peer = api_peer_find(core, conn);
+    if(peer != NULL) {
+        peer->closed = 1;
+        linked_list_unlink(linked_list_item(peer));
+        linked_list_insert_last(&core->dead_peers, linked_list_item(peer));
+        linked_list_do_foreach(core->executing, api_calls_mark_teardown_action, peer);
+        linked_list_do_foreach(core->incoming, api_incoming_drop_action, peer);
+    }
+    api_unlock(core);
+    if(peer == NULL) api_log(core, API_LOG_DEBUG, "Closed unknown connection %p", conn);
+}
+
+static void api_transfer_done(api_private_t *core, const void *conn) {
+    api_lock(core);
+    api_peer_t *peer = api_peer_find(core, conn);
+    if((peer != NULL) && peer->tx_busy) {
+        peer->tx_busy = 0;
+        api_tx_drop_head(peer);
+        api_peer_tx_action(core, peer);
+    }
+    api_unlock(core);
+}
+
+/* Разбор кадра клиента: конверта FID/SID/ARG, без дерева значений. */
+static void api_receive(api_private_t *core, api_peer_t *peer, const void *data, uint32_t len) {
+    if((data == NULL) || (len == 0)) {
+        api_log(core, API_LOG_INFO, "Empty message dropped");
+        return;
+    }
+
+    GW_JSON_TOKENS(toks, API_FRAME_MAX_TOKENS);
+    gw_json_t json;
+    if(!gw_json_parse(&json, (const char *)data, len, toks, API_FRAME_MAX_TOKENS)) {
+        api_log(core, API_LOG_WARN, "Frame is not JSON, replied BAD_REQ");
+        api_send_frame(core, peer, api_frame_buffer_status("", 0, 0,
+                                                           API_CALL_ERROR_STATUS_BAD_REQ));
+        return;
+    }
+
+    char fid[API_FID_NAME_MAX * 2];
+    if(!gw_json_str(&json, "FID", fid, sizeof(fid)) || !fid[0]) {
+        api_log(core, API_LOG_WARN, "Frame has no FID, replied NO_FID");
+        api_send_frame(core, peer, api_frame_buffer_status("", 0, 0,
+                                                           API_CALL_ERROR_STATUS_NO_FID));
+        return;
+    }
+    if(strlen(fid) >= API_FID_NAME_MAX) {
+        api_log(core, API_LOG_WARN, "FID too long, replied NO_FID");
+        api_send_frame(core, peer, api_frame_buffer_status("", 0, 0,
+                                                           API_CALL_ERROR_STATUS_NO_FID));
+        return;
+    }
+
+    int32_t sid = 0;
+    uint8_t has_sid = gw_json_int(&json, "SID", &sid) ? 1 : 0;
+
+    const char *arg = NULL;
+    size_t arg_len = 0;
+    gw_json_raw(&json, "ARG", &arg, &arg_len);
+
+    api_lock(core);
+    api_call_t *call = api_call_alloc(core);
+    if(call == NULL) {
+        api_unlock(core);
+        api_log(core, API_LOG_WARN, "No free call descriptors, replied NO_FREE_DESCRIPTORS");
+        api_send_frame(core, peer, api_frame_buffer_status(fid, has_sid, (uint32_t)sid,
+                                                           API_CALL_ERROR_STATUS_NO_FREE_DESCRIPTORS));
+        return;
+    }
+    call->api     = (api_t *)(void *)core;
+    call->peer    = peer;
+    call->has_sid = has_sid;
+    call->sid     = (uint32_t)sid;
+    peer->calls++;
+    mem_cpy(call->fid, fid, strlen(fid) + 1);
+
+    if((arg != NULL) && (arg_len > 0)) {
+        uint8_t *copy = malloc(arg_len);
+        if(copy == NULL) {
+            api_call_release(core, call);
+            api_unlock(core);
+            api_send_frame(core, peer, api_frame_buffer_status(fid, has_sid, (uint32_t)sid,
+                                                               API_CALL_ERROR_STATUS_NO_MEM));
+            return;
+        }
+        mem_cpy(copy, arg, arg_len);
+        call->arg_data = copy;
+        call->arg_len  = (uint32_t)arg_len;
+    }
+    linked_list_insert_last(&core->incoming, linked_list_item(call));
+    api_unlock(core);
+}
+
 static void api_transport_event(void *event_trigger, void *sender, void *context) {
     if((event_trigger == NULL) || (sender == NULL) || (context == NULL)) return;
     api_private_t *core = api_private((const api_t *)context);
     const transport_event_trigger_t *ev = (const transport_event_trigger_t *)event_trigger;
-    const void *self = sender;   /* дескриптор соединения — ключ сессии, не более */
 
     switch(ev->event) {
     case TRANSPORT_ESTABLISHED:
-        api_session_open(core, self);
+        api_lock(core);
+        if(api_peer_find(core, sender) == NULL) {
+            if(api_peer_create(core, sender) == NULL) {
+                api_unlock(core);
+                api_log(core, API_LOG_WARN, "No memory for a peer");
+                transport_t tr = api_transport_of(core, sender);
+                transport_close(&tr);
+                return;
+            }
+        }
+        api_unlock(core);
+        api_log(core, API_LOG_INFO, "Peer up, conn=%p", sender);
         return;
 
     case TRANSPORT_CLOSED:
-        api_session_close(core, self);
+        api_peer_close(core, sender);
         return;
 
     case TRANSPORT_RECEIVED: {
-        /* Транспорт отдаёт УРОВЕНЬ СООБЩЕНИЙ: фрагменты он уже склеил сам, и
-         * буфер принадлежит ему — ядро только читает его до возврата отсюда. */
         api_lock(core);
-        api_session_t *sess = api_session_find(core, self);
+        api_peer_t *peer = api_peer_find(core, sender);
         api_unlock(core);
-        if(sess == NULL) {
-            api_log(core, API_LOG_WARN, "Message for unknown connection %p, dropped", self);
+        if(peer == NULL) {
+            api_log(core, API_LOG_WARN, "Message for unknown connection %p, dropped", sender);
             return;
         }
-        api_session_on_message(core, sess, ev->data.ptr, ev->data.length);
+        api_receive(core, peer, ev->data.ptr, ev->data.length);
         return;
     }
 
     case TRANSPORT_TRANSFER_COMPLETE:
     case TRANSPORT_TRANSFER_ERR:
-        api_transfer_done(core, self, ev);
+        api_transfer_done(core, sender);
         return;
 
     default:
-        /* OPEN и TRANSFER_BUFFER ядру не нужны: слушает транспорт, буферов он
-         * ядру не выдаёт. */
-        api_log(core, API_LOG_DEBUG, "Unhandled transport event 0x%x", (unsigned)ev->event);
         return;
     }
 }
 
-/* Разбор принятого СООБЩЕНИЯ (JSON). Транспорт уже склеил фрагменты, так что
- * здесь всегда целое сообщение; буфер принадлежит транспорту и живёт до возврата
- * отсюда — токены jsmn указывают внутрь него, поэтому ядро его не освобождает. */
-static void api_session_on_message(api_private_t *core, api_session_t *sess,
-                                   const void *data, uint32_t len) {
-    if(!data || !len) {
-        api_log(core, API_LOG_INFO, "Got packet with empty message");
-        return;
-    }
-    api_log(core, API_LOG_DEBUG, "Got message (%lu bytes): %.*s", len, (int)len, (const char *)data);
+/* ── Такт работы ──────────────────────────────────────────────────────────── */
 
-    api_call_t *call = malloc(sizeof(api_call_t));
-    if(!call) {
-        api_log(core, API_LOG_WARN, "Failed to malloc memory for ws api call");
-        return;
-    }
-    memset(call, 0, sizeof(api_call_t));
-    call->flags |= CALL_FLAG_NEW;
-    /* Ядро вызова: ответ и статус адресованы вызову, и берут его отсюда, а не из
-     * аргументов. Дескриптор ядра и его состояние — один и тот же адрес. */
-    call->api = (api_t *)(void *)core;
-
-    /* Разбор конверта: jsmn, без выделения памяти на каждый объект. Токены —
-     * на стеке задачи, поэтому вложенный или огромный пакет не может ни съесть
-     * кучу, ни переполнить стек разбором (jsmn не рекурсивен). */
-    GW_JSON_TOKENS(toks, API_FRAME_MAX_TOKENS);
-    gw_json_t json;
-    if (!gw_json_parse(&json, (const char *)data, len, toks, API_FRAME_MAX_TOKENS)) {
-        api_log(core, API_LOG_WARN, "Сообщение не разобрано как JSON или слишком сложно (%u токенов)",
-                (unsigned)API_FRAME_MAX_TOKENS);
-        free(call);
-        return;
-    }
-
-    /* FID — только строка: имя вида "<подсистема>.<действие>". Числовой код
-     * отклоняем: протокол задан именами целиком, и принимать оба вида значило бы
-     * держать два протокола в одном месте. */
-    if (!gw_json_str(&json, "FID", call->fid, sizeof(call->fid))) {
-        api_log(core, API_LOG_WARN, "Api call bad FID property (нужно имя строкой, например \"uart2.modbus\")");
-        free(call);
-        return;
-    }
-
-    /* ARG отдаём обработчику как есть — срезом исходного сообщения, без дерева и
-     * без печати в строку. */
-    const char *arg_s = NULL;
-    size_t      arg_n = 0;
-    if (gw_json_raw(&json, "ARG", &arg_s, &arg_n)) {
-        call->req_data = (uint8_t *)malloc(arg_n + 1);
-        if (!call->req_data) {
-            free(call);
-            return;
-        }
-        mem_cpy(call->req_data, arg_s, arg_n);
-        call->req_data[arg_n] = '\0';
-        call->req_data_len = (uint32_t)arg_n;
-
-        /* ARG.RDL (задержка повторного опроса, мс) — общее поле каркаса для
-         * вызовов с FLAGS:4; смотрим тем же разбором, что и обработчики. */
-        GW_JSON_TOKENS(arg_toks, API_ARG_MAX_TOKENS);
-        gw_json_t arg;
-        if (gw_json_parse(&arg, (const char *)call->req_data, arg_n,
-                          arg_toks, API_ARG_MAX_TOKENS)) {
-            int32_t rdl;
-            if (gw_json_int(&arg, "RDL", &rdl) && rdl > 0)
-                call->poll_interval_ms = (uint32_t)rdl;
-        }
-    }
-
-    /* Сессия нужна до первой проверки: ответ об ошибке уходит именно в неё, а
-     * не «в это ядро». */
-    call->session = sess;
-
-    /* FLAGS остаётся обязательным полем протокола */
-    int32_t flags;
-    if (!gw_json_int(&json, "FLAGS", &flags)) {
-        api_log(core, API_LOG_WARN, "Missing FLAGS, dropping call fid:%s", call->fid);
-        api_send_status(call, API_CALL_ERROR_STATUS_BAD_REQ);
-        free(call->req_data);
-        free(call);
-        return;
-    }
-    call->flags |= (uint32_t)flags;
-
-    /* SID назначает клиент, чтобы отличить ответ на свой запрос. Сервер его не
-     * требует и не придумывает: нет SID — ответ уйдёт без этого поля. */
-    int32_t sid;
-    if (gw_json_int(&json, "SID", &sid)) {
-        call->has_sid = 1;
-        call->id      = (uint32_t)sid;
-    }
-
-    /* FLAGS с битом удаления — это ПРОСЬБА снять раньше созданный вызов этого же
-     * клиента (тот же FID и SID), а не новый вызов. Снимает вызов такт работы —
-     * и только после того, как обработчик вернёт FALSE (см. api_call_teardown),
-     * поэтому здесь только ставим флаг. */
-    if(call->flags & CALL_FLAG_TO_DELETE) {
-        api_call_t *victim = NULL;
-        if(call->has_sid) {
-            api_lock(core);
-            victim = api_call_find_to_delete(core, sess, call->fid, call->id);
-            if(victim)
-                victim->flags |= CALL_FLAG_TO_DELETE;
-            api_unlock(core);
-        } else {
-            api_log(core, API_LOG_WARN, "Снятие вызова %s без SID: нечего искать", call->fid);
-        }
-
-        api_log(core, API_LOG_INFO, "Снятие вызова %s id:%lu %s", call->fid, (unsigned long)call->id,
-                victim ? "принято" : "— такого вызова нет");
-        /* Клиент ждёт подтверждения, что просьба дошла. */
-        api_send_status(call, API_CALL_STATUS_DELIVERED);
-        free(call->req_data);
-        free(call);
-        return;
-    }
-
-    api_lock(core);
-
-    /* Сервис ищется по имени FID в таблице обработчиков ЭТОГО ядра: на каком
-     * ядре он зарегистрирован, через такой транспорт и приходит (см. api.h).
-     * Запрос доставляется только вызовом обработчика. Нет обработчика — вызов
-     * получает NO_HANDLER (а не «молча ничего»). */
-    api_handler_item_t *handler = api_handler_find(core, call->fid);
-    if(handler == NULL) {
-        api_log(core, API_LOG_WARN, "No handler for FID %s, dropping call id:%lu",
-                call->fid, call->id);
-        api_send_status(call, API_CALL_ERROR_STATUS_NO_HANDLER);
-        free(call->req_data);
-        free(call);
-    } else {
-        call->handler     = handler->handler;
-        call->handler_ctx = handler->handler_ctx;
-        vLinkedListInsertLast(&core->calls, LinkedListItem(call));
-        api_log(core, API_LOG_DEBUG, "New api call %s enqueued with id:%lu", call->fid, call->id);
-    }
-
-    api_unlock(core);
-}
-
-/* --- Такт работы ---------------------------------------------------------- */
-
-/* Один такт ядра: выдача запросов обработчикам, их такт работы, снятие вызовов
- * без соединения. Ответ клиенту сюда не входит: его отправляет сам обработчик
- * (api_reply) из своего вызова. Функцию зовёт api_worker; она НЕ ЖДЁТ:
- * всё, что не успела, остаётся на следующий вызов.
- *
- * Такт ограничен по частоте, а обработчик, которому нечего делать, возвращается
- * сразу.
- *
- * Такт 10 мс стоил обработчику периферии двух лишних тактов на транзакцию
- * (старт и съём ответа), а при нескольких запросах в работе — ещё и ожидания:
- * замерено на приборе 9600 бод: ожидание такта 52 мс, транзакция 70 мс при
- * физических 20 мс на шине, оборот 123 мс. С тактом 1 мс оборот падает до
- * времени самой шины, а обработчик пульса остаётся дешёвым: проверка состояния
- * и возврат.
- *
- * Период объявлен в api.h: его же держит задача приложения, которая зовёт
- * api_worker, — иначе «такт ядра» и «пауза вызывающего» разошлись бы. */
-
-/* Обработчики нельзя звать под core->mutex так, как зовут остальное: обработчик
- * отвечает через api_reply, а тот берёт тот же мьютекс повторно. Мьютекс
- * рекурсивный (это требование к системе, см. api.h), поэтому самоблокировки нет,
- * но критическая секция всё равно не должна зависеть от того, чем занят
- * обработчик. Поэтому под мьютексом только собираем список вызовов, а дёргаем их
- * после освобождения. Освобождать вызовы может лишь эта же задача, так что
- * собранные указатели остаются валидными. */
-static int api_collect_handled(api_private_t *core, LinkedList_t list, int from) {
-    int n = from;
-    LinkedListItem_t *item = pxLinkedListFindFirst(list, NULL, NULL);
-    while(item != NULL && n < API_WORK_BATCH) {
-        LinkedListItem_t *next = pxLinkedListFindNextNoOverlap(item, NULL, NULL);
-        api_call_t *call = LinkedListGetObject(api_call_t, item);
-        if(call->handler && call->handler_started && !(call->flags & CALL_FLAG_TO_DELETE))
-            core->work_batch[n++] = call;
-        item = next;
-    }
-    return n;
-}
-
-/* Вызовы, которые просят снять (клиент ушёл, пришёл FLAGS с флагом удаления):
- * их надо довести до конца — спросить обработчика, и только после FALSE
- * освобождать память вызова. */
-static int api_collect_finish(api_private_t *core, LinkedList_t list, int from) {
-    int n = from;
-    LinkedListItem_t *item = pxLinkedListFindFirst(list, NULL, NULL);
-    while(item != NULL && n < API_WORK_BATCH) {
-        LinkedListItem_t *next = pxLinkedListFindNextNoOverlap(item, NULL, NULL);
-        api_call_t *call = LinkedListGetObject(api_call_t, item);
-        if(call->flags & CALL_FLAG_TO_DELETE)
-            core->finish_batch[n++] = call;
-        item = next;
-    }
-    return n;
-}
-
-static void api_finish_calls(api_private_t *core) {
-    api_lock(core);
-    int n = api_collect_finish(core, core->calls, 0);
-    n = api_collect_finish(core, core->waiting, n);
-    api_unlock(core);
-
-    for(int i = 0; i < n; i++) {
-        api_call_t *call = core->finish_batch[i];
-        /* Флаг мог поставить клиент (FLAGS с битом удаления) — тогда он ждёт
-         * подтверждения. Если клиента уже нет, отправлять некуда. */
-        if(call->session)
-            api_send_status(call, API_CALL_STATUS_DELIVERED);
-        if(!api_call_teardown(call))
-            continue;            /* обработчик ещё не завершился — спросим тактом позже */
-
-        api_lock(core);
-        LinkedListItem_t *li = LinkedListItem(call);
-        if(bLinkedListContains(core->calls, li)) vLinkedListUnlink(li);
-        if(bLinkedListContains(core->waiting, li)) vLinkedListUnlink(li);
-        free(call->req_data);
-        free(call);
-        api_unlock(core);
-    }
-}
-
-static void api_work_cycle(api_private_t *core) {
-    uint32_t now = api_time(core);
-    if((now - core->last_work_tick) < API_WORK_PERIOD_MS) return;
-    core->last_work_tick = now;
-
-    /* Сначала те, кого просят снять: пока обработчик не вернул результат,
-     * вызов остаётся жить в списках. */
-    api_finish_calls(core);
-
-    api_lock(core);
-    int n = api_collect_handled(core, core->calls, 0);
-    n = api_collect_handled(core, core->waiting, n);
-    api_unlock(core);
-
-    for(int i = 0; i < n; i++) {
-        api_call_t *call = core->work_batch[i];
-        /* data == NULL — такт работы, а не запрос клиента */
-        if(call->handler(call, &call->handler_ctx, NULL, 0)) continue;
-
-        /* Обработчик вернул FALSE — это и есть результат: вызов завершён
-         * (контекст он освободил сам), можно снимать. */
-        api_lock(core);
-        LinkedListItem_t *li = LinkedListItem(call);
-        if(bLinkedListContains(core->calls, li)) vLinkedListUnlink(li);
-        if(bLinkedListContains(core->waiting, li)) vLinkedListUnlink(li);
-        if(bLinkedListContains(core->calls, li) || bLinkedListContains(core->waiting, li)) {
-            api_unlock(core);
-            continue;                      /* ещё где-то в списках — не трогаем */
-        }
-        if(call->flags & CALL_FLAG_LONG_TERM) {
-            /* Подписка: вызов не закрываем, а возвращаем в работу — ядро само
-             * повторит запрос (по ARG.RDL или сразу), и обработчик получит его
-             * заново как обычный запрос клиента. Данные запроса сохраняем. */
-            call->next_poll_ms = api_time(core) + call->poll_interval_ms;
-            vLinkedListInsertLast(&core->calls, li);
-            api_unlock(core);
-            continue;
-        }
-        free(call->req_data);
-        free(call);
-        api_unlock(core);
-    }
-}
-
-/* ARG запроса для обработчика. Клиент мог не прислать ARG — тогда это ПУСТОЙ
- * срез, но НЕ NULL: NULL у живого вызова означает такт работы, и обработчик не
- * должен путать «клиент ничего не прислал» с «ядро дало такт» (см. api.h). */
-static uint8_t *api_call_arg(const api_call_t *call) {
-    static uint8_t empty_arg[1] = { 0 };   /* общий срез нулевой длины: не пишется */
-    return (call->req_data != NULL) ? call->req_data : empty_arg;
-}
-
-static void api_worker_step(api_private_t *core) {
-        /* −1. Такт транспорту: он вправе отдать то, что принял, здесь — в задаче
-         * приложения (её стек 8 КБ), а не в задаче веб-сервера, где разбор
-         * сообщения оставлял 360 байт из 4096 (замерено на приборе). */
-        const transport_iface_t *iface = api_transport_iface(core);
-        if(iface->poll != NULL) iface->poll(transport_self(core));
-
-        /* 0. Такт работы: обработчики получают возможность сделать своё
-         * периодическое дело, не блокируя ядро */
-        api_work_cycle(core);
-
-        /* 1. У вызовов без соединения просим завершения (клиент ушёл или ответ
-         * уже отправлен): живость соединения видит транспорт, а не ядро. */
-        api_lock(core);
-        ulLinkedListDoForeach(core->calls, api_serve_call, NULL);
-        ulLinkedListDoForeach(core->waiting, api_serve_call, NULL);
-        api_unlock(core);
-
-        /* 2. Отдать обработчику новые вызовы. Доставка запроса сервису —
-         * ровно один путь: вызов его обработчика. Обработчик сам решает,
-         * ответить сразу (вернув FALSE) или попросить ещё такт (вернув TRUE). */
-        api_lock(core);
-        LinkedListItem_t *item = pxLinkedListFindFirst(core->calls, NULL, NULL);
-        while(item != NULL) {
-            LinkedListItem_t *next = pxLinkedListFindNextNoOverlap(item, NULL, NULL);
-            api_call_t *call = LinkedListGetObject(api_call_t, item);
-
-            if(call->flags & CALL_FLAG_TO_DELETE) {
-                /* Вызов просят снять. Ничего не раздаём и не освобождаем здесь:
-                 * завершением займётся такт работы, и лишь после того, как
-                 * обработчик вернёт FALSE (см. api_call_teardown). */
-                item = next;
-                continue;
-            }
-
-            /* Подписка, которая ещё не заработала новый опрос (ARG.RDL),
-             * остаётся в списке до истечения next_poll_ms и обработчику не
-             * отдаётся. */
-            if((call->flags & CALL_FLAG_LONG_TERM) && !(call->flags & CALL_FLAG_NEW)
-               && ((int32_t)(api_time(core) - call->next_poll_ms) < 0)) {
-                item = next;
-                continue;
-            }
-
-            if(call->handler) {
-                /* Обработчик зарегистрирован — отдаём ему запрос. Дальше вызов
-                 * живёт по такту работы: обработчик получает data == NULL и
-                 * завершается, вернув FALSE. */
-                if(call->flags & CALL_FLAG_NEW) {
-                    bool sent = api_send_status(call, API_CALL_STATUS_DELIVERED);
-                    if(sent)
-                        call->flags &= ~CALL_FLAG_NEW;
-                }
-                call->handler_started = 1;
-                /* Переносим в список «в работе»: иначе следующий проход снова
-                 * отдаст обработчику тот же запрос. */
-                vLinkedListInsertLast(&core->waiting, item);
-                /* Зовём обработчик без мьютекса: он отправляет ответ через API.
-                 * Мьютекс отпускаем и берём заново — такт работы и удаление
-                 * вызовов всё равно в этой же задаче. */
-                api_unlock(core);
-                uint8_t alive = call->handler(call, &call->handler_ctx,
-                                              api_call_arg(call), call->req_data_len);
-                api_lock(core);
-                if(!alive) {
-                    /* false от обработчика — вызов завершён (его результат) */
-                    if(call->flags & CALL_FLAG_LONG_TERM) {
-                        /* Подписка живёт дальше: вызов и так лежит в списке
-                         * работы, ядро повторит запрос по таймеру переопроса.
-                         * Переставлять его в конец списка нельзя: проход шёл бы
-                         * по одному и тому же вызову бесконечно (клиент вправе
-                         * подписаться на любой FID, в том числе на обработчик,
-                         * который отвечает сразу и возвращает FALSE). */
-                        call->next_poll_ms = api_time(core) + call->poll_interval_ms;
-                    } else {
-                        vLinkedListUnlink(item);
-                        free(call->req_data);
-                        free(call);
-                    }
-                }
-            } else {
-                /* Обработчика нет — сервис снял регистрацию между разбором
-                 * запроса и тактом. Отвечаем внятным отказом, а не молчанием. */
-                api_log(core, API_LOG_INFO, "no handler for FID %s, send status INVALID", call->fid);
-                api_send_status(call, API_CALL_STATUS_INVALID);
-                vLinkedListUnlink(item);
-                free(call->req_data);
-                free(call);
-            }
-            item = next;
-        }
-        api_unlock(core);
-}
-
-/* Один такт работы ядра. Задачу ядро не заводит: такт даёт тот, кто его поднял
- * (в прошивке — одна задача приложения на все ядра, на хосте — тест).
- * NULL — не такт, а ничего: вызывающему не нужно помнить, поднялось ли ядро. */
 void api_worker(api_t *api) {
     if(api == NULL) return;
-    api_worker_step(api_private(api));
+    api_private_t *core = api_private(api);
+
+    api_lock(core);                       /* состояние читается под замком всегда */
+    api_unlock(core);
+
+    api_peers_reap(core);
+    api_housekeeping(core);
+
+    uint32_t now = api_time(core);
+    if((now - core->pulse_timer) >= API_PULSE_INTERVAL_MS) {
+        core->pulse_timer = now;
+        api_pulse(core);
+    }
+    api_tx_retry(core);
+    api_incoming_drain(core);
 }
 
-api_t *api_init(const transport_t *transport, const api_system_t *system) {
+/* ── Подъём и снятие ─────────────────────────────────────────────────────── */
+
+api_t *api_init(const transport_t *transport, void *transport_config,
+                const api_system_t *system) {
     const transport_iface_t *iface = (transport != NULL) ? transport->iface : NULL;
-    /* Полуинтерфейс ядру не годится: без отправки, закрытия и подписки оно
-     * узнает об отказе уже в момент запроса клиента. Транспорт без объекта
-     * (transport == NULL) — тоже: ядру не к чему подписываться. */
     if((iface == NULL) || (iface->begin_send == NULL) ||
-       (iface->close == NULL) || (iface->subscribe == NULL)) return NULL;
-    /* Система без этих операций — не система: мьютекс, время и журнал ядру нужны
-     * в любом сценарии, а других системных вызовов у него нет вовсе (ни
-     * очередей, ни задержек, ни потоков). Отказываем сразу и честно: собрать
-     * ядро, которое упадёт на первом же вызове, хуже, чем вернуть NULL. */
+       (iface->close == NULL) || (iface->subscribe == NULL) ||
+       (iface->open == NULL)) return NULL;
     if((system == NULL) || (system->mutex_create == NULL) ||
        (system->mutex_take == NULL) || (system->mutex_give == NULL) ||
        (system->log == NULL) || (system->time_ms == NULL)) return NULL;
 
-    /* Дескриптор — собственность ядра: его выделяет ядро и освобождает
-     * api_deinit. Вызывающий только хранит указатель, поэтому ни «статический
-     * дескриптор», ни размер состояния снаружи не нужны. Нулевое состояние —
-     * это и есть «ядро только что поднято»: списки пусты, задача не запущена. */
     api_t *api = calloc(1, sizeof(*api));
     if(api == NULL) return NULL;
     api_private_t *core = api_private(api);
     core->transport = transport;
+    core->system    = system;
 
-    /* Система — до подписки: событие транспорта может прийти сразу после неё, а
-     * обработчику уже нужен мьютекс. Ядро заводит только мьютекс, и то через
-     * таблицу: своей задачи, своей очереди и своих задержек у него нет. Если
-     * мьютекс не создался, освобождать пока нечего — списки пусты, а сам
-     * мьютекс принадлежит системе (в тестах его снимает system_stub_reset). */
-    core->system = system;
     core->mutex = system->mutex_create(system->context);
     if(core->mutex == NULL) {
-        api_log(core, API_LOG_WARN, "No memory for the API core");
         free(api);
         return NULL;
     }
 
-    /* Подписка на события транспорта. Подписчик — делегат в самом дескрипторе:
-     * handler — обработчик событий ядра, context — дескриптор (по нему обработчик
-     * и находит своё ядро: обработчиков может быть несколько). self подписки —
-     * контекст реализации из ОБЪЕКТА транспорта. Отписка транспорту не нужна:
-     * делегат принадлежит ядру, и снимает его само ядро (api_deinit). */
+    for(uint32_t i = 0; i < API_CALL_POOL_SIZE; i++)
+        linked_list_insert_last(&core->free_calls, linked_list_item(&core->pool[i]));
+
     core->delegate.handler = api_transport_event;
     core->delegate.context = api;
-    transport_result_t res = iface->subscribe(transport_self(core), &core->delegate);
+    transport_result_t res = transport_subscribe(transport, &core->delegate);
     if(res != TRANSPORT_OK) {
         api_log(core, API_LOG_WARN, "Transport subscribe failed: %d", (int)res);
         free(api);
         return NULL;
     }
 
-    /* Поток заводит и держит приложение (одна задача на все ядра), а такт ядру
-     * даёт api_worker. Ядро не создаёт ни потоков, ни очередей, ни задержек — в
-     * этом и состоит его кооперативный контракт. */
+    /* Транспорт открывает ядро: подписка уже на месте, первое соединение будет
+     * кому отдать. */
+    res = transport_open(transport, transport_config);
+    if(res != TRANSPORT_OK) {
+        api_log(core, API_LOG_WARN, "Transport open failed: %d", (int)res);
+        event_unsubscribe(&core->delegate);
+        free(api);
+        return NULL;
+    }
+
     api_log(core, API_LOG_INFO, "API core up, transport=%p", transport->context);
     return api;
 }
 
-/* Освободить вызовы одного списка вместе с их данными запроса. Список берётся
- * по указателю: LinkedList_t — это голова списка, и снятие элемента меняет
- * именно её, а копия головы после первого unlink указывала бы на освобождённый
- * элемент. */
-static void api_free_calls(LinkedList_t *list) {
-    LinkedListItem_t *item;
-    while((item = pxLinkedListFindFirst(*list, NULL, NULL)) != NULL) {
-        api_call_t *c = LinkedListGetObject(api_call_t, item);
-        vLinkedListUnlink(item);
-        free(c->req_data);
-        free(c);
+static void api_free_list(api_private_t *core, linked_list_t *list) {
+    linked_list_item_t *item;
+    while((item = linked_list_find_first(*list, NULL, NULL)) != NULL) {
+        api_call_t *call = linked_list_get_object(api_call_t, item);
+        linked_list_unlink(item);
+        if(core->system != NULL && call->handler != NULL && call->peer != NULL)
+            call->handler(NULL, &call->context, NULL, 0);
+        free(call->arg_data);
+        call->arg_data = NULL;
     }
 }
 
@@ -1116,38 +892,35 @@ void api_deinit(api_t *api) {
     if(api == NULL) return;
     api_private_t *core = api_private(api);
 
-    /* Сначала отписка: транспорт не должен остаться с обработчиком, который
-     * смотрит на освобождаемое ядро, — иначе первое же событие было бы
-     * обращением к освобождённой памяти. Отписка — операция ДЕЛЕГАТА, а не
-     * транспорта: ядро снимает свою подписку само, и транспорту (какой бы он ни
-     * был) для этого ничего не нужно. После этого его событий у ядра уже не
-     * будет: делегата в event_t транспорта нет. */
+    /* Сначала отписка: транспорт не должен остаться с обработчиком, смотрящим
+     * на освобождаемое ядро. */
     event_unsubscribe(&core->delegate);
 
-    /* «Хвостов» в ядре не остаётся: кадр клиенту собирается и отдаётся
-     * транспорту прямо из обработчика, очередей у ядра нет вовсе. Хвосты
-     * отправок в самом транспорте ядру неизвестны: их доводит до конца транспорт
-     * (в тестах — ws_transport_stub_reset), и только пока ядро живо. */
+    /* Обработчикам даём шанс освободить состояние: вызов исчезает вместе с
+     * ядром, и «call == NULL» — единственный способ об этом сказать. */
+    linked_list_item_t *item = linked_list_find_first(core->executing, NULL, NULL);
+    while(item != NULL) {
+        linked_list_item_t *next = linked_list_find_next_no_overlap(item, NULL, NULL);
+        api_call_t *call = linked_list_get_object(api_call_t, item);
+        if(call->handler != NULL) call->handler(NULL, &call->context, NULL, 0);
+        linked_list_unlink(item);
+        free(call->arg_data);
+        call->arg_data = NULL;
+        item = next;
+    }
+    api_free_list(core, &core->incoming);
+    api_free_list(core, &core->free_calls);
 
-    /* Вызовы — раньше сессий: вызов ссылается на сессию, снятие вызова её не
-     * трогает. */
-    api_free_calls(&core->calls);
-    api_free_calls(&core->waiting);
-
-    LinkedListItem_t *item;
-    while((item = pxLinkedListFindFirst(core->handlers, NULL, NULL)) != NULL) {
-        api_handler_item_t *h = LinkedListGetObject(api_handler_item_t, item);
-        vLinkedListUnlink(item);
+    while((item = linked_list_find_first(core->handlers, NULL, NULL)) != NULL) {
+        api_handler_item_t *h = linked_list_get_object(api_handler_item_t, item);
+        linked_list_unlink(item);
         free(h);
     }
-    while((item = pxLinkedListFindFirst(core->sessions, NULL, NULL)) != NULL) {
-        api_session_t *s = LinkedListGetObject(api_session_t, item);
-        vLinkedListUnlink(item);
-        free(s);
+    while((item = linked_list_find_first(core->peers, NULL, NULL)) != NULL) {
+        api_peer_destroy(core, linked_list_get_object(api_peer_t, item));
     }
-    /* Мьютекс ядра здесь не освобождается: операции удаления в таблице системы
-     * нет, а на цели ядро живёт до перезагрузки. Тот, кто поднимает и снимает
-     * ядра на хосте (тесты), освобождает его своей системой —
-     * system_stub_reset. */
+    while((item = linked_list_find_first(core->dead_peers, NULL, NULL)) != NULL) {
+        api_peer_destroy(core, linked_list_get_object(api_peer_t, item));
+    }
     free(api);
 }

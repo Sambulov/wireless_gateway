@@ -503,7 +503,7 @@ class InnovertISDmini {
             if (isNaN(fval)) { alert('Некорректное значение'); return; }
             val = reg.OPT?.SCALE ? Math.round(fval * reg.OPT.SCALE) : Math.round(fval);
         }
-        const req = `{"FID":${getMbFid()},"FLAGS":0,"SID":${nextSid()},"ARG":{"FN":6,"ADR":${getMbAddr()},"RA":${addr},"RVC":${val}}}`;
+        const req = `{"FID":${getMbFid()},"SID":${nextSid()},"ARG":{"FN":6,"ADR":${getMbAddr()},"RA":${addr},"RVC":${val}}}`;
         if (this.websocket?.readyState === WebSocket.OPEN) this.websocket.send(req);
         else alert('Соединение не установлено');
     }
@@ -553,7 +553,7 @@ class InnovertISDmini {
         }
         ranges.push({s, n: e - s + 1});
         for (const {s, n} of ranges) {
-            const req = `{"FID":${fid},"FLAGS":4,"SID":${nextSid()},"ARG":{"AWT":500,"RDL":250,"FN":3,"ADR":${addr},"RA":${s},"RVC":${n}}}`;
+            const req = `{"FID":${fid},"SID":${nextSid()},"ARG":{"AWT":500,"RDL":250,"FN":3,"ADR":${addr},"RA":${s},"RVC":${n}}}`;
             if (this.websocket?.readyState === WebSocket.OPEN) this.websocket.send(req);
         }
     }
@@ -627,7 +627,7 @@ function sendUartConfig() {
         SB:  parseInt(document.getElementById('uart-sb').value),
     };
     if (x?.websocket?.readyState === WebSocket.OPEN)
-        x.websocket.send(JSON.stringify({ FID: getCnfFid(), FLAGS: 0, SID: nextSid(), ARG: arg }));
+        x.websocket.send(JSON.stringify({ FID: getCnfFid(), SID: nextSid(), ARG: arg }));
 }
 
 function reconnectWs() {

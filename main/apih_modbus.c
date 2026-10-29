@@ -53,7 +53,7 @@ typedef struct {
 
 /* Состояние одного вызова API: разобранный запрос и место в очереди порта.
  * Живёт в контексте вызова, который принадлежит обработчику. Ответ клиенту
- * формирует и отправляет драйвер из своего колбэка: api_reply берёт ядро из
+ * формирует и отправляет драйвер из своего колбэка: api_call_send_arg берёт ядро из
  * дескриптора вызова, поэтому ядро обработчику не нужно. */
 #define MB_CTX_MAGIC 0x4d424354u   /* 'MBCT' — признак своего контекста */
 
@@ -166,7 +166,7 @@ static void mb_rx_handler(void *trigger, void *sender, void *context) {
 
 static void send_mb_msg(void *call, const char *json_str, size_t len) {
     if (json_str && len > 0)
-        api_reply(call, (const uint8_t *)json_str, len);
+        api_call_send_arg(call, json_str, (uint32_t)len);
 }
 
 static void send_mb_error(void *call, int code) {
@@ -410,8 +410,8 @@ static uint8_t mb_api_handler(void *call, void **context, uint8_t *data, uint32_
  * отвечает» */
 static uint8_t mb_register(api_t *api) {
     uint8_t ok = 1;
-    ok &= api_register_handler(api, mb_api_handler, ESP_WS_API_UART1_MODBUS_REQ, &mb_workers[0]);
-    ok &= api_register_handler(api, mb_api_handler, ESP_WS_API_UART2_MODBUS_REQ, &mb_workers[1]);
+    ok &= api_call_register(api, mb_api_handler, ESP_WS_API_UART1_MODBUS_REQ, &mb_workers[0]);
+    ok &= api_call_register(api, mb_api_handler, ESP_WS_API_UART2_MODBUS_REQ, &mb_workers[1]);
     return ok;
 }
 

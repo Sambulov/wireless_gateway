@@ -37,15 +37,17 @@ extern "C" {
  * и в конце sys.fw.end. Проверяется разбор ARG и порядок порций — то, что на
  * приборе видно только по журналу и по перезагрузке. */
 
-/* Кадр клиента: {"FID":…,"FLAGS":…,"SID":…[,"ARG":…]} + один такт ядра. */
+/* Кадр клиента: {"FID":…,"SID":…[,"ARG":…]} + один такт ядра. FLAGS в протоколе
+ * нет: тип вызова задаёт SID (§1.3). */
 static void client_frame(api_t *api, ws_transport_stub_conn_t *conn,
                          const char *fid, int flags, int sid, const char *arg = NULL) {
     char frame[256];
+    (void)flags;
     if (arg)
         snprintf(frame, sizeof(frame),
-                 "{\"FID\":\"%s\",\"FLAGS\":%d,\"SID\":%d,\"ARG\":%s}", fid, flags, sid, arg);
+                 "{\"FID\":\"%s\",\"SID\":%d,\"ARG\":%s}", fid, sid, arg);
     else
-        snprintf(frame, sizeof(frame), "{\"FID\":\"%s\",\"FLAGS\":%d,\"SID\":%d}", fid, flags, sid);
+        snprintf(frame, sizeof(frame), "{\"FID\":\"%s\",\"SID\":%d}", fid, sid);
     ws_transport_stub_frame(conn, WS_STUB_FRAME_TEXT, frame, strlen(frame), 1);
     api_worker(api);
 }
@@ -535,7 +537,7 @@ TEST(ApihFwApOnly, StationCoreHasNoFirmwareService) {
     client_request(api_sta, conn_sta, ESP_WS_API_SYS_FW_BEGIN, 1, "{\"SIZE\":24}");
 
     LONGS_EQUAL(0, esp_ota_stub_begin_calls());
-    STRCMP_CONTAINS("\"STA\":\"0x8000000e\"", reply(conn_sta));
+    STRCMP_CONTAINS("\"STA\":\"0x8000000E\"", reply(conn_sta));
 
     /* Тот же вызов с точки доступа обслуживается — значит служба не сломана, а
      * именно не оказана станции. */

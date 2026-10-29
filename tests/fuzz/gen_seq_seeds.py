@@ -45,44 +45,44 @@ def frame(conn, type_idx, payload=b""):
 
 
 SEEDS = {
-    # TO_DELETE removes a matching call already waiting for the peripheral
-    "delete_waiting": text('{"FID":"fuzz.full","SID":5,"FLAGS":4}') + step()
-        + text('{"FID":"fuzz.full","SID":5,"FLAGS":8}') + step(),
-    # TO_DELETE removes a matching LONG_TERM call parked in pxWsApiCall (RDL)
-    "delete_parked": text('{"FID":"fuzz.full","SID":6,"FLAGS":4,"ARG":{"RDL":5000}}') + step()
-        + periph() + step() + text('{"FID":"fuzz.full","SID":6,"FLAGS":8}') + step(),
-    # TO_DELETE queued *before* the call it deletes (same step)
-    "delete_before_target": text('{"FID":"fuzz.full","SID":7,"FLAGS":8}')
-        + text('{"FID":"fuzz.full","SID":7,"FLAGS":4}') + step(),
-    # DELIVERED status can't be queued -> CALL_FLAG_NEW stays set
-    "delivered_send_fail": text('{"FID":"fuzz.full","SID":1,"FLAGS":2}')
+    # Повтор кадра с тем же SID без ARG — отписка (§1.3, §3.5)
+    "cancel_waiting": text('{"FID":"fuzz.full","SID":5,"ARG":{"RDL":0}}') + step()
+        + text('{"FID":"fuzz.full","SID":5}') + step(),
+    # Отписка после того, как периферия ответила
+    "cancel_after_answer": text('{"FID":"fuzz.full","SID":6,"ARG":{"RDL":5000}}') + step()
+        + periph() + step() + text('{"FID":"fuzz.full","SID":6}') + step(),
+    # Отписка раньше, чем вызов создан: это новый вызов, а не снятие
+    "cancel_before_call": text('{"FID":"fuzz.full","SID":7}')
+        + text('{"FID":"fuzz.full","SID":7,"ARG":{"RDL":0}}') + step(),
+    # Отказ отправки: кадр не ушёл, вызов живёт дальше
+    "send_fail_then_ok": text('{"FID":"fuzz.full","SID":1,"ARG":{"a":1}}')
         + send_result(0, True) + step() + send_result(0, False) + step(),
-    # ping fails on an idle session -> TO_DELETE call left without session
-    "delete_no_session": text('{"FID":"fuzz.full","SID":2,"FLAGS":8}')
-        + send_result(0, True) + tick(255) + step(),
-    # queued send later fails in httpd -> all calls on that fd are broken
-    "async_send_fail": text('{"FID":"fuzz.full","SID":12,"FLAGS":4}') + step()
+    # Номер живого вызова назван чужим FID — BAD_REQ, вызов не тронут
+    "bad_req_foreign_fid": text('{"FID":"fuzz.full","SID":2,"ARG":{}}') + step()
+        + text('{"FID":"fuzz.alive","SID":2,"ARG":{}}') + step(),
+    # Очередь отправок падает — вызовы этого fd теряют адресата
+    "async_send_fail": text('{"FID":"fuzz.full","SID":12,"ARG":{"RDL":0}}') + step()
         + complete(0, True) + periph() + step(),
-    # peripheral answers with an id no call has
-    "periph_wrong_id": text('{"FID":"fuzz.full","SID":3,"FLAGS":2,"ARG":{"a":1}}') + step()
+    # Периферия отвечает на номер, которого ни у одного вызова нет
+    "periph_wrong_id": text('{"FID":"fuzz.full","SID":3,"ARG":{"a":1}}') + step()
         + periph(PERIPH_WRONG_ID) + step(),
-    # response for a queue-only FID (call without handler)
-    "periph_no_handler": text('{"FID":"fuzz.queue","SID":4,"FLAGS":2,"ARG":{"a":1}}') + step()
+    # Ответ по FID без обработчика
+    "periph_no_handler": text('{"FID":"fuzz.queue","SID":4,"ARG":{"a":1}}') + step()
         + periph() + step(),
-    # broadcast (id 0) to LONG_TERM subscribers on both connections
-    "broadcast_two_conns": text('{"FID":"fuzz.full","SID":8,"FLAGS":4}', 0)
-        + text('{"FID":"fuzz.full","SID":9,"FLAGS":4}', 1) + step()
+    # Публичная рассылка (без SID) двум подписчикам на разных соединениях
+    "broadcast_two_conns": text('{"FID":"fuzz.full","SID":8,"ARG":{"RDL":0}}', 0)
+        + text('{"FID":"fuzz.full","SID":9,"ARG":{"RDL":0}}', 1) + step()
         + periph(PERIPH_BROADCAST) + step(),
-    # client disconnects while its call waits for the peripheral
-    "disconnect_while_waiting": text('{"FID":"fuzz.full","SID":10,"FLAGS":2}') + step()
+    # Клиент уходит, пока вызов ждёт периферию
+    "disconnect_while_waiting": text('{"FID":"fuzz.full","SID":10,"ARG":{"a":1}}') + step()
         + toggle(0) + periph() + step(),
-    # idle long enough to ping, ping send fails
-    "ping_fail": text('{"FID":"fuzz.full","SID":11,"FLAGS":4}') + step()
+    # Простой, а затем неудачная отправка
+    "idle_send_fail": text('{"FID":"fuzz.full","SID":11,"ARG":{"RDL":0}}') + step()
         + send_result(0, True) + tick(255) + step(),
-    # control frames
+    # Управляющие кадры транспорта
     "frames": frame(0, 2) + frame(0, 3, b"hi") + frame(1, 4) + frame(1, 1, b"\x00"),
-    # peripheral queue overflow -> BUSY
-    "periph_busy": b"".join(text('{"FID":"fuzz.full","SID":%d,"FLAGS":%d}' % (20 + i, 2 + 2 * (i & 1))) for i in range(6))
+    # Очередь периферии переполнена — BUSY
+    "periph_busy": b"".join(text('{"FID":"fuzz.full","SID":%d,"ARG":{"a":%d}}' % (20 + i, i)) for i in range(6))
         + step(),
 }
 

@@ -77,3 +77,16 @@ CONFIG_WIFI_AP_DEFAULT_PASS=""
 # доступа, а к внешней сети подключается, когда её зададут через wifi.sta.
 CONFIG_WIFI_STA_DEFAULT_SSID=""
 CONFIG_WIFI_STA_DEFAULT_PASS=""
+
+# ── Распиновка платы (меню "Board configuration") ────────────────────────────
+# Значения совпадают с прежним main/board_config.h: uart0 — консоль 1/3/RTS22,
+# uart1 — 19/18/RTS21, uart2 — 17/16/RTS23. -1 означает «пин не назначен».
+CONFIG_GW_UART0_TX=1
+CONFIG_GW_UART0_RX=3
+CONFIG_GW_UART0_RTS=22
+CONFIG_GW_UART1_TX=19
+CONFIG_GW_UART1_RX=18
+CONFIG_GW_UART1_RTS=21
+CONFIG_GW_UART2_TX=17
+CONFIG_GW_UART2_RX=16
+CONFIG_GW_UART2_RTS=23

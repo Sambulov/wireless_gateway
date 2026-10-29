@@ -1,7 +1,7 @@
 /*
  * libFuzzer harness for the API kernel's untrusted-input entry point.
  *
- * A WebSocket client sends the JSON text {"FID":"..","FLAGS":..,"SID":..,"ARG":..}.
+ * A WebSocket client sends the JSON text {"FID":"..","SID":..,"ARG":..}.
  * These bytes are the first attacker-controlled data that reaches the firmware,
  * so this is the highest-value fuzz target here.
  *
@@ -10,7 +10,7 @@
  * хостовые тесты, — и подаёт вход как текстовый кадр WebSocket. Дальше харнесс
  * играет роль периферии: запрос доставляется ядром ВЫЗОВОМ ОБРАБОТЧИКА (очередей
  * у ядра нет), обработчик складывает вызов в свою — внутреннюю — очередь, а
- * харнесс отвечает ему позже через api_reply. Так один вход проходит весь
+ * харнесс отвечает ему позже через api_call_send_arg. Так один вход проходит весь
  * жизненный цикл вызова: разбор → регистрация → вызов обработчика → ответ →
  * отправка клиенту → снятие вызова либо переопрос подписки. Завершение вызова —
  * это возврат обработчика (FALSE), отдельного «завершить» у ядра нет; адресат
@@ -79,7 +79,7 @@ static uint8_t fuzz_done_handler(void *call, void **ctx, uint8_t *data, uint32_t
     (void)ctx; (void)data; (void)len;
     if (!call) return 0;
     const uint8_t body[] = "{\"OK\":1}";
-    api_reply(call, body, sizeof(body) - 1);
+    api_call_send_arg(call, (const char *)body, sizeof(body) - 1);
     return 0;                       /* FALSE — вызов завершён */
 }
 
@@ -89,7 +89,7 @@ static uint8_t fuzz_alive_handler(void *call, void **ctx, uint8_t *data, uint32_
     (void)ctx; (void)data; (void)len;
     if (!call) return 0;
     const uint8_t body[] = "{\"ALIVE\":1}";
-    api_reply(call, body, sizeof(body) - 1);
+    api_call_send_arg(call, (const char *)body, sizeof(body) - 1);
     return (++fuzz_alive_rounds % 8) != 0;      /* иногда всё же завершается */
 }
 
@@ -120,7 +120,7 @@ static uint8_t fuzz_periph_handler(void *call, void **ctx, uint8_t *data, uint32
         /* Очередь полна — честный отказ, как у сервиса с ограниченной очередью:
          * ответ уходит сразу, и вызов завершается. */
         const uint8_t busy[] = "{\"STA\":\"0x80000008\"}";
-        api_reply(call, busy, sizeof(busy) - 1);
+        api_call_send_arg(call, (const char *)busy, sizeof(busy) - 1);
         return 0;
     }
     periph_calls[periph_n++] = call;
@@ -131,20 +131,20 @@ static uint8_t fuzz_periph_handler(void *call, void **ctx, uint8_t *data, uint32
 /* api_deinit() снимает и регистрации (освобождает их списки), поэтому после
  * каждого входа их надо оформить заново — уже на новом ядре. */
 static void register_test_endpoints(void) {
-    api_register_handler(api, fuzz_done_handler,   FUZZ_FID_FULL,  NULL);
-    api_register_handler(api, fuzz_alive_handler,  FUZZ_FID_ALIVE, NULL);
-    api_register_handler(api, fuzz_periph_handler, FUZZ_FID_QUEUE, NULL);
+    api_call_register(api, fuzz_done_handler,   FUZZ_FID_FULL,  NULL);
+    api_call_register(api, fuzz_alive_handler,  FUZZ_FID_ALIVE, NULL);
+    api_call_register(api, fuzz_periph_handler, FUZZ_FID_QUEUE, NULL);
 }
 
 /* Фальшивая периферия: отвечает на всё, что её обработчик забрал. Ответ идёт
- * через дескриптор вызова (api_reply) — ядро вызов помнит сам, а очередей ему
- * для этого не нужно. */
+ * через дескриптор вызова (api_call_send_arg) — ядро вызов помнит сам, а
+ * очередей ему для этого не нужно. */
 static void periph_service(void) {
     const uint8_t body[] = "{\"OK\":1}";
     for (int i = 0; i < periph_n; i++) {
         if (!periph_calls[i] || periph_answered[i])
             continue;
-        api_reply(periph_calls[i], body, sizeof(body) - 1);
+        api_call_send_arg(periph_calls[i], (const char *)body, sizeof(body) - 1);
         periph_answered[i] = 1;                 /* закроется следующим тактом */
     }
 }

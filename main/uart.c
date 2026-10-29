@@ -240,8 +240,8 @@ static uart_mode_t uart_mode_idf(gw_uart_mode_t mode) {
 #if GW_LOG_MODULE
 static const char *uart_mode_name(gw_uart_mode_t mode) {
     switch (mode) {
-        case GW_UART_MODE_RS485_HALF_DUPLEX: return "RS-485";
-        case GW_UART_MODE_UART_SINGLE_WIRE:  return "UART 1-wire";
+        case GW_UART_MODE_RS485_HALF_DUPLEX: return "полудуплекс";
+        case GW_UART_MODE_UART_SINGLE_WIRE:  return "однопроводный";
         case GW_UART_MODE_UART:
         default:                             return "UART";
     }
@@ -343,24 +343,33 @@ uint8_t gw_uart_init(void *desc, gw_uart_port_t port, uint32_t buffer_size) {
         default: return 0;
     }
     uart->port = port;
-    /* Умолчание по порту — обычный UART. RS-485 по номеру порта не включается:
-     * он глушит собственный приём и делает порт без трансивера глухим. Режим
-     * задаётся настройкой порта (uartN.config, MODE 1, см. BOARD_UART2_DEFAULT_RS485). */
+    /* Умолчание по порту — обычный UART; режим задаётся только настройкой порта
+     * (uartN.config, MODE). */
     gw_uart_config_t cnf = gw_uart_config_default;
-#if BOARD_UART2_DEFAULT_RS485
-    if (uart->port == UART_NUM_2)
-        cnf.mode = GW_UART_MODE_RS485_HALF_DUPLEX;
-#endif
     uint8_t result = gw_uart_set(desc, &cnf);
     int rxp, txp, rtsp;
     int cts = UART_PIN_NO_CHANGE;
 
     if (uart->port < 0 || uart->port > 2)
         return 0;
-    /* Пины — из конфигурации платы (main/board_config.h). */
-    txp  = BOARD_UART_TX(uart->port);
-    rxp  = BOARD_UART_RX(uart->port);
-    rtsp = BOARD_UART_RTS(uart->port);
+    /* Пины — из конфигурации платы (Kconfig, меню "Board configuration"). */
+    switch (uart->port) {
+        case 0:
+            txp  = CONFIG_GW_UART0_TX;
+            rxp  = CONFIG_GW_UART0_RX;
+            rtsp = CONFIG_GW_UART0_RTS;
+            break;
+        case 1:
+            txp  = CONFIG_GW_UART1_TX;
+            rxp  = CONFIG_GW_UART1_RX;
+            rtsp = CONFIG_GW_UART1_RTS;
+            break;
+        default:
+            txp  = CONFIG_GW_UART2_TX;
+            rxp  = CONFIG_GW_UART2_RX;
+            rtsp = CONFIG_GW_UART2_RTS;
+            break;
+    }
     if (!uart_pin_ok((int8_t)txp, 1) || !uart_pin_ok((int8_t)rxp, 0)
         || !uart_pin_ok((int8_t)rtsp, 1)) {
         ESP_LOGE(TAG, "UART %d: недопустимые пины TX=%d RX=%d RTS=%d", uart->port, txp, rxp, rtsp);

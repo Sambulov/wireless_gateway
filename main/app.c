@@ -93,7 +93,7 @@ static api_system_t app_api_system = {
 /* ── Одна задача такта на все ядра ─────────────────────────────────────────
  *
  * Такт всем ядрам даёт ОДНА задача — ядра обслуживаются по очереди, по вызову
- * api_worker на каждое. Пауза — API_WORK_PERIOD_MS (api.h): иначе «такт ядра» и
+ * api_worker на каждое. Пауза — API_PULSE_INTERVAL_MS (api.h): иначе «такт ядра» и
  * «пауза вызывающего» разошлись бы. Стек 8192: такт зовёт обработчики сервисов
  * (Modbus, UART, системные), стек у них общий. */
 static void api_worker_task(void *param)
@@ -103,21 +103,8 @@ static void api_worker_task(void *param)
     for (;;) {
         api_worker(app->api_ap);
         api_worker(app->api_sta);
-        platform_delay_ms(API_WORK_PERIOD_MS);
+        platform_delay_ms(API_PULSE_INTERVAL_MS);
     }
-}
-
-/* ── Активация WS-точки ────────────────────────────────────────────────────
- *
- * open транспорта — единственная операция, после которой точка принимает
- * соединения: до неё URI закреплён за объектом веб-сервера, но httpd о нём не
- * знает. */
-static uint8_t ws_activate(const transport_t *transport)
-{
-    if ((transport == NULL) || (transport->iface == NULL) ||
-        (transport->iface->open == NULL))
-        return 0;
-    return transport->iface->open(transport->context, NULL) == TRANSPORT_OK;
 }
 
 /* ── Что оказано интерфейсу ────────────────────────────────────────────────
@@ -217,7 +204,7 @@ void app_main(void)
         ESP_LOGE(TAG, "Сокетный слой веб-сервера поднялся не полностью");
 
     /* Объект веб-сервера заводят до транспорта: другого способа его получить
-     * нет — транспорт порождает сам объект (web_server_open_websocket). */
+     * нет — транспорт порождает приложение (ws_transport_create). */
     app_context.web_ap  = web_server_open(GW_IFACE_AP);
     app_context.web_sta = web_server_open(GW_IFACE_STA);
 #ifdef CONFIG_QEMU_BUILD
@@ -237,34 +224,23 @@ void app_main(void)
     register_pages(app_context.web_eth, 0);
 #endif
 
-    /* Транспорт порождает сам веб-сервер: интерфейс задан тем, кто его породил.
-     * Объектов два — транспорта тоже два, у каждого своя точка и свой URI. */
-    transport_t *ws_ap  = web_server_open_websocket(app_context.web_ap,  "/api");
-    transport_t *ws_sta = web_server_open_websocket(app_context.web_sta, "/api");
+    /* Транспорт порождает приложение: ws_transport_create только заполняет
+     * объект (методы + веб-сервер как контекст), а путь, подписка и цикл — в open,
+     * который зовёт api_init. */
+    transport_t *ws_ap  = ws_transport_create(app_context.web_ap);
+    transport_t *ws_sta = ws_transport_create(app_context.web_sta);
     if (ws_ap == NULL)  ESP_LOGE(TAG, "WebSocket transport (AP) not created");
     if (ws_sta == NULL) ESP_LOGE(TAG, "WebSocket transport (STA) not created");
 
-    /* Ядер два, потому что транспорта два: клиенты точки доступа и клиенты
-     * станционной сети обслуживаются разными ядрами. Дескрипторы создаёт само
-     * ядро (api_init) — он же и есть назначение обработчика транспорту: до
-     * этого URI точки не активен, соединение не находит пути. */
-    app_context.api_ap  = api_init(ws_ap,  &app_api_system);
-    app_context.api_sta = api_init(ws_sta, &app_api_system);
+    /* Ядер два, потому что транспорта два. api_init сам подписывается на события
+     * и открывает транспорт (open получает config). */
+    app_context.api_ap  = api_init(ws_ap,  "/api", &app_api_system);
+    app_context.api_sta = api_init(ws_sta, "/api", &app_api_system);
 
     if (app_context.api_ap == NULL)
         ESP_LOGE(TAG, "API core (AP) not started");
     if (app_context.api_sta == NULL)
         ESP_LOGE(TAG, "API core (STA) not started");
-
-    /* Последний шаг — активация URI: open включает точку. Без обоих ядер не
-     * активируем: соединение пришло бы транспорту, который некому отдать.
-     * HTTP-страницы от ядер не зависят. */
-    if ((app_context.api_ap != NULL) && (app_context.api_sta != NULL)) {
-        if (!ws_activate(ws_ap) || !ws_activate(ws_sta))
-            ESP_LOGE(TAG, "WebSocket transport not started");
-    } else {
-        ESP_LOGE(TAG, "WebSocket transport not started");
-    }
 
     /* Задача такта — одна на оба ядра (см. api_worker_task), и только когда есть
      * что обслуживать: у снятого ядра такт — пустой вызов. */

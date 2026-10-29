@@ -33,19 +33,21 @@ extern "C" {
  * транспорт (ws_transport_stub_last_sent).
  *
  * Очередей ни у ядра, ни у сервиса нет: запрос доставляется вызовом обработчика,
- * ответ уходит по дескриптору вызова (api_reply), а кадр приёма порта —
- * публичной рассылкой по имени FID (api_broadcast). */
+ * ответ уходит по дескриптору вызова (api_call_send_arg), а кадр приёма порта —
+ * публичной рассылкой по имени FID (api_call_group_fid_data). */
 
-/* Кадр клиента: {"FID":…,"FLAGS":…,"SID":…[,"ARG":…]} + один такт ядра. */
+/* Кадр клиента: {"FID":…,"SID":…[,"ARG":…]} + один такт ядра. FLAGS в протоколе
+ * нет: тип вызова задаёт SID (§1.3). */
 static void client_frame(api_t *api, ws_transport_stub_conn_t *conn,
                          const char *fid, int flags, int sid, const char *arg = NULL) {
     char frame[256];
+    (void)flags;
     if (arg)
         snprintf(frame, sizeof(frame),
-                 "{\"FID\":\"%s\",\"FLAGS\":%d,\"SID\":%d,\"ARG\":%s}", fid, flags, sid, arg);
+                 "{\"FID\":\"%s\",\"SID\":%d,\"ARG\":%s}", fid, sid, arg);
     else
         snprintf(frame, sizeof(frame),
-                 "{\"FID\":\"%s\",\"FLAGS\":%d,\"SID\":%d}", fid, flags, sid);
+                 "{\"FID\":\"%s\",\"SID\":%d}", fid, sid);
     ws_transport_stub_frame(conn, WS_STUB_FRAME_TEXT, frame, strlen(frame), 1);
     api_worker(api);
 }
@@ -56,11 +58,11 @@ static void client_request(api_t *api, ws_transport_stub_conn_t *conn,
     client_frame(api, conn, fid, 0, sid, arg);
 }
 
-/* Подписка (FLAGS:4): данные порта сервис отдаёт рассылкой по FID, а рассылка
- * находит только живые вызовы этого FID. */
+/* Подписка: данные порта сервис отдаёт рассылкой по FID, а рассылка находит
+ * только живые вызовы этого FID. Пустой ARG означал бы отписку (§3.5). */
 static void client_subscription(api_t *api, ws_transport_stub_conn_t *conn,
                                 const char *fid, int sid) {
-    client_frame(api, conn, fid, 4, sid, NULL);
+    client_frame(api, conn, fid, 4, sid, "{\"RDL\":200}");
 }
 
 /* Такт ядра без нового кадра: по нему сервис отдаёт накопленное (подписка
@@ -97,6 +99,7 @@ static int count_char(const char *s, char c) {
         system_stub_reset();                          \
         ws_transport_stub_reset();                    \
         gw_uart_stub_reset();                         \
+        apih_uart_test_reset();                       \
         api = ws_transport_stub_init();               \
         conn = ws_transport_stub_connect(1);          \
         app.api_ap = api;                             \
@@ -106,9 +109,9 @@ static int count_char(const char *s, char c) {
 
 #define UART_TEARDOWN()                               \
     do {                                              \
+        api_deinit(api);                              \
         apih_uart_test_reset();                       \
         ws_transport_stub_reset();                    \
-        api_deinit(api);                              \
     } while (0)
 
 TEST_GROUP(ApihUartCnf) {
@@ -202,12 +205,12 @@ TEST(ApihUartCnf, ResponseGoesToClient) {
 }
 
 /* Запись ТЕХ ЖЕ значений настроек ничего не меняет — рассылки нет: клиент
- * получает только ответ на свой вызов (DELIVERED и ответ с его SID). */
+ * получает только ответ на свой вызов (один кадр с его SID). */
 TEST(ApihUartCnf, SameValuesDoNotBroadcast) {
     client_request(api, conn, ESP_WS_API_UART0_CNF, 1, "{\"BR\":4800}");
     const int before = ws_transport_stub_send_attempts(conn);
     client_request(api, conn, ESP_WS_API_UART0_CNF, 2, "{\"BR\":4800}");
-    LONGS_EQUAL(before + 2, ws_transport_stub_send_attempts(conn));
+    LONGS_EQUAL(before + 1, ws_transport_stub_send_attempts(conn));
     STRCMP_CONTAINS("\"SID\":\"0x00000002\"", ws_transport_stub_last_sent(conn));
 }
 
@@ -425,24 +428,24 @@ TEST(ApihUartRx, FrameContentMatchesTheRing) {
 
     /* Один незакрытый сегмент — непрерывный поток линии. */
     apih_uart_test_fill_rx_idle(2, input, sizeof(input), 0, 0);
-    worker_tick(api, 100);
-    /* Ещё такт: кадр ограничен накопителем, остаток уходит следующим. */
-    worker_tick(api, 100);
-    worker_tick(api, 100);
 
+    /* У пира в работе один кадр, остальные ждут в его очереди: чтобы вытолкнуть
+     * следующий, предыдущий надо завершить. */
     static uint8_t decoded[8192];
     size_t got = 0;
-    const char *sent = ws_transport_stub_last_sent(conn);
-    (void)sent;
-    int frames = ws_transport_stub_pending_count(conn);
-    CHECK(frames >= 1);
-    for (int i = 0; i < frames; i++) {
-        const void *data = ws_transport_stub_pending_data(conn, i);
-        CHECK(data != NULL);
-        /* Данные кадра — тот же конверт, что уходит клиенту, но без '\0'. */
-        got += take_parts_len(data, ws_transport_stub_pending_len(conn, i),
-                              &decoded[got],
-                              (got < sizeof(decoded)) ? sizeof(decoded) - got : 0);
+    for (int round = 0; round < 32; round++) {
+        worker_tick(api, 100);
+        int frames = ws_transport_stub_pending_count(conn);
+        if (frames == 0) break;
+        for (int i = 0; i < frames; i++) {
+            const void *data = ws_transport_stub_pending_data(conn, i);
+            CHECK(data != NULL);
+            /* Данные кадра — тот же конверт, что уходит клиенту, но без '\0'. */
+            got += take_parts_len(data, ws_transport_stub_pending_len(conn, i),
+                                  &decoded[got],
+                                  (got < sizeof(decoded)) ? sizeof(decoded) - got : 0);
+        }
+        ws_transport_stub_complete_pending(conn, TRANSPORT_OK);
     }
     ws_transport_stub_set_deferred(conn, 0);
 
@@ -520,11 +523,13 @@ TEST(ApihUartRx, StuckPendingFrameDoesNotBlockThePort) {
 
 TEST(ApihUartRx, BufferClearedAfterRead) {
     client_subscription(api, conn, ESP_WS_API_UART2_RAW_RX, 1);
+    worker_tick(api, 100);                 /* устоялось: всё, что было в полёте, ушло */
 
     const uint8_t payload[] = "Hi";
     apih_uart_test_fill_rx(2, payload, 2);
     worker_tick(api, 100);
     const int after_first = ws_transport_stub_send_attempts(conn);
+    CHECK(after_first > 0);
 
     /* Второй опрос того же порта: кольцо пусто — данных нет, кадра нет. */
     worker_tick(api, 100);
@@ -544,6 +549,7 @@ TEST(ApihUartRx, BufferClearedAfterRead) {
 
 TEST(ApihUartRx, SecondFrameWaitsForTheRateGate) {
     client_subscription(api, conn, ESP_WS_API_UART2_RAW_RX, 1);
+    worker_tick(api, 100);                 /* устоялось: всё, что было в полёте, ушло */
     const int before = ws_transport_stub_send_attempts(conn);
 
     /* Первый кадр уходит сразу — ждать нечего */
@@ -570,6 +576,7 @@ TEST(ApihUartRx, RateGateIsPerPort) {
      * первый. */
     client_subscription(api, conn, ESP_WS_API_UART0_RAW_RX, 1);
     client_subscription(api, conn, ESP_WS_API_UART2_RAW_RX, 2);
+    worker_tick(api, 100);                 /* устоялось: всё, что было в полёте, ушло */
     const int before = ws_transport_stub_send_attempts(conn);
 
     const uint8_t data[] = "x";

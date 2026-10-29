@@ -84,12 +84,24 @@ typedef struct {
     /* Сколько сообщений этого соединения ждёт доставки: пока счётчик не ноль,
      * дескриптор не освобождается (на него ссылаются записи очереди). */
     uint16_t recv_queued;
-    /* Начатый кадр, который клиент ещё не принял целиком: своя копия заголовка и
-     * данных. send с MSG_DONTWAIT пишет сколько влезло, а кадр нельзя ни бросить
-     * на середине, ни смешать со следующим — остаток досылает такт (poll). */
-    uint8_t *out;
-    uint32_t out_len;
-    uint32_t out_off;
+    /* Отправка — три режима контракта begin_send:
+     *   1) data != NULL                 — zero-copy: блок издателя живёт до завершения;
+     *   2) data == NULL, length < STREAM — транспорт выделяет буфер с запасом под свой
+     *      заголовок и ВЫДАЁТ его событием TRANSFER_BUFFER; издатель заполняет прямо в
+     *      обработчике и ставит fill;
+     *   3) data == NULL, length == STREAM — поток таких выдач до break_sending.
+     * Заголовок кадра пишется в запас перед выданным указателем, поэтому полезная
+     * нагрузка не копируется ни в одном режиме. */
+    uint8_t  hdr[10];
+    uint32_t hdr_len;        /* заголовок кадра WS (режим 1) */
+    uint32_t hdr_off;
+    const uint8_t *tx_data;  /* данные: чужой блок (1) или наш буфер (2,3) */
+    uint32_t tx_len;
+    uint32_t tx_off;
+    uint8_t  tx_mode;        /* 0 — свободно, 1 — zero-copy, 2 — выдача, 3 — поток */
+    uint32_t tx_expected;    /* сколько обещано издателю (2,3) */
+    uint32_t tx_given;       /* сколько уже отдано (2,3) */
+    uint8_t *tx_buf;         /* наш буфер под выдачу: запас + данные */
     uint32_t out_since;      /* когда кадр начат — для решения «клиент пропал» */
     uint8_t  out_pending;    /* в буфере есть недописанное */
     uint16_t out_dropped;    /* сколько кадров отброшено за время занятости */
@@ -98,8 +110,14 @@ typedef struct {
 /* Предел отложенного кадра на соединение: кадр потока — до ~2,7 КБ base64,
  * ответ вызова — сотни байт, 8 КБ хватает. Больше — отбрасываем. */
 #define WS_OUT_MAX   8192u
+/* Запас впереди данных под заголовок кадра: когда буфер выдаём МЫ, издатель
+ * получает смещённый указатель, а заголовок встаёт в этот запас — кадр уходит
+ * одним куском без копирования полезной нагрузки. */
+#define WS_FRAME_HEADROOM 14u
 /* Сколько кадр может висеть без прогресса, прежде чем клиент считается пропавшим. */
 #define WS_OUT_DEAD_MS   20000u
+/* Сколько принятых сообщений разбираем за один такт транспорта. */
+#define WS_DELIVER_PER_CYCLE 8
 
 /* Принятое сообщение, ждущее доставки ядру. Копия, а не указатель на буфер
  * соединения: буфер переиспользуется следующим сообщением. */
@@ -113,15 +131,12 @@ typedef struct ws_transport_recv_s {
 
 /* ── Пул дескрипторов соединений ──────────────────────────────────────────────
  *
- * Дескрипторы НЕ освобождаются: такт ядра (ws_httpd_poll → ws_out_pump) работает
- * по снимку указателей, сделанному до того, как задача веб-сервера закроет
- * сессию, а освобождённый дескриптор в этом снимке — LoadProhibited (поймано
- * штормом переподключений: несколько паник за минуту). Поэтому дескриптор живёт
- * в пуле, а «освобождение» — это возврат слота: буферы отдаются, fd становится -1,
- * busy снимается, номер поколения растёт. Записи очереди приёма запоминают
- * поколение и доставляются только своему дескриптору.
+ * Дескрипторы не освобождаются: такт работает по снимку указателей, сделанному
+ * до закрытия сессии, поэтому «освобождение» — это возврат слота: буферы
+ * отдаются, fd становится -1, busy снимается, номер поколения растёт. Записи
+ * очереди приёма запоминают поколение и доставляются только своему дескриптору.
  *
- * Пул на два экземпляра (AP и STA): столько же соединений, сколько у них всего. */
+ * Пул на два экземпляра (AP и STA). */
 static ws_transport_conn_t ws_conn_pool[WS_CONN_MAX * 2];
 static platform_mutex_t    ws_pool_lock;
 static uint32_t            ws_conn_gen;
@@ -147,8 +162,8 @@ static ws_transport_conn_t *conn_alloc(void) {
  * отправок в работе нет, очередь приёма пуста. */
 static void conn_release(ws_transport_conn_t *conn) {
     if ((conn == NULL) || !conn->busy) return;
-    free(conn->out);
-    conn->out = NULL;
+    free(conn->tx_buf);
+    conn->tx_buf = NULL;
     free(conn->msg);
     conn->msg = NULL;
     conn->fd  = -1;
@@ -170,35 +185,40 @@ static void conn_release(ws_transport_conn_t *conn) {
  * адрес под указатель, а экземпляр выровнен calloc'ом достаточно для любого поля.
  */
 struct ws_transport_module_s {
-    /* Подписка экземпляра: события event_raise уходят подписчику, который дал
-     * делегат в subscribe(). Список подписчиков лежит в самом event_t, поэтому
-     * «подписан ли кто-нибудь» видно по результату event_raise. */
     event_t   on_event;
-    /* Веб-сервер своего интерфейса и путь WS-точки (дал web_server_open_websocket):
-     * через сервер экземпляр активирует путь, закрывает соединения и шлёт кадры. */
+    /* Веб-сервер своего интерфейса и путь WS-точки (путь даёт open). */
     web_server_t *server;
     char         *uri;
     uint8_t   inited;
     uint8_t   opened;
-    /* Отправку httpd ставит в очередь датаграммой по UDP: под нагрузкой она
-     * теряется, и колбэк не приходит никогда — буферы остаются занятыми. */
-    /* Соединения экземпляра — по ним такт транспорта досылает начатые кадры.
-     * Список фиксированный: соединений не больше, чем сессий у веб-сервера. */
+    /* Соединения экземпляра — по ним такт транспорта досылает начатые кадры. */
     platform_mutex_t conn_lock;
     ws_transport_conn_t *conns[WS_CONN_MAX];
-    /* Принятые, но ещё не разобранные сообщения: их доставляет poll в задаче
-     * приложения, задача веб-сервера только копирует сюда — разбор ей не по стеку. */
+    /* Принятые, но ещё не разобранные сообщения: их доставляет рабочий такт
+     * транспорта, задача веб-сервера только копирует сюда. */
     platform_mutex_t recv_lock;
     ws_transport_recv_t *recv_head;
     ws_transport_recv_t *recv_tail;
     uint32_t recv_bytes;
+    TaskHandle_t cycle_task;
+    volatile uint8_t cycle_stop;
 };
 
-/* Настройки экземпляра — то, что передаёт web_server_open_websocket. */
-typedef struct {
-    const char   *uri;       /* путь WebSocket-точки */
-    web_server_t *server;    /* объект веб-сервера своего интерфейса */
-} ws_transport_config_t;
+/* Состояние реализаций: по одному на интерфейс (AP и STA). В объекте транспорта
+ * его нет — там лежит веб-сервер. */
+#define WS_MODULE_COUNT 2
+static ws_transport_module_t ws_modules[WS_MODULE_COUNT];
+
+static web_server_t *srv_of(const void *self) {
+    const transport_t *tr = (const transport_t *)self;
+    return (tr != NULL) ? (web_server_t *)tr->context : NULL;
+}
+
+static ws_transport_module_t *mod_of(const void *self) {
+    web_server_t *srv = srv_of(self);
+    if(srv == NULL) return NULL;
+    return &ws_modules[(web_server_iface(srv) == GW_IFACE_STA) ? 1 : 0];
+}
 
 static esp_err_t ws_httpd_handler(httpd_req_t *req);
 #if WS_CONN_FROM_POST_HANDSHAKE_CB
@@ -261,10 +281,14 @@ static void session_free_ctx(void *ctx) {
     if(conn == NULL) return;
     event_unsubscribe(&conn->delegate);
     conn_list_remove(conn->module, conn);
-    free(conn->out);
-    conn->out     = NULL;
-    conn->out_len = 0;
-    conn->out_off = 0;
+    free(conn->tx_buf);
+    conn->tx_buf      = NULL;
+    conn->tx_data     = NULL;
+    conn->tx_len      = 0;
+    conn->tx_off      = 0;
+    conn->hdr_len     = 0;
+    conn->hdr_off     = 0;
+    conn->tx_mode     = 0;
     conn->out_pending = 0;
     /* Сокет больше не наш — httpd мог отдать его новому соединению: -1 не даёт
      * позднему закрытию закрыть ЧУЖОЙ сокет. */
@@ -297,19 +321,30 @@ static void link_event_handler(void *event_trigger, void *sender, void *context)
 
 /* --- Операции транспорта как модуля --------------------------------------- */
 
-/* Такт транспорта (transport_iface_t poll): доставка принятого подписчику.
- * Зовётся из задачи приложения — там стек 8 КБ, а не 4, как у веб-сервера.
- * Очередь FIFO: ядро получает сообщения в том порядке, в каком они пришли. */
+/* Рабочий такт транспорта: досылка начатых кадров и доставка принятого
+ * подписчику (ядру). Очередь FIFO: ядро получает сообщения в том порядке, в каком
+ * они пришли.
+ *
+ * Крутит его САМ транспорт — своей задачей (см. ws_cycle_task): экземпляр
+ * порождает слой веба, он же отвечает за рабочие циклы своего транспорта, а ядру
+ * API цикл чужого объекта знать незачем. Стек здесь свой (4 КБ), поэтому разбор
+ * сообщения идёт в этой задаче, а не в задаче веб-сервера (там оставалось 360
+ * байт из 4096 — замерено на приборе). */
 static int  out_flush(ws_transport_conn_t *conn);
 static void ws_out_pump(ws_transport_module_t *m);
+static void tx_offer(ws_transport_conn_t *conn);
 
 static void ws_httpd_poll(const void *self) {
     ws_transport_module_t *m = (ws_transport_module_t *)self;
     if(m == NULL || m->recv_lock == NULL) return;
 
+    /* Сначала досылка: она не должна ждать разбора принятого. */
     ws_out_pump(m);
 
-    for(;;) {
+    /* За такт разбираем ОГРАНИЧЕННОЕ число сообщений. Доставка уходит в ядро (там
+     * свой мьютекс и работа с вызовами), и если она займёт все сообщения сразу,
+     * следующий такт начнётся поздно — а это напрямую задержка отправки. */
+    for(int i = 0; i < WS_DELIVER_PER_CYCLE; i++) {
         platform_mutex_take(m->recv_lock, PLATFORM_WAIT_FOREVER);
         ws_transport_recv_t *rec = m->recv_head;
         if(rec != NULL) {
@@ -342,6 +377,41 @@ static void ws_httpd_poll(const void *self) {
     }
 }
 
+/* Задача рабочего такта транспорта: цикл, пока экземпляр открыт. Приоритет ВЫШЕ
+ * задачи такта API (5, см. app.c): досылка кадров — это работа с сокетом, и если
+ * её отодвигать, весь поток встаёт за одним недодосланным кадром. */
+#define WS_CYCLE_PERIOD_MS  2
+#define WS_CYCLE_STACK      4096
+#define WS_CYCLE_PRIO       6
+
+static void ws_cycle_task(void *arg) {
+    ws_transport_module_t *m = (ws_transport_module_t *)arg;
+    while(!m->cycle_stop) {
+        ws_httpd_poll(m);
+        vTaskDelay(pdMS_TO_TICKS(WS_CYCLE_PERIOD_MS));
+    }
+    m->cycle_task = NULL;
+    vTaskDelete(NULL);
+}
+
+static void ws_cycle_start(ws_transport_module_t *m) {
+    if(m->cycle_task != NULL) return;
+    m->cycle_stop = 0;
+    if(xTaskCreate(ws_cycle_task, "ws_cycle", WS_CYCLE_STACK, m,
+                   WS_CYCLE_PRIO, &m->cycle_task) != pdPASS) {
+        m->cycle_task = NULL;
+        ESP_LOGE(TAG, "Не удалось запустить такт транспорта (iface=%lu)",
+                 (unsigned long)web_server_iface(m->server));
+    }
+}
+
+static void ws_cycle_stop(ws_transport_module_t *m) {
+    m->cycle_stop = 1;
+    /* Даём задаче выйти самой: она не держит ни мьютексов, ни сокетов. */
+    for(int i = 0; (i < 50) && (m->cycle_task != NULL); i++)
+        vTaskDelay(pdMS_TO_TICKS(1));
+}
+
 /* Досылка начатых кадров: клиент, снова начавший читать, получает остаток.
  * Клиента, у которого кадр не двигается дольше WS_OUT_DEAD_MS, считаем
  * пропавшим и закрываем сеанс — иначе буфер и счётчики висят вечно. */
@@ -353,51 +423,101 @@ static void ws_out_pump(ws_transport_module_t *m) {
 
     for(int i = 0; i < n; i++) {
         ws_transport_conn_t *conn = list[i];
-        if(!conn->busy || (conn->fd < 0) || (conn->out == NULL)) continue;
-        uint32_t before = conn->out_off;
+        if(!conn->busy || (conn->fd < 0)) continue;
+
+        if(!conn->hdr_len && !conn->tx_len) {
+            /* Нечего досылать: если издатель ждёт буфер — выдаём его. */
+            if((conn->tx_mode == 2) || (conn->tx_mode == 3)) tx_offer(conn);
+            continue;
+        }
+
+        const uint8_t *done_ptr = conn->tx_data;   /* для события завершения */
+        uint32_t done_len = conn->tx_len;
+        uint32_t before = conn->hdr_off + conn->tx_off;
         int rc = out_flush(conn);
-        if(rc < 0 || ((conn->out != NULL) && (conn->out_off == before) &&
+        if(rc < 0 || (((conn->hdr_off + conn->tx_off) == before) &&
                       ((uint32_t)(now - conn->out_since) > dead_ticks))) {
-            ESP_LOGW(TAG, "Клиент fd=%d не принимает кадр (%lu из %lu Б в буфере) — закрываю",
-                     conn->fd, (unsigned long)conn->out_off, (unsigned long)conn->out_len);
+            ESP_LOGW(TAG, "Клиент fd=%d не принимает кадр — закрываю", conn->fd);
             if(conn->fd >= 0) web_server_session_close(m->server, conn->fd);
             continue;
         }
-        if(conn->out != NULL && (conn->out_off > before))
+        if((conn->hdr_off + conn->tx_off) > before)
             conn->out_since = now;          /* прогресс есть — отсчёт заново */
+        if(conn->hdr_len || conn->tx_len) continue;   /* кадр ещё идёт */
+
+        /* Кадр ушёл целиком. В режиме zero-copy сообщаем издателю, что его блок
+         * больше не нужен (по этому указателю он находит свой кадр). */
+        if(conn->tx_mode == 1) {
+            conn->tx_mode = 0;
+            transport_event_trigger_t ev = { .event = TRANSPORT_TRANSFER_COMPLETE };
+            ev.data.ptr    = done_ptr;
+            ev.data.length = done_len;
+            ev.data.left   = 0;
+            conn->in_callback = 1;
+            notify_event(conn, &ev);
+            conn->in_callback = 0;
+            if(conn->detached && !conn->sends_in_flight && !conn->recv_queued)
+                conn_release(conn);
+            continue;
+        }
+
+        /* Режимы 2/3: либо следующая часть, либо конец передачи. */
+        if((conn->tx_mode == 2) && (conn->tx_given >= conn->tx_expected)) {
+            conn->tx_mode = 0;
+            free(conn->tx_buf);
+            conn->tx_buf = NULL;
+            transport_event_trigger_t ev = { .event = TRANSPORT_TRANSFER_COMPLETE };
+            conn->in_callback = 1;
+            notify_event(conn, &ev);
+            conn->in_callback = 0;
+        } else {
+            tx_offer(conn);
+        }
     }
 }
 
-static transport_result_t ws_httpd_init(const void *self, const void *config) {
-    ws_transport_module_t *m = (ws_transport_module_t *)self;
-    const ws_transport_config_t *cfg = (const ws_transport_config_t *)config;
-    if((m == NULL) || (cfg == NULL) || (cfg->uri == NULL) || (cfg->server == NULL))
-        return TRANSPORT_BAD_CALL;
-    if(m->inited) return TRANSPORT_BUSY;   /* экземпляр уже инициализирован */
+/* Операции соединения адресуются объекту, чей контекст — соединение. */
+static ws_transport_conn_t *conn_of(const void *self) {
+    const transport_t *tr = (const transport_t *)self;
+    return (tr != NULL) ? (ws_transport_conn_t *)tr->context : NULL;
+}
 
-    /* Путь — своя копия: он живёт столько же, сколько экземпляр. */
-    m->uri = strdup(cfg->uri);
-    if(m->uri == NULL) return TRANSPORT_FAULT;
+/* Подготовить экземпляр: веб-сервер уже в контексте объекта, путь придёт в open. */
+static transport_result_t ws_httpd_init(const void *self, const void *config) {
+    (void)config;
+    ws_transport_module_t *m = mod_of(self);
+    if(m == NULL) return TRANSPORT_BAD_CALL;
+    if(m->inited) return TRANSPORT_BUSY;
+
     m->conn_lock = platform_mutex_create();
+    if(m->conn_lock == NULL) return TRANSPORT_FAULT;
     for(size_t ci = 0; ci < WS_CONN_MAX; ci++) m->conns[ci] = NULL;
     m->recv_lock = platform_mutex_create();
+    if(m->recv_lock == NULL) return TRANSPORT_FAULT;
     m->recv_head = m->recv_tail = NULL;
     m->recv_bytes = 0;
-    m->server = cfg->server;
+    m->server = srv_of(self);
     m->inited = 1;
-    LOGI(TAG, "Init, iface=%lu, uri=%s",
-             (unsigned long)web_server_iface(m->server), m->uri);
     return TRANSPORT_OK;
 }
 
-/* «Начать слушать»: активировать назначенный экземпляру URI. Раньше этого вызова
- * точка не работает, поэтому соединение, пришедшее до подписки ядра, не попадает в
- * «висящую» сессию, а не находит пути. */
+/* Открыть экземпляр: config — путь WS-точки. Занять путь, отдать httpd колбэки,
+ * запустить свой цикл. До этого вызова точка не работает. */
 static transport_result_t ws_httpd_open(const void *self, const void *config) {
-    (void)config;
-    ws_transport_module_t *m = (ws_transport_module_t *)self;
-    if((m == NULL) || !m->inited) return TRANSPORT_BAD_CALL;
+    ws_transport_module_t *m = mod_of(self);
+    const char *uri = (const char *)config;
+    if((m == NULL) || (uri == NULL) || !m->inited) return TRANSPORT_BAD_CALL;
     if(m->opened) return TRANSPORT_BUSY;
+
+    m->uri = strdup(uri);
+    if(m->uri == NULL) return TRANSPORT_FAULT;
+
+    if(!web_server_claim_ws(m->server, m->uri)) {
+        ESP_LOGE(TAG, "Путь '%s' не закреплён на интерфейсе %lu",
+                 m->uri, (unsigned long)web_server_iface(m->server));
+        return TRANSPORT_BAD_CALL;
+    }
+    web_server_transport_attach(m->server, (transport_t *)self);
 
     const web_ws_callbacks_t callbacks = {
         .handler          = ws_httpd_handler,
@@ -417,13 +537,14 @@ static transport_result_t ws_httpd_open(const void *self, const void *config) {
     }
 
     m->opened = 1;
+    ws_cycle_start(m);
     LOGI(TAG, "Open, iface=%lu: WS-точка '%s' активна",
              (unsigned long)web_server_iface(m->server), m->uri);
     return TRANSPORT_OK;
 }
 
 static transport_result_t ws_httpd_subscribe(const void *self, delegate_t *delegate) {
-    ws_transport_module_t *m = (ws_transport_module_t *)self;
+    ws_transport_module_t *m = mod_of(self);
     if((m == NULL) || (delegate == NULL) || (delegate->handler == NULL))
         return TRANSPORT_BAD_CALL;
     /* Подписчик у каждого экземпляра свой. Модуль лишь кладёт делегат в свой
@@ -436,7 +557,7 @@ static transport_result_t ws_httpd_subscribe(const void *self, delegate_t *deleg
 /* --- Операции соединения -------------------------------------------------- */
 
 static transport_result_t ws_httpd_close(const void *self) {
-    ws_transport_conn_t *conn = (ws_transport_conn_t *)self;
+    ws_transport_conn_t *conn = conn_of(self);
     if(conn == NULL) return TRANSPORT_BAD_CALL;
     /* Сессия уже закрыта (ядро снимает её раньше, чем узнаёт о завершении
      * отправок): закрывать нечего, а дескриптор мог достаться другому соединению. */
@@ -448,10 +569,37 @@ static transport_result_t ws_httpd_close(const void *self) {
     return TRANSPORT_OK;
 }
 
-/* Отправка идёт одним куском: кадр и нарезку на TCP-сегменты делает веб-сервер,
- * прерывать нечего. */
+/* Прервать начатую отправку: начатый кадр и выдача буфера бросаются, издатель
+ * получает событие ошибки (может сгенерироваться TRANSFER_ERR). */
 static transport_result_t ws_httpd_break_sending(const void *self) {
-    (void)self;
+    ws_transport_conn_t *conn = conn_of(self);
+    if(conn == NULL) return TRANSPORT_BAD_CALL;
+
+    uint8_t had = (conn->hdr_len || conn->tx_len || (conn->tx_mode != 0));
+    const uint8_t *done_ptr = (conn->tx_mode == 1) ? conn->tx_data : NULL;
+    uint32_t done_len = (conn->tx_mode == 1) ? conn->tx_len : 0;
+
+    conn->hdr_len = 0;
+    conn->hdr_off = 0;
+    conn->tx_data = NULL;
+    conn->tx_len  = 0;
+    conn->tx_off  = 0;
+    conn->tx_mode = 0;
+    conn->tx_given = 0;
+    conn->out_pending = 0;
+    free(conn->tx_buf);
+    conn->tx_buf = NULL;
+
+    if(had) {
+        transport_event_trigger_t ev = { .event = TRANSPORT_TRANSFER_ERR };
+        ev.data.ptr    = done_ptr;
+        ev.data.length = done_len;
+        conn->in_callback = 1;
+        notify_event(conn, &ev);
+        conn->in_callback = 0;
+        if(conn->detached && !conn->sends_in_flight && !conn->recv_queued)
+            conn_release(conn);
+    }
     return TRANSPORT_OK;
 }
 
@@ -474,106 +622,144 @@ static int ws_frame_header(uint8_t *hdr, uint32_t len, uint8_t opcode) {
     return n;
 }
 
-/* Досылка начатого кадра. Возврат: 1 — буфер свободен (кадр ушёл целиком),
- * 0 — остаток ждёт места в сокете, -1 — сокет сломан. */
+/* Досылка начатого кадра. Возврат: 1 — кадр ушёл целиком, 0 — остаток ждёт места
+ * в сокете, -1 — сокет сломан. Заголовок (если он отдельный) уходит первым. */
 static int out_flush(ws_transport_conn_t *conn) {
-    if(conn->out == NULL) return 1;
+    if((conn->hdr_off >= conn->hdr_len) && (conn->tx_off >= conn->tx_len)) return 1;
     /* Ожидания нет: остаток досылает такт транспорта, а ждать в такте нельзя —
      * задержка одного нечитающего клиента останавливает приём от всех. */
-    int rc = web_server_write(conn->module->server, conn->fd,
-                              (const char *)conn->out + conn->out_off,
-                              conn->out_len - conn->out_off, 0);
-    if(rc < 0) return -1;
-    conn->out_off += (uint32_t)rc;
-    if(conn->out_off < conn->out_len) return 0;
-    free(conn->out);
-    conn->out       = NULL;
-    conn->out_len   = 0;
-    conn->out_off   = 0;
+    for (int i = 0; i < 32; i++) {
+        const char *p;
+        uint32_t left;
+        if(conn->hdr_off < conn->hdr_len) {
+            p    = (const char *)conn->hdr + conn->hdr_off;
+            left = conn->hdr_len - conn->hdr_off;
+        } else {
+            p    = (const char *)conn->tx_data + conn->tx_off;
+            left = conn->tx_len - conn->tx_off;
+        }
+        int rc = web_server_write(conn->module->server, conn->fd, p, left, 0);
+        if(rc < 0) return -1;
+        if(rc == 0) break;                  /* места в сокете больше нет */
+        if(conn->hdr_off < conn->hdr_len) conn->hdr_off += (uint32_t)rc;
+        else                              conn->tx_off  += (uint32_t)rc;
+        if((conn->hdr_off >= conn->hdr_len) && (conn->tx_off >= conn->tx_len)) break;
+    }
+    if((conn->hdr_off < conn->hdr_len) || (conn->tx_off < conn->tx_len)) return 0;
+    conn->hdr_len = 0;
+    conn->hdr_off = 0;
+    conn->tx_data = NULL;
+    conn->tx_len  = 0;
+    conn->tx_off  = 0;
     conn->out_pending = 0;
     return 1;
 }
 
-/* Кадр целиком: голова и данные в ОДНОМ буфере, поэтому кадр либо есть у клиента
- * весь, либо его нет. Возврат: 1 — принят, 0 — отброшен, -1 — сокет сломан,
- * -2 — у соединения ещё не ушёл предыдущий кадр. */
-static int frame_queue(ws_transport_conn_t *conn, const void *data, uint32_t length) {
-    if(conn->out != NULL) {
-        /* Предыдущий кадр ещё в буфере: отдаём BUSY, сервис держит кадр у себя и
-         * повторит его следующим тактом. */
-        conn->out_dropped++;
-        return -2;
-    }
-
-    uint8_t header[10];
-    int hlen = ws_frame_header(header, length, 0x1);       /* 0x1 — text */
-    uint32_t total = (uint32_t)hlen + length;
-    if(total > WS_OUT_MAX) {
-        ESP_LOGW(TAG, "Кадр %lu Б больше предела %u — отброшен, fd=%d",
-                 (unsigned long)total, (unsigned)WS_OUT_MAX, conn->fd);
-        return 0;
-    }
-
-    uint8_t *buf = malloc(total);
-    if(buf == NULL) return 0;
-    memcpy(buf, header, (size_t)hlen);
-    memcpy(buf + hlen, data, length);
-    conn->out        = buf;
-    conn->out_len    = total;
-    conn->out_off    = 0;
-    conn->out_since  = platform_tick();
+/* Начать кадр из ЧУЖОГО блока (режим zero-copy): данные не копируются, а живут у
+ * издателя до TRANSFER_COMPLETE. Заголовок — свой маленький буфер. */
+static void tx_start_borrowed(ws_transport_conn_t *conn, const uint8_t *data, uint32_t length) {
+    conn->hdr_len = (uint32_t)ws_frame_header(conn->hdr, length, 0x1);   /* 0x1 — text */
+    conn->hdr_off = 0;
+    conn->tx_data = data;
+    conn->tx_len  = length;
+    conn->tx_off  = 0;
+    conn->out_since   = platform_tick();
     conn->out_pending = 1;
-
-    int sent = out_flush(conn);
-    if(sent >= 0) return 1;
-    ESP_LOGW(TAG, "out_flush: сокет сломан (fd=%d, %lu Б)", conn->fd, (unsigned long)total);
-    /* Сокет сломан: ядро узнает отказом ниже. */
-    return -1;
 }
 
+/* Закончить кадр, который издатель заполнил в нашем буфере: заголовок встаёт в
+ * запас перед данными, кадр уходит ОДНИМ непрерывным блоком. */
+static void tx_start_own(ws_transport_conn_t *conn, uint32_t fill) {
+    int hlen = ws_frame_header(conn->tx_buf, fill, 0x1);
+    conn->hdr_len = 0;
+    conn->hdr_off = 0;
+    conn->tx_data = conn->tx_buf;
+    conn->tx_len  = (uint32_t)hlen + fill;
+    conn->tx_off  = 0;
+    conn->out_since   = platform_tick();
+    conn->out_pending = 1;
+}
+
+/* Выдать издателю буфер под заполнение (режимы 2 и 3). Размер — сколько он ещё
+ * обещал (в потоке — сколько влезает). */
+static void tx_offer(ws_transport_conn_t *conn) {
+    uint32_t cap = WS_OUT_MAX;
+    if(conn->tx_mode == 2) {
+        uint32_t left = conn->tx_expected - conn->tx_given;
+        if(left == 0) {
+            conn->tx_mode = 0;
+            return;
+        }
+        if(left < cap) cap = left;
+    }
+    if(conn->tx_buf == NULL) {
+        conn->tx_buf = malloc(WS_FRAME_HEADROOM + WS_OUT_MAX);
+        if(conn->tx_buf == NULL) {
+            ESP_LOGW(TAG, "Нет памяти под буфер отправки, fd=%d", conn->fd);
+            conn->tx_mode = 0;
+            return;
+        }
+    }
+
+    transport_event_trigger_t ev;
+    memset(&ev, 0, sizeof(ev));
+    ev.event        = TRANSPORT_TRANSFER_BUFFER;
+    ev.buffer.ptr   = conn->tx_buf + WS_FRAME_HEADROOM;   /* смещённый указатель */
+    ev.buffer.size  = cap;
+    ev.buffer.fill  = 0;
+    /* Издатель заполняет буфер ПРЯМО ЗДЕСЬ и выставляет fill — по этому полю
+     * транспорт и узнаёт, сколько данных он положил. */
+    notify_event(conn, &ev);
+
+    uint32_t fill = ev.buffer.fill;
+    if(fill > cap) fill = cap;
+    if(fill == 0) {                        /* заполнять больше нечего — конец */
+        free(conn->tx_buf);
+        conn->tx_buf  = NULL;
+        conn->tx_mode = 0;
+        transport_event_trigger_t done = { .event = TRANSPORT_TRANSFER_COMPLETE };
+        notify_event(conn, &done);
+        return;
+    }
+    conn->tx_given += fill;
+    tx_start_own(conn, fill);
+}
+
+/* Три режима контракта (см. transport.h):
+ *   data != NULL            — zero-copy: блок издателя живёт до TRANSFER_COMPLETE;
+ *   data == NULL, length    — транспорт выдаёт буфер под заполнение событием
+ *                             TRANSFER_BUFFER (может быть несколько частей);
+ *   data == NULL, STREAM_LENGTH — поток таких выдач до break_sending. */
 static transport_result_t ws_httpd_begin_send(const void *self, const void *data, uint32_t length) {
-    ws_transport_conn_t *conn = (ws_transport_conn_t *)self;
-    if((conn == NULL) || (data == NULL) || (length == 0)) return TRANSPORT_BAD_CALL;
+    ws_transport_conn_t *conn = conn_of(self);
+    if(conn == NULL) return TRANSPORT_BAD_CALL;
     /* Соединение закрыто: писать некуда. */
     if(conn->fd < 0) return TRANSPORT_BAD_CALL;
 
-    /* Дескриптор нужен уведомлению: обработчик закрытия его не освободит
-     * (in_callback), поэтому освобождаем сами, если сессия уже закрыта. */
-    conn->sends_in_flight++;
-    int queued = frame_queue(conn, data, length);
-    conn->sends_in_flight--;
-
-    if(queued == -2) {
-        /* Данные остаются у вызывающего, поэтому объявлять нечего — только BUSY,
-         * по нему отправка повторится. */
-        if(conn->detached && !conn->sends_in_flight && !conn->recv_queued) conn_release(conn);
-        return TRANSPORT_BUSY;
+    if(data != NULL) {
+        if(length == 0 || length > WS_OUT_MAX) return TRANSPORT_BAD_CALL;
+        /* Предыдущий кадр ещё не ушёл — пусть издатель повторит тактом. */
+        if(conn->hdr_len || conn->tx_len || (conn->tx_mode != 0)) {
+            conn->out_dropped++;
+            return TRANSPORT_BUSY;
+        }
+        conn->tx_mode = 1;
+        tx_start_borrowed(conn, (const uint8_t *)data, length);
+        return TRANSPORT_OK;
     }
 
-    /* Завершение объявляем сразу и всегда: данные у нас в СВОЕЙ копии (или
-     * отброшены), буфер ядра больше не нужен. Отказ — только когда поток
-     * испорчен и соединение надо закрыть. */
-    transport_event_trigger_t ev = {
-        .event = (queued < 0) ? TRANSPORT_TRANSFER_ERR : TRANSPORT_TRANSFER_COMPLETE,
-    };
-    ev.data.ptr    = data;
-    ev.data.length = length;
-    ev.data.left   = 0;
-
-    conn->in_callback = 1;
-    notify_event(conn, &ev);
-    conn->in_callback = 0;
-    if(conn->detached && !conn->sends_in_flight && !conn->recv_queued) conn_release(conn);
+    if(conn->hdr_len || conn->tx_len || (conn->tx_mode != 0)) return TRANSPORT_BUSY;
+    conn->tx_mode     = (length == TRANSPORT_STREAM_LENGTH) ? 3 : 2;
+    conn->tx_expected = (length == TRANSPORT_STREAM_LENGTH) ? 0 : length;
+    conn->tx_given    = 0;
+    /* Буфер выдаём сразу: издатель обязан быть готов заполнить его прямо в
+     * обработчике события TRANSFER_BUFFER. */
+    tx_offer(conn);
     return TRANSPORT_OK;
 }
 
-static int32_t ws_httpd_peer_id(const void *self) {
-    const ws_transport_conn_t *conn = (const ws_transport_conn_t *)self;
-    return conn ? conn->fd : -1;
-}
-
-/* Таблица операций одна на все экземпляры: разница только в том, ЧЕЙ контекст
- * им передали (transport_t.context). */
+/* Таблица операций одна на все экземпляры: реализация одна, а адресат и путь
+ * приходят в объекте. */
 static const transport_iface_t ws_iface = {
     .init          = ws_httpd_init,
     .open          = ws_httpd_open,
@@ -581,8 +767,6 @@ static const transport_iface_t ws_iface = {
     .begin_send    = ws_httpd_begin_send,
     .break_sending = ws_httpd_break_sending,
     .subscribe     = ws_httpd_subscribe,
-    .poll          = ws_httpd_poll,
-    .peer_id       = ws_httpd_peer_id,
 };
 
 /* ── Объект транспорта ──────────────────────────────────────────────────────
@@ -904,48 +1088,39 @@ static esp_err_t ws_httpd_post_handshake(httpd_req_t *req) {
 
 /* --- Порождение и освобождение экземпляра --------------------------------- */
 
-/* Экземпляр порождает веб-сервер интерфейса (web_server_open_websocket): интерфейс
- * уже задан объектом, поэтому сюда он не передаётся. URI ещё не активирован —
- * активацию делает open, после того как назначен обработчик событий. */
-transport_t *ws_transport_create(web_server_t *server, const char *uri) {
-    if((server == NULL) || (uri == NULL)) return NULL;
+/* Заполнить объект транспорта: методы и контекст — веб-сервер интерфейса.
+ * Всё остальное (путь, активация, цикл) — open. */
+transport_t *ws_transport_create(web_server_t *server) {
+    if(server == NULL) return NULL;
 
     /* Пул дескрипторов общий на все экземпляры: замок заводится один раз. */
     if(ws_pool_lock == NULL) ws_pool_lock = platform_mutex_create();
     if(ws_pool_lock == NULL) return NULL;
 
-    ws_transport_module_t *m = calloc(1, sizeof(*m));
-    if(m == NULL) return NULL;
-
-    const ws_transport_config_t cfg = { .uri = uri, .server = server };
-    if(ws_iface.init(m, &cfg) != TRANSPORT_OK) {
-        free(m);
-        return NULL;
-    }
-
-    /* Объект появляется вместе с экземпляром: без контекста транспорта не бывает. */
     transport_t *transport = malloc(sizeof(*transport));
-    if(transport == NULL) {
-        while(m->recv_head != NULL) {
-            ws_transport_recv_t *rec = m->recv_head;
-            m->recv_head = rec->next;
-            free(rec);
-        }
-        free(m->uri);
-        free(m);
+    if(transport == NULL) return NULL;
+    transport->iface   = &ws_iface;
+    transport->context = server;
+
+    if(ws_iface.init(transport, NULL) != TRANSPORT_OK) {
+        free(transport);
         return NULL;
     }
-    transport->iface   = &ws_iface;
-    transport->context = m;
     return transport;
 }
 
 void ws_transport_destroy(transport_t *transport) {
     if(transport == NULL) return;
-    ws_transport_module_t *m = (ws_transport_module_t *)transport->context;
+    ws_transport_module_t *m = mod_of(transport);
     if(m != NULL) {
+        /* Сначала останавливаем свой такт: иначе он трогает освобождённый
+         * экземпляр. */
+        ws_cycle_stop(m);
         free(m->uri);
-        free(m);
+        m->uri     = NULL;
+        m->server  = NULL;
+        m->inited  = 0;
+        m->opened  = 0;
     }
     free(transport);
 }

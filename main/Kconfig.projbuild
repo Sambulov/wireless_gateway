@@ -85,6 +85,54 @@ menu "Project Configuration"
         help
             Password for the default STA network.
 
+    # ── Распиновка платы ────────────────────────────────────────────────────
+    # Что на этой плате к каким выводам припаяно. Драйверы и службы распиновки
+    # не знают — берут её отсюда. Нумерация портов АППАРАТНАЯ (uart0 — консоль),
+    # она же в именах FID (uart0.config, uart1.rx, ...).
+    #
+    # Годятся не любые выводы ESP32: 6..11 заняты SPI-flash, 34..39 работают
+    # только на вход (годятся под RX, но не под TX/RTS), 0/2/5/12/15 — strapping.
+    # -1 — пин не назначен (для RTS это «автонаправление по линии TX»).
+
+    menu "Board configuration"
+        config GW_UART0_TX
+            int "UART0 TX (консоль, лог и загрузчик)"
+            range -1 39
+            default 1
+        config GW_UART0_RX
+            int "UART0 RX (консоль)"
+            range -1 39
+            default 3
+        config GW_UART0_RTS
+            int "UART0 RTS"
+            range -1 39
+            default 22
+        config GW_UART1_TX
+            int "UART1 TX"
+            range -1 39
+            default 19
+        config GW_UART1_RX
+            int "UART1 RX"
+            range -1 39
+            default 18
+        config GW_UART1_RTS
+            int "UART1 RTS"
+            range -1 39
+            default 21
+        config GW_UART2_TX
+            int "UART2 TX"
+            range -1 39
+            default 17
+        config GW_UART2_RX
+            int "UART2 RX"
+            range -1 39
+            default 16
+        config GW_UART2_RTS
+            int "UART2 RTS"
+            range -1 39
+            default 23
+    endmenu
+
     config TEST_STRING
             string "test string config parameter"
             default "test str"

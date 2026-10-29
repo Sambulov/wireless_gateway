@@ -37,7 +37,7 @@ struct web_server {
     /* Порты сокетного слоя, в которые объект регистрирует свои пути: страницы и
      * WebSocket. NULL — порт не поднят, пути этого назначения не регистрируются. */
     web_httpd_t *ports[WEB_ROUTE_KINDS];
-    /* Транспорты, порождённые объектом (web_server_open_websocket). */
+    /* Транспорты, привязанные к объекту (web_server_transport_attach). */
     transport_t *transports[WEB_SERVER_TRANSPORTS_MAX];
     uint8_t transport_count;
     /* Учтённые соединения интерфейса: дескриптор 0 — слот свободен. */
@@ -174,45 +174,28 @@ uint8_t web_server_register_uri(web_server_t *srv, const httpd_uri_t *uri) {
     return 1;
 }
 
-/* ── Транспорт интерфейса ───────────────────────────────────────────────────
- *
- * Транспорт порождает объект, а не приходит со стороны: интерфейс уже задан
- * объектом. Ни реестра, ни таблицы «интерфейс → транспорт» здесь нет.
- *
- * URI закрепляется за объектом сразу, вместе с политикой интерфейса, но в httpd
- * попадает только при активации (web_server_activate_ws): между порождением и
- * активацией вызывающий назначает транспорту обработчик. */
-transport_t *web_server_open_websocket(web_server_t *srv, const char *uri) {
-    if ((srv == NULL) || (uri == NULL)) return NULL;
+/* ── Транспорт интерфейса ─────────────────────────────────────────────────── */
 
+/* Привязать порождённый транспорт к объекту: web_server_close его освободит.
+ * Зовёт open транспорта — единственное место, где транспорт входит в объект. */
+void web_server_transport_attach(web_server_t *srv, transport_t *transport) {
+    if ((srv == NULL) || (transport == NULL)) return;
     if (srv->transport_count >= WEB_SERVER_TRANSPORTS_MAX) {
         ESP_LOGE(TAG, "Объект интерфейса %lu уже породил %u транспортов",
                  (unsigned long)srv->iface, (unsigned)srv->transport_count);
-        return NULL;
+        return;
     }
-
-    /* 1. Путь за интерфейсом объекта: назначение — порт WebSocket. */
-    web_route_t *route = route_claim(srv, uri, WEB_ROUTE_WS);
-    if (route == NULL) return NULL;
-    route->is_websocket = 1;
-
-    /* 2. Сам транспорт: реализацию и её контекст поднимает ws_transport.c, а
-     *    объект сервера уходит в этот контекст — через него транспорт работает с
-     *    соединениями (закрывает сессии, отправляет кадры). */
-    transport_t *transport = ws_transport_create(srv, uri);
-    if (transport == NULL) {
-        route_drop(srv, route);
-        ESP_LOGE(TAG, "Транспорт на '%s' не порождён (интерфейс %lu)", uri,
-                 (unsigned long)srv->iface);
-        return NULL;
-    }
-
-    /* 3. Порождённое принадлежит объекту: web_server_close его освободит. */
     srv->transports[srv->transport_count++] = transport;
+}
 
-    LOGI(TAG, "Транспорт на '%s' порождён для интерфейса %lu: URI ждёт активации",
-             uri, (unsigned long)srv->iface);
-    return transport;
+/* Занять путь за интерфейсом объекта под порт WebSocket (шаг 1 открытия:
+ * его делает open транспорта). 0 — путь уже занят или нет места. */
+uint8_t web_server_claim_ws(web_server_t *srv, const char *uri) {
+    if ((srv == NULL) || (uri == NULL)) return 0;
+    web_route_t *route = route_claim(srv, uri, WEB_ROUTE_WS);
+    if (route == NULL) return 0;
+    route->is_websocket = 1;
+    return 1;
 }
 
 uint8_t web_server_activate_ws(web_server_t *srv, const char *uri,

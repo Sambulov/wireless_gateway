@@ -147,8 +147,20 @@ static uint32_t notify_event(ws_transport_stub_conn_t *conn, const transport_eve
 
 /* --- Операции транспорта как модуля --------------------------------------- */
 
+/* Методы получают объект транспорта; что в контексте — модуль или соединение —
+ * знает только заглушка, контракт в это не лезет. */
+static stub_module_t *mod_of(const void *self) {
+    const transport_t *tr = (const transport_t *)self;
+    return (tr != NULL) ? (stub_module_t *)tr->context : NULL;
+}
+
+static ws_transport_stub_conn_t *conn_of(const void *self) {
+    const transport_t *tr = (const transport_t *)self;
+    return (tr != NULL) ? (ws_transport_stub_conn_t *)tr->context : NULL;
+}
+
 static transport_result_t stub_init(const void *self, const void *config) {
-    stub_module_t *m = (stub_module_t *)self;
+    stub_module_t *m = mod_of(self);
     if((m == NULL) || (config == NULL)) return TRANSPORT_BAD_CALL;
     if(m->inited) return TRANSPORT_BUSY;
     m->uri    = (const char *)config;
@@ -158,14 +170,14 @@ static transport_result_t stub_init(const void *self, const void *config) {
 
 static transport_result_t stub_open(const void *self, const void *config) {
     (void)config;
-    stub_module_t *m = (stub_module_t *)self;
+    stub_module_t *m = mod_of(self);
     if((m == NULL) || !m->inited) return TRANSPORT_BAD_CALL;
     m->opened = 1;
     return TRANSPORT_OK;
 }
 
 static transport_result_t stub_subscribe(const void *self, delegate_t *delegate) {
-    stub_module_t *m = (stub_module_t *)self;
+    stub_module_t *m = mod_of(self);
     if((m == NULL) || (delegate == NULL) || (delegate->handler == NULL))
         return TRANSPORT_BAD_CALL;
     /* Как настоящий транспорт (main/ws_transport.c): подписчик кладётся в event_t
@@ -181,7 +193,7 @@ static transport_result_t stub_subscribe(const void *self, delegate_t *delegate)
  * приходит позже — когда httpd освободит сессию; в тестах это делает
  * ws_transport_stub_disconnect(). Здесь же соединение просто становится мёртвым. */
 static transport_result_t stub_close(const void *self) {
-    ws_transport_stub_conn_t *conn = (ws_transport_stub_conn_t *)self;
+    ws_transport_stub_conn_t *conn = conn_of(self);
     if(conn == NULL) return TRANSPORT_BAD_CALL;
     conn->close_calls++;
     conn->down = 1;
@@ -195,7 +207,7 @@ static transport_result_t stub_break_sending(const void *self) {
 
 /* Отправка идёт одним куском: прерывать нечего (как у httpd). */
 static transport_result_t stub_begin_send(const void *self, const void *data, uint32_t length) {
-    ws_transport_stub_conn_t *conn = (ws_transport_stub_conn_t *)self;
+    ws_transport_stub_conn_t *conn = conn_of(self);
     if((conn == NULL) || (data == NULL) || (length == 0)) return TRANSPORT_BAD_CALL;
     conn->send_attempts++;
 
@@ -231,11 +243,6 @@ static transport_result_t stub_begin_send(const void *self, const void *data, ui
     return TRANSPORT_OK;
 }
 
-static int32_t stub_peer_id(const void *self) {
-    const ws_transport_stub_conn_t *conn = (const ws_transport_stub_conn_t *)self;
-    return conn ? conn->fd : -1;
-}
-
 static const transport_iface_t iface_table = {
     .init          = stub_init,
     .open          = stub_open,
@@ -243,7 +250,6 @@ static const transport_iface_t iface_table = {
     .begin_send    = stub_begin_send,
     .break_sending = stub_break_sending,
     .subscribe     = stub_subscribe,
-    .peer_id       = stub_peer_id,
 };
 
 /* Объекты транспорта — то, что получает api_init. Их ровно столько, сколько
@@ -269,8 +275,14 @@ const transport_t *ws_transport_stub_object(uint32_t iface) {
      * объекта: такого поля у transport_t больше нет. */
     const stub_module_t *module = module_for_iface(iface);
     if(module == NULL) return NULL;
-    for(size_t i = 0; i < STUB_TRANSPORT_COUNT; i++)
-        if(transports[i].context == module) return &transports[i];
+    for(size_t i = 0; i < STUB_TRANSPORT_COUNT; i++) {
+        if(transports[i].context != module) continue;
+        /* Как настоящий транспорт: экземпляр создаётся готовым к работе, поэтому
+         * init зовётся здесь — ядро при подъёме сразу зовёт open. */
+        if(!((stub_module_t *)transports[i].context)->inited)
+            stub_init(&transports[i], "/api");
+        return &transports[i];
+    }
     return NULL;
 }
 
@@ -541,7 +553,7 @@ void ws_transport_stub_reset(void) {
  * (см. system_stub_api_system): своего потока и своей очереди у ядра нет, а всё,
  * что ему нужно от системы (мьютекс, время, журнал), оно берёт оттуда. */
 static api_t *stub_core(uint32_t which) {
-    return api_init(ws_transport_stub_object(which), system_stub_api_system());
+    return api_init(ws_transport_stub_object(which), NULL, system_stub_api_system());
 }
 
 api_t *ws_transport_stub_init(void) {

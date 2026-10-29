@@ -43,7 +43,7 @@ void send_response(void *call) {
         resp_error(SYS_NO_MEM, "NOMEM", NULL);
     }
     size_t len = gw_jsonw_finish(&sys_w);
-    if (!api_reply(call, (const uint8_t *)sys_resp_buf, (uint32_t)len))
+    if (!api_call_send_arg(call, (const char *)sys_resp_buf, (uint32_t)len))
         ESP_LOGW(TAG, "Ответ клиенту не ушёл");
 }
 
@@ -71,7 +71,7 @@ const sys_service_t *svc_of(void **context) {
 
 uint8_t register_service(api_t *api, api_handler_t handler, const char *fid,
                          void *context) {
-    if (api_register_handler(api, handler, fid, context)) return 1;
+    if (api_call_register(api, handler, fid, context)) return 1;
     ESP_LOGE(TAG, "Не удалось зарегистрировать %s (ядро %p)", fid, (void *)api);
     return 0;
 }

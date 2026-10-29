@@ -445,7 +445,7 @@
 
     function send(arg) {
         if (!ws || ws.readyState !== WebSocket.OPEN) return false;
-        ws.send(JSON.stringify({ FID: getFid(), FLAGS: 0, SID: nextSid(), ARG: arg }));
+        ws.send(JSON.stringify({ FID: getFid(), SID: nextSid(), ARG: arg }));
         return true;
     }
 
@@ -604,7 +604,7 @@
             SB:  parseInt(document.getElementById('uart-sb').value),
         };
         if (!ws || ws.readyState !== WebSocket.OPEN) { alert('Нет соединения'); return; }
-        ws.send(JSON.stringify({ FID: cnfFid, FLAGS: 0, SID: nextSid(), ARG: arg }));
+        ws.send(JSON.stringify({ FID: cnfFid, SID: nextSid(), ARG: arg }));
     }
 
     connect();

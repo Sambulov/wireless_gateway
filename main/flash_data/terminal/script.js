@@ -27,6 +27,13 @@ class ESP32Terminal {
          * от устройства, чтобы заметить чужое вмешательство. */
         this.applied = null;
         this.cfgSid = Math.floor(Math.random() * 0xffff) + 1;
+        /* Очередь передачи: прибор подтверждает приём данных числом принятых
+         * байт ("written"), а не принятое остаётся в очереди и уходит следующим
+         * вызовом. Так набранное не теряется, даже если буфер порта полон. */
+        this.txQueue = [];
+        this.txPending = null;           /* сколько байт уже отправлено и ждёт ответа */
+        this.txSeq = 0;
+        this.TX_CHUNK = 512;
         /* Признак жизни и автопереподключение: сон ПК или потеря Wi-Fi рвут
          * сокет, и страница возвращает сессию сама. */
         this.KEEPALIVE_MS = 20000;
@@ -233,7 +240,7 @@ class ESP32Terminal {
         const bits = (cfg.WL === 8 || cfg.WL === 1) ? 8 : 7;
         const par = ['N', 'O', 'E'][cfg.PAR] || '?';
         const stop = (cfg.SB === 3) ? '1.5' : String(cfg.SB);
-        /* Режимы: 0 — дуплекс, 1 — полудуплекс (RS-485), 2 — однопроводный. */
+        /* Режимы: 0 — дуплекс, 1 — полудуплекс, 2 — однопроводный. */
         const mode = ['дуплекс', 'полудуплекс', 'однопроводный'][cfg.MODE] || 'дуплекс';
         return `${cfg.BR} бод, ${bits}${par}${stop}, ${mode}`;
     }
@@ -282,7 +289,7 @@ class ESP32Terminal {
             }
             this.keepAlivePending = true;
             this.socket.send(JSON.stringify({
-                FID: 'sys.info', SID: Math.floor(Math.random() * 0xffff) + 1, FLAGS: 0,
+                FID: 'sys.info', SID: Math.floor(Math.random() * 0xffff) + 1,
             }));
             setTimeout(() => { this.keepAlivePending = false; }, this.KEEPALIVE_TIMEOUT_MS);
         }, this.KEEPALIVE_MS);
@@ -360,6 +367,8 @@ class ESP32Terminal {
                 this.isRegistered = false;
                 this.subscriptionSid = null;
                 this.configSid = null;
+                this.txQueue = [];
+                this.txPending = null;
                 this.setSettingsEnabled(true);
                 this.renderConnectButton(false);
                 if (this.closing) {          /* причину уже написали в disconnect() */
@@ -392,8 +401,9 @@ class ESP32Terminal {
     applyConfig(cfg) {
         if (!this.socket) return;
         this.cfgSid = Math.floor(Math.random() * 0xffff) + 1;
+        this.applyAt = Date.now();       /* чтобы отличить свой ответ от чужого */
         this.socket.send(JSON.stringify({
-            FID: this.fid('config'), SID: this.cfgSid, FLAGS: 0, ARG: cfg,
+            FID: this.fid('config'), SID: this.cfgSid, ARG: cfg,
         }));
         this.saveSettings(cfg);
         this.setCfgState(this.formatSettings(cfg));
@@ -403,11 +413,9 @@ class ESP32Terminal {
      * переспроса — только страховка, если кадр-побудка потеряется. */
     registerClient() {
         this.subscriptionSid = Math.floor(Math.random() * 0xffff) + 1;
-        this.txSid = Math.floor(Math.random() * 0xffff) + 1;
         this.socket.send(JSON.stringify({
             FID: this.fid('rx'),
             SID: this.subscriptionSid,
-            FLAGS: 4,                       // CALL_FLAG_LONG_TERM
             ARG: { RDL: 200 }
         }));
 
@@ -423,14 +431,14 @@ class ESP32Terminal {
         this.socket.send(JSON.stringify({
             FID: this.fid('config'),
             SID: this.configSid,
-            FLAGS: 4,
             ARG: { RDL: 2000 }
         }));
     }
 
+    /* Отписка — повтор кадра с тем же SID без ARG (§1.3, §3.5). */
     sendDelete(fid, sid) {
         if (!this.socket || sid === null) return;
-        this.socket.send(JSON.stringify({ FID: fid, SID: sid, FLAGS: 8 }));
+        this.socket.send(JSON.stringify({ FID: fid, SID: sid }));
     }
 
     disconnect(reason) {
@@ -472,14 +480,29 @@ class ESP32Terminal {
                 return;
             }
 
-            if (packet.FID === this.fid('rx') && packet.ARG) {
-                if (packet.ARG.STA === "0x00000005") {
-                    this.isRegistered = true;
-                    clearTimeout(this.resubscribeTimer);
-                    this.renderConnectButton(true);
-                } else if (this.isRegistered) {
+            /* Подписка на приём: устройство подтверждает её статусом EXECUTING
+             * (кадр со STA и без ARG). Данные приходят кадрами с ARG. */
+            if (packet.FID === this.fid('rx')) {
+                if (packet.STA !== undefined) {
+                    if (packet.STA === "0x00000001") {
+                        this.isRegistered = true;
+                        clearTimeout(this.resubscribeTimer);
+                        this.renderConnectButton(true);
+                    }
+                    return;
+                }
+                if (packet.ARG && this.isRegistered) {
                     this.processUARTData(packet.ARG);
                 }
+                return;
+            }
+
+            /* Ответ на передачу: сколько порт принял. Остаток дошлём сами —
+             * молча терять набранное нельзя. */
+            if (packet.FID === this.fid('tx') && packet.ARG
+                && packet.ARG.written !== undefined) {
+                this.handleTxReply(packet.ARG);
+                return;
             }
 
         } catch (error) {
@@ -510,7 +533,19 @@ class ESP32Terminal {
             return;
         }
 
-        this.term.writeln(`\x1b[33m[настройки порта изменены: ${this.formatSettings(cfg)} — сеанс отключён]\x1b[0m`);
+        /* Ответ на наше собственное применение: прибор мог скорректировать
+         * значение (например, режим/биты он приводит к своим кодам) — это не
+         * чужое вмешательство, работать можно дальше. Просто принимаем то, что
+         * стоит на порту. */
+        if (this.applyAt && (Date.now() - this.applyAt) < 3000) {
+            this.applied = this.settingsAsDevice(cfg);
+            this.setCfgState(this.formatSettings(cfg));
+            return;
+        }
+
+        /* Настройки сменил кто-то другой: продолжать нельзя — данные пойдут на
+         * других настройках. Причину пишем только в подвал: терминал показывает
+         * поток с линии, служебным сообщениям там не место. */
         this.disconnect(`настройки порта изменены (${this.formatSettings(cfg)})`);
     }
 
@@ -561,8 +596,8 @@ class ESP32Terminal {
     handleUserInput(data) {
         if (!this.isConnected || !this.socket) return;
 
-        /* Местное эхо: на полудуплексной линии ответное эхо приходит только
-         * когда мы молчим, поэтому набранное показываем сами. */
+        /* Местное эхо: в однопроводном режиме ответное эхо приходит только пока
+         * мы молчим, поэтому набранное показываем сами. */
         if (this.localEcho) {
             for (const ch of data) {
                 if (ch === '\r' || ch === '\n') this.term.write('\r\n');
@@ -572,17 +607,47 @@ class ESP32Terminal {
         }
 
         const encodedData = new TextEncoder().encode(data);
-        const base64String = btoa(String.fromCharCode(...encodedData));
+        this.txQueue.push(...encodedData);
+        this.pumpTx();
+    }
 
+    /* Отправка порциями с подтверждением. Прибор отвечает, сколько байт принял
+     * буфер порта; непринятое остаётся в очереди — поэтому ни один набранный
+     * символ не пропадает, даже когда порт занят выталкиванием в линию. */
+    pumpTx() {
+        if (!this.socket || !this.isConnected || this.txPending) return;
+        if (!this.txQueue.length) return;
+        const chunk = this.txQueue.slice(0, this.TX_CHUNK);
+        const base64String = btoa(String.fromCharCode(...chunk));
+        this.txPending = chunk;
         try {
             this.socket.send(JSON.stringify({
                 FID: this.fid('tx'),
-                SID: this.txSid,
-                FLAGS: 0,
+                SID: ++this.txSeq,
                 ARG: base64String
             }));
         } catch (error) {
+            this.txPending = null;
             this.setState('ошибка отправки', 'err');
+        }
+    }
+
+    handleTxReply(arg) {
+        if (!this.txPending) return;
+        const sent = this.txPending;
+        const written = Number(arg.written) || 0;
+        this.txPending = null;
+        if (written > 0) {
+            this.txQueue.splice(0, Math.min(written, sent.length));
+        } else {
+            /* Буфер порта полон — прибор честно сказал «не принял». Пробуем
+             * снова чуть позже, не выбрасывая данные. */
+            setTimeout(() => this.pumpTx(), 20);
+            return;
+        }
+        if (this.txQueue.length) {
+            /* остаток (или следующая порция) — сразу, без ожидания */
+            setTimeout(() => this.pumpTx(), 0);
         }
     }
 }

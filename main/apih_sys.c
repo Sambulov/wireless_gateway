@@ -6,7 +6,7 @@
  * STA-ядре «только чтение». Маски интерфейсов в ядре нет — «на каком ядре
  * зарегистрирован» и есть «через какой интерфейс пришёл».
  *
- * Ответ отправляется прямо из обработчика (api_reply): ядро само оборачивает его
+ * Ответ отправляется прямо из обработчика (api_call_send_arg): ядро само оборачивает его
  * в конверт {"FID":..,"SID":..,"ARG":<json>} и завершает вызов. Ответы всегда
  * несут "STA" (коды SYS_* из apih_sys_internal.h). Своей очереди и своей задачи у
  * системного API нет.
@@ -24,10 +24,10 @@
 /* проверочный echo: аргумент возвращается без изменений, пустой запрос — "null" */
 static uint8_t sys_echo_handler(void *call, void **context, uint8_t *data, uint32_t data_len) {
     (void)context;
-    if (!call) return 0;
-    if (data && data_len) api_reply(call, data, data_len);
-    else                  api_reply(call, (const uint8_t *)"null", 4);
-    return 0;
+    if (!call) return HDL_FALSE;
+    if (data && data_len) api_call_send_arg(call, (const char *)data, data_len);
+    else                  api_call_send_arg(call, "null", 4);
+    return HDL_FALSE;
 }
 
 esp_err_t api_sys_run(app_context_t *app) {

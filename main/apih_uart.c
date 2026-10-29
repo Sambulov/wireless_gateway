@@ -30,8 +30,8 @@ typedef struct {
             wl       : 2,
             par      : 2,
             sb       : 2,
-            /* Режимов три (обычный UART, RS-485, однопроводный), поэтому под
-             * них два бита: на одном бите значение 2 превращалось бы в 0. */
+            /* Режимов три, поэтому под них два бита: на одном бите значение 2
+             * превращалось бы в 0. */
             mode     : 2,
             /* Порог простоя линии, знаков (1..255) */
             idle     : 8;
@@ -40,7 +40,7 @@ typedef struct {
 
 /* Ядра API, чьи подписчики получают кадры порта. Сервис зарегистрирован на ОБОИХ
  * ядрах, поэтому кадр приёма и смена настроек рассылаются по имени FID на каждом
- * (api_broadcast), а ответ на запрос уходит по дескриптору вызова. */
+ * (api_call_group_fid_data), а ответ на запрос уходит по дескриптору вызова. */
 #define UART_API_MAX 2
 static api_t *uart_apis[UART_API_MAX];
 static uint8_t uart_api_num;
@@ -202,7 +202,7 @@ static void format_uart_resp(gw_jsonw_t *w, const gw_uart_config_t *cnf)
 	gw_jsonw_int(w, "WL",  cnf->bits);
 	gw_jsonw_int(w, "PAR", cnf->parity);
 	gw_jsonw_int(w, "SB",  cnf->stop);
-	/* Режим работы порта: 0 — обычный UART, 1 — RS-485 с автонаправлением */
+	/* Режим работы порта: 0 — обычный UART, 1 — полудуплекс, 2 — однопроводный */
 	gw_jsonw_int(w, "MODE", cnf->mode);
 	/* Порог простоя линии в знаках: сколько тишины считать концом кадра */
 	gw_jsonw_int(w, "IDLE_CH", cnf->idle_ch);
@@ -250,13 +250,13 @@ static gw_uart_config_t uart_config(struct app_uart_t *uart, void *new_cfg, size
 
 /* ── Ответы ─────────────────────────────────────────────────────────────────
  *
- * Ответ на ЗАПРОС уходит тому вызову, который его принёс: api_reply сам
+ * Ответ на ЗАПРОС уходит тому вызову, который его принёс: api_call_send_arg сам
  * оборачивает данные в конверт {"FID":<то же имя>,"SID":<SID клиента>} и шлёт в
  * соединение этого вызова.
  *
- * РАССЫЛКА (кадр приёма, смена настроек) адресована не вызову, а всем
- * подписчикам имени, и у каждого ядра свои: api_broadcast находит подписчиков
- * ЭТОГО ядра и отправляет им ОДИН общий буфер — копии не собираются.
+ * РАССЫЛКА (кадр приёма, смена настроек) адресована не вызову, а всем активным
+ * вызовам имени, и у каждого ядра свои: api_call_group_fid_data находит
+ * подписчиков ЭТОГО ядра и отправляет им ОДИН общий буфер — копии не собираются.
  *
  * Оба пути неблокирующие: обработчик в такте ядра ждать не имеет права. */
 
@@ -279,11 +279,11 @@ static void uart_send_to(void *call, const char *fid, gw_jsonw_t *w)
 		return;                 /* отвечать нечем — и кадра нет */
 
 	if (call != NULL) {
-		api_reply(call, (const uint8_t *)json, len);
+		api_call_send_arg(call, json, (uint32_t)len);
 		return;
 	}
 	for (uint8_t i = 0; i < uart_api_num; i++)
-		api_broadcast(uart_apis[i], fid, (const uint8_t *)json, len);
+		api_call_group_fid_data(uart_apis[i], fid, json, (uint32_t)len);
 }
 
 /* Рассылка уже собранного кадра по всем ядрам сервиса. 1 — кадр принял хотя бы
@@ -295,7 +295,7 @@ static uint8_t uart_broadcast_built(const char *fid, const char *json, size_t le
 	if (uart_api_num == 0)
 		return 1;                       /* ядер нет: терять некуда */
 	for (uint8_t i = 0; i < uart_api_num; i++)
-		sent |= api_broadcast(uart_apis[i], fid, (const uint8_t *)json, len);
+		sent |= api_call_group_fid_data(uart_apis[i], fid, json, (uint32_t)len);
 	return sent;
 }
 
@@ -359,8 +359,7 @@ static uint8_t parse_uart_params(const uint8_t *data, size_t len,
 	}
 	cmd->mode_set = gw_json_int(&json, "MODE", &val);
 	if (cmd->mode_set) {
-		/* Режимы: 0 — обычный UART, 1 — RS-485 с автонаправлением, 2 —
-		 * однопроводный (эхо глушим сами). Прочее не принимаем. */
+		/* Режимы: 0 — обычный UART, 1 — полудуплекс, 2 — однопроводный. */
 		if (val == GW_UART_MODE_UART || val == GW_UART_MODE_RS485_HALF_DUPLEX
 		    || val == GW_UART_MODE_UART_SINGLE_WIRE)
 			cmd->mode = val;
@@ -550,7 +549,8 @@ static uint8_t uart_rx_flush(uart_handler_ctx_t *hc)
 			break;
 	}
 
-	return 0;
+	/* Подписку не завершаем: кадров нет — пульс придёт следующим тактом. */
+	return HDL_TRUE;
 }
 
 /* На чтение надо ответить: молчание клиент ждёт до своего таймаута. */
@@ -560,8 +560,11 @@ static uint8_t uart_cmd_config(uart_handler_ctx_t *hc, void *call,
 	struct app_uart_t *app_uart = &hc->app->uart.port[hc->port];
 
 	if (!data || len == 0) {
+		/* Без ARG — это подписка на настройки порта: вызов остаётся живым, а
+		 * кадры приходят рассылкой, когда настройки сменит кто-то другой. */
+		api_call_send_status(call, API_CALL_STATUS_EXECUTING);
 		send_uart_state(call, hc->fid, app_uart);
-		return 0;
+		return HDL_TRUE;
 	}
 	api_cmd_uart_t cmd = {0};
 	if (!parse_uart_params(data, len, &cmd)) {
@@ -694,26 +697,39 @@ static uint8_t uart_api_handler(void *call, void **context,
 	/* Между вызовами обработчик ничего не держит: накопитель приёма принадлежит
 	 * порту, а не вызову. */
 	if (call == NULL) {
-		/* Вызов снят: отложенный кадр никому не нужен, а держать его — значит
-		 * заблокировать порт для следующей подписки. */
+		/* Принудительное завершение: отложенный кадр никому не нужен, а держать
+		 * его — значит заблокировать порт для следующей подписки. Статус не
+		 * шлём — клиента уже нет (§3.5). */
 		if (hc != NULL)
 			uart_rx_pending[hc->port] = 0;
-		return 0;
+		return HDL_FALSE;
 	}
 	if ((hc == NULL) || (hc->app == NULL))
-		return 0;
+		return HDL_FALSE;
 
-	if (hc->act == UART_ACT_RX)
-		return uart_rx_flush(hc);          /* и такт, и опрос — одно и то же */
+	/* Пульс: делать что-то есть приёму, а подписка на настройки просто живёт. */
+	if (data == NULL) {
+		if (hc->act == UART_ACT_RX)
+			return uart_rx_flush(hc);
+		return (hc->act == UART_ACT_CNF) ? HDL_TRUE : HDL_FALSE;
+	}
 
-	if (data == NULL)
-		return 0;                          /* такт: остальным делать нечего */
+	/* Кадр клиента. Приём — подписка: первичный кадр подтверждаем EXECUTING,
+	 * пустой повтор — отписка (§3.5). */
+	if (hc->act == UART_ACT_RX) {
+		if (data_len == 0) {
+			api_call_send_status(call, API_CALL_STATUS_CANCELED);
+			return HDL_FALSE;
+		}
+		api_call_send_status(call, API_CALL_STATUS_EXECUTING);
+		return HDL_TRUE;
+	}
 
 	switch (hc->act) {
 	case UART_ACT_CNF:  return uart_cmd_config(hc, call, data, data_len);
 	case UART_ACT_TX:   return uart_cmd_tx(hc, call, data, data_len);
 	case UART_ACT_ECHO: return uart_cmd_echo(hc, call, data, data_len);
-	default:            return 0;
+	default:            return HDL_FALSE;
 	}
 }
 
@@ -725,7 +741,7 @@ static uint8_t uart_register(api_t *api, uart_handler_ctx_t *hc, app_context_t *
 	hc->port = port;
 	hc->act  = act;
 	hc->fid  = fid;
-	return api_register_handler(api, uart_api_handler, fid, hc);
+	return api_call_register(api, uart_api_handler, fid, hc);
 }
 
 /* Готовит состояние портов: накопитель приёма, замок и подписка на события
@@ -811,11 +827,15 @@ void apih_uart_test_init(api_t *api, app_context_t *app) {
 }
 
 void apih_uart_test_reset(void) {
-    for (int i = 0; i < UART_PORTS; i++)
+    for (int i = 0; i < UART_PORTS; i++) {
         seg_ring_init(&uart_context[i].ring, uart_context[i].storage,
                          uart_context[i].storage_size);
-    for (int i = 0; i < UART_PORTS; i++)
-        uart_rx_frame_sent[i] = 0;
+        uart_rx_frame_sent[i]  = 0;
+        uart_rx_frame_tick[i]  = 0;
+        uart_rx_pending[i]     = 0;
+        uart_rx_pending_len[i] = 0;
+        uart_rx_pending_tick[i] = 0;
+    }
 }
 
 #ifdef APIH_UART_TEST

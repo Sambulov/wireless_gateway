@@ -604,7 +604,7 @@ function send(fid, arg, cb) {
     }
     const id = sid++ & 0xffff;
     if (cb) pending.set('0x' + id.toString(16).padStart(8, '0'), cb);
-    ws.send(JSON.stringify({ FID: fid, FLAGS: 0, SID: id, ARG: arg || {} }));
+    ws.send(JSON.stringify({ FID: fid, SID: id, ARG: arg || {} }));
 }
 
 /* Ответ на свой вызов как обещание: файл передаётся порциями по очереди, и

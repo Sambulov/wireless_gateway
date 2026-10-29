@@ -1,1 +1,1 @@
-{"FID":"uart2.modbus","FLAGS":0,"SID":7,"ARG":{"ADR":1,"FN":3,"RA":800,"RVC":3,"AWT":600}}
+{"FID":"uart2.modbus","SID":7,"ARG":{"ADR":1,"FN":3,"RA":800,"RVC":3,"AWT":600}}

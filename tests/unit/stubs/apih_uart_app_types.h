@@ -20,7 +20,7 @@ typedef int esp_err_t;
 #define TAG  TAG_SX(__FILE__) " " TAG_SX(__LINE__)
 
 /* FID names (kept in sync with the real app.h). Нумерация аппаратная:
- * uart0 — консоль, uart1 — свободный порт, uart2 — RS-485. */
+ * uart0 — консоль, uart1 и uart2 — порты платы. */
 #define ESP_WS_API_UART0_CNF         "uart0.config"
 #define ESP_WS_API_UART0_RAW_RX      "uart0.rx"
 #define ESP_WS_API_UART0_RAW_TX      "uart0.tx"

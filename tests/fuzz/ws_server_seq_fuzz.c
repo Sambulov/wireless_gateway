@@ -12,9 +12,9 @@
  *   OP_TEXT         conn, len, len байт      клиент прислал текстовый кадр
  *   OP_STEP         -                        один такт ядра (api_worker)
  *   OP_PERIPH       mode                     устройство отвечает на забранный
- *                                            вызов (api_reply), отказывает
+ *                                            вызов (api_call_send_arg), отказывает
  *                                            без вызова или рассылает кадр по FID
- *                                            (api_broadcast)
+ *                                            (api_call_group_fid_data)
  *   OP_TICK         n                        время идёт
  *   OP_SEND_RESULT  conn, err                следующие отправки в conn не проходят
  *   OP_CONNECT      conn                     соединение поднять/закрыть
@@ -109,7 +109,7 @@ static uint8_t fuzz_done_handler(void *call, void **ctx, uint8_t *data, uint32_t
     (void)ctx; (void)data; (void)len;
     if (!call) return 0;
     const uint8_t body[] = "{\"OK\":1}";
-    api_reply(call, body, sizeof(body) - 1);
+    api_call_send_arg(call, (const char *)body, sizeof(body) - 1);
     return 0;
 }
 
@@ -118,7 +118,7 @@ static uint8_t fuzz_alive_handler(void *call, void **ctx, uint8_t *data, uint32_
     (void)ctx; (void)data; (void)len;
     if (!call) return 0;
     const uint8_t body[] = "{\"ALIVE\":1}";
-    api_reply(call, body, sizeof(body) - 1);
+    api_call_send_arg(call, (const char *)body, sizeof(body) - 1);
     return (++fuzz_alive_rounds % 8) != 0;
 }
 
@@ -162,7 +162,7 @@ static uint8_t fuzz_periph_handler(void *call, void **ctx, uint8_t *data, uint32
 
     if (periph_n >= PERIPH_QUEUE_DEPTH) {
         const uint8_t busy[] = "{\"STA\":\"0x80000008\"}";
-        api_reply(call, busy, sizeof(busy) - 1);
+        api_call_send_arg(call, (const char *)busy, sizeof(busy) - 1);
         return 0;
     }
     periph_calls[periph_n++] = call;
@@ -171,14 +171,14 @@ static uint8_t fuzz_periph_handler(void *call, void **ctx, uint8_t *data, uint32
 }
 
 static void register_test_endpoints(void) {
-    api_register_handler(api, fuzz_done_handler,   FUZZ_FID_FULL,  NULL);
-    api_register_handler(api, fuzz_alive_handler,  FUZZ_FID_ALIVE, NULL);
-    api_register_handler(api, fuzz_periph_handler, FUZZ_FID_QUEUE, NULL);
+    api_call_register(api, fuzz_done_handler,   FUZZ_FID_FULL,  NULL);
+    api_call_register(api, fuzz_alive_handler,  FUZZ_FID_ALIVE, NULL);
+    api_call_register(api, fuzz_periph_handler, FUZZ_FID_QUEUE, NULL);
 }
 
 /* Устройство отвечает на первый забранный вызов. Ответ на КОНКРЕТНЫЙ вызов идёт
- * через его дескриптор (api_reply) — так делает любой сервис; оставшиеся
- * ветки — отказ без вызова и рассылка по имени FID (api_broadcast). */
+ * через его дескриптор (api_call_send_arg) — так делает любой сервис; оставшиеся
+ * ветки — отказ без вызова и рассылка по имени FID (api_call_group_fid_data). */
 static void periph_answer(uint8_t mode) {
     void *call = NULL;
     int    idx = -1;
@@ -191,8 +191,8 @@ static void periph_answer(uint8_t mode) {
         /* Забранных вызовов нет — проверяем оба отказа: рассылка без подписчиков
          * и ответ без дескриптора вызова. */
         switch (mode % PERIPH_MODE_COUNT) {
-        case PERIPH_BROADCAST: api_broadcast(api, FUZZ_FID_ALIVE, body, sizeof(body) - 1); break;
-        default:               api_reply(NULL, body, sizeof(body) - 1); break;
+        case PERIPH_BROADCAST: api_call_group_fid_data(api, FUZZ_FID_ALIVE, (const char *)body, sizeof(body) - 1); break;
+        default:               api_call_send_arg(NULL, (const char *)body, sizeof(body) - 1); break;
         }
         return;
     }
@@ -200,17 +200,17 @@ static void periph_answer(uint8_t mode) {
     switch (mode % PERIPH_MODE_COUNT) {
     case PERIPH_NO_CALL:
         /* Отвечать нечему: дескриптор вызова пуст. */
-        api_reply(NULL, body, sizeof(body) - 1);
+        api_call_send_arg(NULL, (const char *)body, sizeof(body) - 1);
         return;
     case PERIPH_BROADCAST:
         /* Рассылка по имени FID: адресована подписчикам, а не этому вызову. */
-        api_broadcast(api, FUZZ_FID_ALIVE, body, sizeof(body) - 1);
+        api_call_group_fid_data(api, FUZZ_FID_ALIVE, (const char *)body, sizeof(body) - 1);
         return;
     case PERIPH_EMPTY:
-        api_reply(call, (const uint8_t *)"", 0);
+        api_call_send_arg(call, "", 0);
         break;
     default:
-        api_reply(call, body, sizeof(body) - 1);
+        api_call_send_arg(call, (const char *)body, sizeof(body) - 1);
         break;
     }
     periph_answered[idx] = 1;               /* закроется следующим тактом */
