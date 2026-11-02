@@ -107,6 +107,14 @@ typedef struct {
     uint8_t  out_pending;    /* в буфере есть недописанное */
     uint8_t  tx_dead;        /* клиент не принимает: отправку прекратили */
     uint16_t out_dropped;    /* сколько кадров отброшено за время занятости */
+    /* Ожидающий управляющий кадр (PONG/CLOSE): строится в задаче httpd из
+     * ws_httpd_control_frame, отправляется ТАКТОМ транспорта под ws_frame_lock —
+     * вместе с кадрами данных. Прямая запись из задачи httpd другим путём
+     * (httpd_ws_send_frame_async) вклинивалась бы в середину идущего кадра данных
+     * и рассыпала поток клиента («invalid opcode»). */
+    uint8_t  ctrl_pending;
+    uint8_t  ctrl_buf[2 + WS_CONTROL_PAYLOAD_MAX_LEN];
+    uint32_t ctrl_len;
     /* Адрес КЛИЕНТА на момент открытия (getpeername): по нему видно, что fd всё
      * ещё наша WS-сессия. Номер fd переиспользуется, и запись/закрытие «по fd» из
      * чужой задачи могли ударить по живому клиенту или по сокету страницы. */
@@ -559,6 +567,24 @@ static uint8_t ws_conn_flush_once(ws_transport_module_t *m, ws_transport_conn_t 
     return 0;
 }
 
+/* Отправить ожидающий управляющий кадр (PONG/CLOSE), если он стоит в дескрипторе.
+ * Отвечаем ТОЛЬКО когда кадр данных не идёт (hdr_len==0 && tx_len==0) — на границе
+ * кадров и под тем же ws_frame_lock, что и данные. PING/PONG нужен, чтобы найти
+ * ПОВИСШЕЕ (простаивающее) соединение, поэтому во время активного обмена ответ
+ * не шлём вовсе: клиент, которому нужен keepalive, шлёт PING только в простое и
+ * здесь его PONG получит. Не ушёл весь (сокет полон) — останется на следующий такт. */
+static void ws_conn_ctrl_flush(ws_transport_conn_t *conn) {
+    if((conn == NULL) || (conn->fd < 0)) return;
+    platform_mutex_take(ws_frame_lock, PLATFORM_WAIT_FOREVER);
+    if(conn->ctrl_pending && (conn->hdr_len == 0) && (conn->tx_len == 0)) {
+        int rc = web_server_write(conn->module->server, conn->fd,
+                                  (const char *)conn->ctrl_buf, conn->ctrl_len, 0);
+        if(rc == (int)conn->ctrl_len)
+            conn->ctrl_pending = 0;
+    }
+    platform_mutex_give(ws_frame_lock);
+}
+
 static void ws_out_pump(ws_transport_module_t *m) {
     ws_transport_conn_t *list[WS_CONN_MAX];
     int n = conn_list_snapshot(m, list);
@@ -568,6 +594,9 @@ static void ws_out_pump(ws_transport_module_t *m) {
     for(int i = 0; i < n; i++) {
         ws_transport_conn_t *conn = list[i];
         if(!conn->busy || (conn->fd < 0)) continue;
+
+        /* Управляющий кадр идёт впереди данных, но на границе кадров. */
+        ws_conn_ctrl_flush(conn);
 
         for(int round = 0; round < WS_TX_FRAMES_PER_CYCLE; round++) {
             if(!conn->hdr_len && !conn->tx_len) {
@@ -998,16 +1027,22 @@ static esp_err_t ws_httpd_control_frame(ws_transport_conn_t *conn, httpd_req_t *
     }
 
     if((f->type == HTTPD_WS_TYPE_PING) || (f->type == HTTPD_WS_TYPE_CLOSE)) {
-        /* На PING отвечаем PONG, на CLOSE — CLOSE (RFC 6455 §5.5.2, §5.5.1):
-         * буфер на стеке живёт до конца отправки. */
-        httpd_ws_frame_t reply = {
-            .type    = (f->type == HTTPD_WS_TYPE_PING) ? HTTPD_WS_TYPE_PONG : HTTPD_WS_TYPE_CLOSE,
-            .final   = true,
-            .payload = f->len ? payload : NULL,
-            .len     = f->len,
-        };
-        esp_err_t err = web_server_send_ws(conn->module->server, fd, &reply, NULL, NULL);
-        if(err != ESP_OK) ESP_LOGW(TAG, "Ответ на управляющий кадр не ушёл (err %d), fd=%d", err, fd);
+        /* На PING отвечаем PONG, на CLOSE — CLOSE (RFC 6455 §5.5.2, §5.5.1).
+         *
+         * Ответ НЕ пишем отсюда: это задача httpd, а кадры данных досылает такт
+         * транспорта, и параллельная запись штатным путём httpd (send-оверрайд,
+         * httpd_ws_send_frame_async) вклинивается между уже записанным заголовком
+         * и телом идущего кадра данных — поток на клиенте рассыпается
+         * («invalid opcode»). Поэтому кадр кладём в дескриптор, а отправит его
+         * ТАКТ транспорта под ws_frame_lock, в очередь с кадрами данных. */
+        uint8_t opcode = (f->type == HTTPD_WS_TYPE_PING) ? 0xA : 0x8;   /* PONG/CLOSE */
+        int hlen = ws_frame_header(conn->ctrl_buf, f->len, opcode);
+        if(f->len) memcpy(conn->ctrl_buf + hlen, payload, f->len);
+
+        platform_mutex_take(ws_frame_lock, PLATFORM_WAIT_FOREVER);
+        conn->ctrl_len     = (uint32_t)hlen + f->len;
+        conn->ctrl_pending = 1;
+        platform_mutex_give(ws_frame_lock);
     }
     return ESP_OK;
 }

@@ -560,16 +560,25 @@ uint8_t api_call_send_status(void *call_handle, uint32_t sta) {
     api_call_t *call = (api_call_t *)call_handle;
     if((call == NULL) || (call->peer == NULL)) return HDL_FALSE;
     api_private_t *core = api_private(call->api);
-    return api_send_frame(core, call->peer,
+    /* Очередь пира трогают и обработчик (здесь, без замка ядра — api_invoke его
+     * снял), и TRANSFER_COMPLETE из такта транспорта (под api_lock): без замка
+     * досылка и постановка кадра гоняют за один связный список. */
+    api_lock(core);
+    uint8_t res = api_send_frame(core, call->peer,
                           api_frame_buffer_status(call->fid, call->has_sid, call->sid, sta));
+    api_unlock(core);
+    return res;
 }
 
 uint8_t api_call_send_arg(void *call_handle, const char *arg, uint32_t len) {
     api_call_t *call = (api_call_t *)call_handle;
     if((call == NULL) || (call->peer == NULL)) return HDL_FALSE;
     api_private_t *core = api_private(call->api);
-    return api_send_frame(core, call->peer,
+    api_lock(core);
+    uint8_t res = api_send_frame(core, call->peer,
                           api_frame_buffer_json(call->fid, call->has_sid, call->sid, arg, len));
+    api_unlock(core);
+    return res;
 }
 
 char *api_call_begin_response(uint32_t arg_len) {
@@ -596,7 +605,10 @@ uint8_t api_call_send_response(void *call_handle, char *resp, uint32_t arg_len) 
     else
         fb->len += sprintf(fb->buf + fb->len, ",\"FID\":\"%s\"}", call->fid);
     api_private_t *core = api_private(call->api);
-    return api_send_frame(core, call->peer, fb);
+    api_lock(core);
+    uint8_t res = api_send_frame(core, call->peer, fb);
+    api_unlock(core);
+    return res;
 }
 
 /* Рассылка: один буфер уходит всем активным вызовам имени, без SID. */
