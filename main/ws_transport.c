@@ -150,6 +150,11 @@ typedef struct ws_transport_recv_s {
 static ws_transport_conn_t ws_conn_pool[WS_CONN_MAX * 2];
 static platform_mutex_t    ws_pool_lock;
 static uint32_t            ws_conn_gen;
+/* Замок состояния кадра (hdr_*, tx_*, tx_mode, out_*): begin_send/break_sending
+ * зовёт задача ядра API, а досылает кадры ТАКТ транспорта — на двух ядрах это два
+ * разных потока, и без замка досылка читает поле, которое ещё только пишется
+ * (header ушёл, а tx_len ещё ноль → битый кадр/зависание). */
+static platform_mutex_t    ws_frame_lock;
 
 static ws_transport_conn_t *conn_alloc(void) {
     ws_transport_conn_t *conn = NULL;
@@ -444,8 +449,14 @@ static uint8_t conn_is_ours(const ws_transport_conn_t *conn) {
 
 /* Закрыть сессию, только если она ещё наша; иначе — пометить соединение мёртвым. */
 static void conn_close_session(ws_transport_conn_t *conn, const char *reason) {
-    if(conn->tx_dead) return;
+    platform_mutex_take(ws_frame_lock, PLATFORM_WAIT_FOREVER);
+    if(conn->tx_dead) {
+        platform_mutex_give(ws_frame_lock);
+        return;
+    }
     conn->tx_dead = 1;
+    platform_mutex_give(ws_frame_lock);
+
     if(conn_is_ours(conn)) {
         ESP_LOGW(TAG, "Закрываю fd=%d: %s", conn->fd, reason);
         web_server_session_close(conn->module->server, conn->fd);
@@ -465,6 +476,7 @@ static uint8_t ws_conn_flush_once(ws_transport_module_t *m, ws_transport_conn_t 
         /* fd уже не наш (закрыт или переиспользован): отправку прекращаем, а
          * недоданный кадр и режим выдачи гасим — иначе такт снова выдаст буфер
          * мёртвому соединению. tx_buf доедает conn_release/session_free_ctx. */
+        platform_mutex_take(ws_frame_lock, PLATFORM_WAIT_FOREVER);
         conn->tx_dead = 1;
         conn->hdr_len = 0;
         conn->hdr_off = 0;
@@ -473,25 +485,56 @@ static uint8_t ws_conn_flush_once(ws_transport_module_t *m, ws_transport_conn_t 
         conn->tx_off  = 0;
         conn->tx_mode = 0;
         conn->out_pending = 0;
+        platform_mutex_give(ws_frame_lock);
         return 0;
     }
-    const uint8_t *done_ptr = conn->tx_data;   /* для события завершения */
-    uint32_t done_len = conn->tx_len;
-    uint32_t before = conn->hdr_off + conn->tx_off;
-    int rc = out_flush(conn);
-    if(rc < 0 || (((conn->hdr_off + conn->tx_off) == before) &&
-                  ((uint32_t)(now - conn->out_since) > dead_ticks))) {
+
+    /* Всё, что касается полей кадра, — под замком: begin_send пишет их из задачи
+     * ядра API, а этот такт досылает параллельно (на двух ядрах). notify_event и
+     * conn_close_session зовём БЕЗ замка — они возвращаются в ядро/веб-сервер и
+     * могут заново войти в транспорт (begin_send). */
+    const uint8_t *done_ptr;   /* для события завершения */
+    uint32_t done_len;
+    uint8_t do_complete = 0;    /* кадр ушёл целиком, режим 1 */
+    uint8_t do_mode2_done = 0;  /* кадр ушёл целиком, режим 2 закончен */
+    uint8_t do_offer = 0;       /* режимы 2/3: выдать следующую часть */
+    uint8_t dead = 0;
+
+    platform_mutex_take(ws_frame_lock, PLATFORM_WAIT_FOREVER);
+    done_ptr = conn->tx_data;
+    done_len = conn->tx_len;
+    {
+        uint32_t before = conn->hdr_off + conn->tx_off;
+        int rc = out_flush(conn);
+        if(rc < 0 || (((conn->hdr_off + conn->tx_off) == before) &&
+                      ((uint32_t)(now - conn->out_since) > dead_ticks))) {
+            dead = 1;
+        } else if((conn->hdr_off + conn->tx_off) > before) {
+            conn->out_since = now;          /* прогресс есть — отсчёт заново */
+        }
+    }
+    if(!dead && (conn->hdr_len == 0) && (conn->tx_len == 0)) {
+        /* Кадр ушёл целиком. В режиме zero-copy сообщаем издателю, что его блок
+         * больше не нужен (по этому указателю он находит свой кадр). */
+        if(conn->tx_mode == 1) {
+            conn->tx_mode = 0;
+            do_complete = 1;
+        } else if((conn->tx_mode == 2) && (conn->tx_given >= conn->tx_expected)) {
+            conn->tx_mode = 0;
+            free(conn->tx_buf);
+            conn->tx_buf = NULL;
+            do_mode2_done = 1;
+        } else if((conn->tx_mode == 2) || (conn->tx_mode == 3)) {
+            do_offer = 1;                   /* следующая часть */
+        }
+    }
+    platform_mutex_give(ws_frame_lock);
+
+    if(dead) {
         conn_close_session(conn, "клиент не принимает кадр");
         return 0;
     }
-    if((conn->hdr_off + conn->tx_off) > before)
-        conn->out_since = now;              /* прогресс есть — отсчёт заново */
-    if(conn->hdr_len || conn->tx_len) return 0;   /* кадр ещё идёт */
-
-    /* Кадр ушёл целиком. В режиме zero-copy сообщаем издателю, что его блок
-     * больше не нужен (по этому указателю он находит свой кадр). */
-    if(conn->tx_mode == 1) {
-        conn->tx_mode = 0;
+    if(do_complete) {
         transport_event_trigger_t ev = { .event = TRANSPORT_TRANSFER_COMPLETE };
         ev.data.ptr    = done_ptr;
         ev.data.length = done_len;
@@ -503,19 +546,16 @@ static uint8_t ws_conn_flush_once(ws_transport_module_t *m, ws_transport_conn_t 
             conn_release(conn);
         return 1;
     }
-
-    /* Режимы 2/3: либо следующая часть, либо конец передачи. */
-    if((conn->tx_mode == 2) && (conn->tx_given >= conn->tx_expected)) {
-        conn->tx_mode = 0;
-        free(conn->tx_buf);
-        conn->tx_buf = NULL;
+    if(do_mode2_done) {
         transport_event_trigger_t ev = { .event = TRANSPORT_TRANSFER_COMPLETE };
         conn->in_callback = 1;
         notify_event(conn, &ev);
         conn->in_callback = 0;
         return 0;
     }
-    tx_offer(conn);
+    if(do_offer) {
+        tx_offer(conn);                     /* выдаёт буфер и сам notify_event'ит */
+    }
     return 0;
 }
 
@@ -638,9 +678,14 @@ static transport_result_t ws_httpd_break_sending(const void *self) {
     ws_transport_conn_t *conn = conn_of(self);
     if(conn == NULL) return TRANSPORT_BAD_CALL;
 
-    uint8_t had = (conn->hdr_len || conn->tx_len || (conn->tx_mode != 0));
-    const uint8_t *done_ptr = (conn->tx_mode == 1) ? conn->tx_data : NULL;
-    uint32_t done_len = (conn->tx_mode == 1) ? conn->tx_len : 0;
+    uint8_t had;
+    const uint8_t *done_ptr;
+    uint32_t done_len;
+
+    platform_mutex_take(ws_frame_lock, PLATFORM_WAIT_FOREVER);
+    had = (conn->hdr_len || conn->tx_len || (conn->tx_mode != 0));
+    done_ptr = (conn->tx_mode == 1) ? conn->tx_data : NULL;
+    done_len = (conn->tx_mode == 1) ? conn->tx_len : 0;
 
     conn->hdr_len = 0;
     conn->hdr_off = 0;
@@ -652,6 +697,7 @@ static transport_result_t ws_httpd_break_sending(const void *self) {
     conn->out_pending = 0;
     free(conn->tx_buf);
     conn->tx_buf = NULL;
+    platform_mutex_give(ws_frame_lock);
 
     if(had) {
         transport_event_trigger_t ev = { .event = TRANSPORT_TRANSFER_ERR };
@@ -802,20 +848,29 @@ static transport_result_t ws_httpd_begin_send(const void *self, const void *data
     if(data != NULL) {
         if(length == 0 || length > WS_OUT_MAX) return TRANSPORT_BAD_CALL;
         /* Предыдущий кадр ещё не ушёл или клиент не принимает — пусть издатель
-         * повторит тактом. */
+         * повторит тактом. Проверка и старт кадра — под замком: иначе такт
+         * транспорта прочитает кадр наполовину записанным. */
+        platform_mutex_take(ws_frame_lock, PLATFORM_WAIT_FOREVER);
         if(conn->tx_dead || conn->hdr_len || conn->tx_len || (conn->tx_mode != 0)) {
             conn->out_dropped++;
+            platform_mutex_give(ws_frame_lock);
             return TRANSPORT_BUSY;
         }
         conn->tx_mode = 1;
         tx_start_borrowed(conn, (const uint8_t *)data, length);
+        platform_mutex_give(ws_frame_lock);
         return TRANSPORT_OK;
     }
 
-    if(conn->hdr_len || conn->tx_len || (conn->tx_mode != 0)) return TRANSPORT_BUSY;
+    platform_mutex_take(ws_frame_lock, PLATFORM_WAIT_FOREVER);
+    if(conn->hdr_len || conn->tx_len || (conn->tx_mode != 0)) {
+        platform_mutex_give(ws_frame_lock);
+        return TRANSPORT_BUSY;
+    }
     conn->tx_mode     = (length == TRANSPORT_STREAM_LENGTH) ? 3 : 2;
     conn->tx_expected = (length == TRANSPORT_STREAM_LENGTH) ? 0 : length;
     conn->tx_given    = 0;
+    platform_mutex_give(ws_frame_lock);
     /* Буфер выдаём сразу: издатель обязан быть готов заполнить его прямо в
      * обработчике события TRANSFER_BUFFER. */
     tx_offer(conn);
@@ -1174,6 +1229,8 @@ transport_t *ws_transport_create(web_server_t *server) {
     /* Пул дескрипторов общий на все экземпляры: замок заводится один раз. */
     if(ws_pool_lock == NULL) ws_pool_lock = platform_mutex_create();
     if(ws_pool_lock == NULL) return NULL;
+    if(ws_frame_lock == NULL) ws_frame_lock = platform_mutex_create();
+    if(ws_frame_lock == NULL) return NULL;
 
     transport_t *transport = malloc(sizeof(*transport));
     if(transport == NULL) return NULL;
