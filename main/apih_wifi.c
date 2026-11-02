@@ -35,13 +35,16 @@
 static void sta_apply_task(void *arg) {
     app_context_t *app = (app_context_t *)arg;
     vTaskDelay(pdMS_TO_TICKS(STA_APPLY_DELAY_MS));
-    LOGI(TAG, "Applying station credentials, reconnecting");
+    uint8_t disable = (app->sta_cnf.sta.ssid[0] == '\0');
+    LOGI(TAG, "%s", disable ? "Disabling station (empty SSID)"
+                             : "Applying station credentials, reconnecting");
     /* пусто в привязке значит «любая точка с этим именем, сильнейшая» */
     net_wifi_sta_set_target(&app->sta_cnf, app->sta_bssid);
     esp_err_t err = esp_wifi_set_config(WIFI_IF_STA, &app->sta_cnf);
     if (err == ESP_OK) {
         esp_wifi_disconnect();
-        err = esp_wifi_connect();
+        if (!disable)
+            err = esp_wifi_connect();
     }
     if (err != ESP_OK)
         ESP_LOGE(TAG, "STA configuration failed: %s", esp_err_to_name(err));
@@ -111,11 +114,15 @@ static void handle_sta(const sys_service_t *svc, const uint8_t *data, uint32_t l
         return;
     }
 
-    if (ssid[0] == '\0' || strlen(ssid) > SSID_MAX) {
-        resp_error(SYS_BAD_ARG, "SSID", "SSID must be 1..31 characters");
+    if (strlen(ssid) > SSID_MAX) {
+        resp_error(SYS_BAD_ARG, "SSID", "SSID must be up to 31 characters");
         return;
     }
-    if (!wifi_password_valid(pass)) {
+    /* Пустой SSID — выключить станцию: шлюз остаётся только точкой доступа и
+     * перестаёт сканировать эфир (скан станции снимает точку доступа с эфира и
+     * рвёт WebSocket-соединения). Пароль при выключении не проверяем. */
+    uint8_t disable = (ssid[0] == '\0');
+    if (!disable && !wifi_password_valid(pass)) {
         resp_error(SYS_BAD_ARG, "PASS", "Password must be 8..63 characters or empty");
         return;
     }

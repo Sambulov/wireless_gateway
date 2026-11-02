@@ -56,6 +56,10 @@ static uint32_t ap_quiet_until_ms;
 static esp_timer_handle_t sta_retry_timer;
 /* 1 — обход эфира запустили мы; второй раз за попытку не просим. */
 static uint8_t sta_walk_ours;
+/* Что ищем и куда подключаемся (SSID/пароль/привязка). Хранится ОТДЕЛЬНО от драйвера:
+ * конфиг драйверу задаём только перед точечным подключением, иначе драйвер на
+ * esp_wifi_start() сам уходит в полный скан и снимает точку доступа с эфира. */
+static wifi_config_t sta_target;
 
 /* ── Выбранная точка доступа ──────────────────────────────────────────────── */
 
@@ -66,6 +70,7 @@ static uint8_t bssid_is_set(const uint8_t *bssid) {
 
 void net_wifi_sta_set_target(wifi_config_t *sta, const uint8_t *bssid) {
     if (!sta) return;
+    sta_target = *sta;             /* запоминаем SSID/пароль для поиска и подключения */
     sta_retry_ms = STA_RETRY_FIRST_MS;
     if (sta_retry_timer != NULL)
         esp_timer_stop(sta_retry_timer);
@@ -129,22 +134,24 @@ static void sta_retry_cb(void *arg) {
         return;
     }
 
-    wifi_config_t sta;
-    if ((esp_wifi_get_config(WIFI_IF_STA, &sta) != ESP_OK) || (sta.sta.ssid[0] == '\0'))
+    if (sta_target.sta.ssid[0] == '\0')
         return;                        /* станция не настроена — молчим */
 
     /* Сеть ищем в кэше движка сканирования: своего скана станция не делает. */
     wifi_ap_record_t rec;
     uint32_t age_ms = 0;
-    const uint8_t *pinned = sta.sta.bssid_set ? sta.sta.bssid : NULL;
+    const uint8_t *pinned = sta_target.sta.bssid_set ? sta_target.sta.bssid : NULL;
 
-    if (net_scan_find((const char *)sta.sta.ssid, pinned, &rec, &age_ms)) {
+    if (net_scan_find((const char *)sta_target.sta.ssid, pinned, &rec, &age_ms)) {
         sta_walk_ours = 0;
-        /* Запись свежая: BSSID и канал известны — подключаемся точечно, без обхода. */
-        sta.sta.bssid_set = true;
-        memcpy(sta.sta.bssid, rec.bssid, 6);
-        sta.sta.channel = rec.primary;
-        if (esp_wifi_set_config(WIFI_IF_STA, &sta) == ESP_OK) {
+        /* Запись свежая: BSSID и канал известны — подключаемся точечно, без обхода.
+         * FAST_SCAN + явный канал: драйвер НЕ гоняет полный скан по всем каналам
+         * (полный скан снимает точку доступа с эфира и рвёт её соединения). */
+        sta_target.sta.bssid_set = true;
+        sta_target.sta.scan_method = WIFI_FAST_SCAN;
+        memcpy(sta_target.sta.bssid, rec.bssid, 6);
+        sta_target.sta.channel = rec.primary;
+        if (esp_wifi_set_config(WIFI_IF_STA, &sta_target) == ESP_OK) {
             LOGI(TAG, "STA: " MACSTR " (канал %u, %d дБм, кэш %lu мс) — подключаемся",
                      MAC2STR(rec.bssid), rec.primary, rec.rssi, (unsigned long)age_ms);
             esp_wifi_connect();
@@ -158,7 +165,7 @@ static void sta_retry_cb(void *arg) {
     if (!sta_walk_ours) {
         if (net_scan_start()) {
             sta_walk_ours = 1;
-            LOGI(TAG, "STA: %s в кэше нет, запускаю обход эфира", sta.sta.ssid);
+            LOGI(TAG, "STA: %s в кэше нет, запускаю обход эфира", sta_target.sta.ssid);
         } else {
             LOGD(TAG, "STA: движок занят обходом, ждём");
         }
@@ -171,7 +178,7 @@ static void sta_retry_cb(void *arg) {
     sta_walk_ours = 0;
     sta_retry_ms = (sta_retry_ms < STA_RETRY_MAX_MS / 2) ? sta_retry_ms * 2 : STA_RETRY_MAX_MS;
     LOGI(TAG, "STA: %s в эфире не нашлась, следующая попытка через %u мс",
-             sta.sta.ssid, (unsigned)sta_retry_ms);
+             sta_target.sta.ssid, (unsigned)sta_retry_ms);
     sta_retry_schedule();
 }
 
@@ -344,9 +351,17 @@ void net_wifi_init(wifi_config_t *ap_cnf, wifi_config_t *sta_cnf,
 #endif
 
     if ((sta_cnf != NULL) && (sta_cnf->sta.ssid[0] != '\0')) {
-        LOGI(TAG, "Station connecting: SSID=%s, Password=%s", sta_cnf->sta.ssid, sta_cnf->sta.password);
+        LOGI(TAG, "Station target: SSID=%s, Password=%s", sta_cnf->sta.ssid, sta_cnf->sta.password);
         net_wifi_sta_set_target(sta_cnf, sta_bssid);
-        ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, sta_cnf));
+    }
+
+    /* Гасим конфиг станции у драйвера ДО старта (пустой SSID): иначе драйвер
+     * подхватит сохранённый в NVS конфиг (WIFI_STORAGE_FLASH) и сам уйдёт в полный
+     * скан каждые пару секунд, снимая точку доступа с эфира и рвя WebSocket.
+     * Реальный конфиг задаст sta_retry_cb перед точечным подключением. */
+    {
+        wifi_config_t sta_empty = {0};
+        esp_wifi_set_config(WIFI_IF_STA, &sta_empty);
     }
 
 #if CONFIG_WIFI_AP_ENABLE

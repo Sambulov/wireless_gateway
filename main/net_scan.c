@@ -28,8 +28,7 @@
 
 #define SCAN_CH_FIRST     1      /* первый канал 2.4 ГГц */
 #define SCAN_CH_LAST      13     /* последний: 14-й разрешён не везде */
-#define SCAN_CH_MS_MIN    30     /* выслушивание канала, нижняя граница */
-#define SCAN_CH_MS_MAX    60     /* верхняя: дольше — точка доступа молчит слишком долго */
+#define SCAN_CH_MS_PASSIVE 120   /* пассивное выслушивание канала: чуть больше beacon-интервала */
 #define SCAN_GAP_MS       150    /* пауза между каналами: AP отдаёт beacon'ы и данные */
 #define SCAN_CH_RETRY_MS  400    /* драйвер отказал (станция подключается) — ждём и пробуем */
 #define SCAN_CH_RETRIES   5      /* столько отказов подряд терпим на одном канале */
@@ -88,18 +87,17 @@ uint8_t net_scan_ready(void) {
 
 /* Выслушать один канал. 0 — драйвер не дал запустить (станция подключается). */
 static uint8_t scan_channel_start(uint8_t ch) {
-    /* Активный скан: ответ на probe приходит за доли выслушивания, ждать beacon'ов
-     * не нужно. Верхняя граница 60 мс — чтобы точка доступа скорее вернулась на свой
-     * канал, а не про полноту списка. */
+    /* Пассивный скан: не шлём probe, а ждём beacon'ы. Так поиск не провоцирует
+     * ответы чужих точек и точка доступа спокойнее: радио лишь слушает чужой канал
+     * SCAN_CH_MS_PASSIVE и возвращается на свой. Один канал за заход — см. SCAN_GAP_MS. */
     wifi_scan_config_t cfg = {
         .ssid        = NULL,
         .bssid       = NULL,
         .channel     = ch,
         .show_hidden = 0,
-        .scan_type   = WIFI_SCAN_TYPE_ACTIVE,
+        .scan_type   = WIFI_SCAN_TYPE_PASSIVE,
     };
-    cfg.scan_time.active.min = SCAN_CH_MS_MIN;
-    cfg.scan_time.active.max = SCAN_CH_MS_MAX;
+    cfg.scan_time.passive = SCAN_CH_MS_PASSIVE;
 
     scan_state = SCAN_RUNNING;
     if (esp_wifi_scan_start(&cfg, false) != ESP_OK) {

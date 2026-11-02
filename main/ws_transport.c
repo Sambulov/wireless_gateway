@@ -7,6 +7,7 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "lwip/sockets.h"
 #include "esp_http_server.h"
 #include "esp_idf_version.h"
 #include "esp_log.h"
@@ -104,7 +105,13 @@ typedef struct {
     uint8_t *tx_buf;         /* наш буфер под выдачу: запас + данные */
     uint32_t out_since;      /* когда кадр начат — для решения «клиент пропал» */
     uint8_t  out_pending;    /* в буфере есть недописанное */
+    uint8_t  tx_dead;        /* клиент не принимает: отправку прекратили */
     uint16_t out_dropped;    /* сколько кадров отброшено за время занятости */
+    /* Адрес КЛИЕНТА на момент открытия (getpeername): по нему видно, что fd всё
+     * ещё наша WS-сессия. Номер fd переиспользуется, и запись/закрытие «по fd» из
+     * чужой задачи могли ударить по живому клиенту или по сокету страницы. */
+    uint32_t peer_ip;
+    uint16_t peer_port;
 } ws_transport_conn_t;
 
 /* Предел отложенного кадра на соединение: кадр потока — до ~2,7 КБ base64,
@@ -114,6 +121,9 @@ typedef struct {
  * получает смещённый указатель, а заголовок встаёт в этот запас — кадр уходит
  * одним куском без копирования полезной нагрузки. */
 #define WS_FRAME_HEADROOM 14u
+/* Сколько кадров отдаём за один такт транспорта: поток мелких кадров не должен
+ * упираться в частоту такта. */
+#define WS_TX_FRAMES_PER_CYCLE 8
 /* Сколько кадр может висеть без прогресса, прежде чем клиент считается пропавшим. */
 #define WS_OUT_DEAD_MS   20000u
 /* Сколько принятых сообщений разбираем за один такт транспорта. */
@@ -225,6 +235,8 @@ static esp_err_t ws_httpd_handler(httpd_req_t *req);
 static esp_err_t ws_httpd_post_handshake(httpd_req_t *req);
 #endif
 static ws_transport_conn_t *conn_open(httpd_req_t *req, int fd);
+static uint8_t conn_is_ours(const ws_transport_conn_t *conn);
+static void conn_close_session(ws_transport_conn_t *conn, const char *reason);
 
 /* --- Служебное ------------------------------------------------------------ */
 
@@ -316,7 +328,9 @@ static void link_event_handler(void *event_trigger, void *sender, void *context)
     (void)event_trigger; (void)sender;
     ws_transport_conn_t *conn = (ws_transport_conn_t *)context;
     LOGI(TAG, "Link down, triggering close for fd=%d", conn->fd);
-    web_server_session_close(conn->module->server, conn->fd);
+    /* Дескриптор мог быть переиспользован: закрываем только если fd всё ещё наш,
+     * иначе просто прекращаем отправку (см. conn_close_session). */
+    conn_close_session(conn, "линк клиента пропал");
 }
 
 /* --- Операции транспорта как модуля --------------------------------------- */
@@ -415,6 +429,96 @@ static void ws_cycle_stop(ws_transport_module_t *m) {
 /* Досылка начатых кадров: клиент, снова начавший читать, получает остаток.
  * Клиента, у которого кадр не двигается дольше WS_OUT_DEAD_MS, считаем
  * пропавшим и закрываем сеанс — иначе буфер и счётчики висят вечно. */
+/* Сокет всё ещё наш? Номер fd переиспользуется, поэтому перед записью или
+ * закрытием из чужой задачи сверяем АДРЕС КЛИЕНТА. Локальный адрес у всех
+ * принятых сокетов одинаков (это адрес слушающего порта), поэтому различаем по
+ * удалённому адресу: у нового соединения другой исходящий порт клиента. */
+static uint8_t conn_is_ours(const ws_transport_conn_t *conn) {
+    if((conn == NULL) || (conn->fd < 0)) return 0;
+    struct sockaddr_in sa;
+    socklen_t len = sizeof(sa);
+    memset(&sa, 0, sizeof(sa));
+    if(getpeername(conn->fd, (struct sockaddr *)&sa, &len) != 0) return 0;
+    return (sa.sin_addr.s_addr == conn->peer_ip) && (sa.sin_port == conn->peer_port);
+}
+
+/* Закрыть сессию, только если она ещё наша; иначе — пометить соединение мёртвым. */
+static void conn_close_session(ws_transport_conn_t *conn, const char *reason) {
+    if(conn->tx_dead) return;
+    conn->tx_dead = 1;
+    if(conn_is_ours(conn)) {
+        ESP_LOGW(TAG, "Закрываю fd=%d: %s", conn->fd, reason);
+        web_server_session_close(conn->module->server, conn->fd);
+    } else {
+        ESP_LOGW(TAG, "fd=%d уже не наш (%s), только прекращаю отправку", conn->fd, reason);
+    }
+}
+
+/* Дослать один кадр соединения. 1 — кадр ушёл целиком (можно взяться за
+ * следующий), 0 — кадр ещё идёт или соединение закрыто. */
+static uint8_t ws_conn_flush_once(ws_transport_module_t *m, ws_transport_conn_t *conn,
+                                  uint32_t now, uint32_t dead_ticks) {
+    /* Перед записью убеждаемся, что fd всё ещё эта WS-сессия: номер fd мог быть
+     * переиспользован сокетом страницы, и запись в него портила бы HTTP-ответ
+     * («Header fields are too long»). */
+    if(!conn_is_ours(conn)) {
+        /* fd уже не наш (закрыт или переиспользован): отправку прекращаем, а
+         * недоданный кадр и режим выдачи гасим — иначе такт снова выдаст буфер
+         * мёртвому соединению. tx_buf доедает conn_release/session_free_ctx. */
+        conn->tx_dead = 1;
+        conn->hdr_len = 0;
+        conn->hdr_off = 0;
+        conn->tx_data = NULL;
+        conn->tx_len  = 0;
+        conn->tx_off  = 0;
+        conn->tx_mode = 0;
+        conn->out_pending = 0;
+        return 0;
+    }
+    const uint8_t *done_ptr = conn->tx_data;   /* для события завершения */
+    uint32_t done_len = conn->tx_len;
+    uint32_t before = conn->hdr_off + conn->tx_off;
+    int rc = out_flush(conn);
+    if(rc < 0 || (((conn->hdr_off + conn->tx_off) == before) &&
+                  ((uint32_t)(now - conn->out_since) > dead_ticks))) {
+        conn_close_session(conn, "клиент не принимает кадр");
+        return 0;
+    }
+    if((conn->hdr_off + conn->tx_off) > before)
+        conn->out_since = now;              /* прогресс есть — отсчёт заново */
+    if(conn->hdr_len || conn->tx_len) return 0;   /* кадр ещё идёт */
+
+    /* Кадр ушёл целиком. В режиме zero-copy сообщаем издателю, что его блок
+     * больше не нужен (по этому указателю он находит свой кадр). */
+    if(conn->tx_mode == 1) {
+        conn->tx_mode = 0;
+        transport_event_trigger_t ev = { .event = TRANSPORT_TRANSFER_COMPLETE };
+        ev.data.ptr    = done_ptr;
+        ev.data.length = done_len;
+        ev.data.left   = 0;
+        conn->in_callback = 1;
+        notify_event(conn, &ev);
+        conn->in_callback = 0;
+        if(conn->detached && !conn->sends_in_flight && !conn->recv_queued)
+            conn_release(conn);
+        return 1;
+    }
+
+    /* Режимы 2/3: либо следующая часть, либо конец передачи. */
+    if((conn->tx_mode == 2) && (conn->tx_given >= conn->tx_expected)) {
+        conn->tx_mode = 0;
+        free(conn->tx_buf);
+        conn->tx_buf = NULL;
+        transport_event_trigger_t ev = { .event = TRANSPORT_TRANSFER_COMPLETE };
+        conn->in_callback = 1;
+        notify_event(conn, &ev);
+        conn->in_callback = 0;
+        return 0;
+    }
+    tx_offer(conn);
+    return 0;
+}
+
 static void ws_out_pump(ws_transport_module_t *m) {
     ws_transport_conn_t *list[WS_CONN_MAX];
     int n = conn_list_snapshot(m, list);
@@ -425,53 +529,18 @@ static void ws_out_pump(ws_transport_module_t *m) {
         ws_transport_conn_t *conn = list[i];
         if(!conn->busy || (conn->fd < 0)) continue;
 
-        if(!conn->hdr_len && !conn->tx_len) {
-            /* Нечего досылать: если издатель ждёт буфер — выдаём его. */
-            if((conn->tx_mode == 2) || (conn->tx_mode == 3)) tx_offer(conn);
-            continue;
-        }
-
-        const uint8_t *done_ptr = conn->tx_data;   /* для события завершения */
-        uint32_t done_len = conn->tx_len;
-        uint32_t before = conn->hdr_off + conn->tx_off;
-        int rc = out_flush(conn);
-        if(rc < 0 || (((conn->hdr_off + conn->tx_off) == before) &&
-                      ((uint32_t)(now - conn->out_since) > dead_ticks))) {
-            ESP_LOGW(TAG, "Клиент fd=%d не принимает кадр — закрываю", conn->fd);
-            if(conn->fd >= 0) web_server_session_close(m->server, conn->fd);
-            continue;
-        }
-        if((conn->hdr_off + conn->tx_off) > before)
-            conn->out_since = now;          /* прогресс есть — отсчёт заново */
-        if(conn->hdr_len || conn->tx_len) continue;   /* кадр ещё идёт */
-
-        /* Кадр ушёл целиком. В режиме zero-copy сообщаем издателю, что его блок
-         * больше не нужен (по этому указателю он находит свой кадр). */
-        if(conn->tx_mode == 1) {
-            conn->tx_mode = 0;
-            transport_event_trigger_t ev = { .event = TRANSPORT_TRANSFER_COMPLETE };
-            ev.data.ptr    = done_ptr;
-            ev.data.length = done_len;
-            ev.data.left   = 0;
-            conn->in_callback = 1;
-            notify_event(conn, &ev);
-            conn->in_callback = 0;
-            if(conn->detached && !conn->sends_in_flight && !conn->recv_queued)
-                conn_release(conn);
-            continue;
-        }
-
-        /* Режимы 2/3: либо следующая часть, либо конец передачи. */
-        if((conn->tx_mode == 2) && (conn->tx_given >= conn->tx_expected)) {
-            conn->tx_mode = 0;
-            free(conn->tx_buf);
-            conn->tx_buf = NULL;
-            transport_event_trigger_t ev = { .event = TRANSPORT_TRANSFER_COMPLETE };
-            conn->in_callback = 1;
-            notify_event(conn, &ev);
-            conn->in_callback = 0;
-        } else {
-            tx_offer(conn);
+        for(int round = 0; round < WS_TX_FRAMES_PER_CYCLE; round++) {
+            if(!conn->hdr_len && !conn->tx_len) {
+                /* Нечего досылать: если издатель ждёт буфер — выдаём его. */
+                if((conn->tx_mode == 2) || (conn->tx_mode == 3)) tx_offer(conn);
+                break;
+            }
+            /* now — на каждый кадр заново: после TRANSFER_COMPLETE издатель может
+             * тут же начать следующий кадр (begin_send), и его out_since окажется
+             * свежее захваченного ранее now — беззнаковая разность переполнится и
+             * «мёртвый» таймер сработает сразу (см. WS_TX_FRAMES_PER_CYCLE). */
+            now = platform_tick();
+            if(!ws_conn_flush_once(m, conn, now, dead_ticks)) break;
         }
     }
 }
@@ -559,13 +628,7 @@ static transport_result_t ws_httpd_subscribe(const void *self, delegate_t *deleg
 static transport_result_t ws_httpd_close(const void *self) {
     ws_transport_conn_t *conn = conn_of(self);
     if(conn == NULL) return TRANSPORT_BAD_CALL;
-    /* Сессия уже закрыта (ядро снимает её раньше, чем узнаёт о завершении
-     * отправок): закрывать нечего, а дескриптор мог достаться другому соединению. */
-    if(conn->fd < 0) return TRANSPORT_OK;
-    if(!web_server_session_close(conn->module->server, conn->fd)) {
-        ESP_LOGW(TAG, "Close fd=%d failed", conn->fd);
-        return TRANSPORT_BAD_CALL;   /* сессии уже нет */
-    }
+    conn_close_session(conn, "закрытие из ядра");
     return TRANSPORT_OK;
 }
 
@@ -738,8 +801,9 @@ static transport_result_t ws_httpd_begin_send(const void *self, const void *data
 
     if(data != NULL) {
         if(length == 0 || length > WS_OUT_MAX) return TRANSPORT_BAD_CALL;
-        /* Предыдущий кадр ещё не ушёл — пусть издатель повторит тактом. */
-        if(conn->hdr_len || conn->tx_len || (conn->tx_mode != 0)) {
+        /* Предыдущий кадр ещё не ушёл или клиент не принимает — пусть издатель
+         * повторит тактом. */
+        if(conn->tx_dead || conn->hdr_len || conn->tx_len || (conn->tx_mode != 0)) {
             conn->out_dropped++;
             return TRANSPORT_BUSY;
         }
@@ -1032,6 +1096,20 @@ static ws_transport_conn_t *conn_open(httpd_req_t *req, int fd) {
     conn->delegate.context = conn;
     net_link_subscribe(fd, &conn->delegate);
     conn_list_add(module, conn);
+
+    /* Запоминаем адрес КЛИЕНТА: по нему потом видно, что fd всё ещё наш. */
+    {
+        struct sockaddr_in sa;
+        socklen_t len = sizeof(sa);
+        memset(&sa, 0, sizeof(sa));
+        if(getpeername(fd, (struct sockaddr *)&sa, &len) == 0) {
+            conn->peer_ip   = sa.sin_addr.s_addr;
+            conn->peer_port = sa.sin_port;
+        }
+    }
+
+    /* TCP_NODELAY ставит сокетный слой на приёме сессии (web_httpd.c,
+     * port_session_open): повторять здесь не нужно. */
 
     transport_event_trigger_t ev = { .event = TRANSPORT_ESTABLISHED };
     if(notify_event(conn, &ev) == 0) {

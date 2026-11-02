@@ -3,6 +3,14 @@ CONFIG_HTTPD_WS_SUPPORT=y
 # the URI handler for it, so the session is created in ws_post_handshake_cb
 # (see main/ws_transport_httpd.c).
 CONFIG_HTTPD_WS_POST_HANDSHAKE_CB_SUPPORT=y
+# Заголовки запроса: у реального браузера обычный GET (User-Agent, Accept,
+# Accept-Language, Cookie, If-None-Match) — 500-700 байт, а WS-рукопожатие
+# (Sec-WebSocket-Key, Upgrade, Origin, Sec-WebSocket-Extensions) — до ~1 КБ.
+# Умолчание IDF (1024) впритык, а 512, оставшееся в sdkconfig от старой
+# конфигурации, давало 431 «Header fields are too long» на загрузке страниц
+# и срыв WS-подключения со страницы конфигурации. Буфер растёт по мере
+# надобности (realloc), поэтому запас ничего не стоит.
+CONFIG_HTTPD_MAX_REQ_HDR_LEN=2048
 # WPA3/SAE is off on purpose: the supplicant plus SAE crypto cost about 63 KB of
 # the application partition, which is the tightest resource here. The gateway
 # runs WPA2-PSK on its access point and connects to WPA2 networks only. Turn
