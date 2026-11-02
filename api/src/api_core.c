@@ -48,6 +48,7 @@ typedef struct {
 typedef struct api_frame_t {
     struct api_frame_t *next;
     api_frame_buffer_t *data;
+    uint8_t droppable;      /* рассылку (rx-данные) можно вытеснить ради ответа */
 } api_frame_t;
 
 typedef struct {
@@ -247,8 +248,13 @@ static void api_peer_tx_action(api_private_t *core, api_peer_t *peer) {
 }
 
 /* Поставить кадр в очередь пира. FALSE — пира нет или очередь полна. Владение
- * буфером переходит очереди: каждая удачная постановка держит свою ссылку. */
-static uint8_t api_send_frame(api_private_t *core, api_peer_t *peer, api_frame_buffer_t *fb) {
+ * буфером переходит очереди: каждая удачная постановка держит свою ссылку.
+ *
+ * droppable — кадр можно потерять (рассылка rx-данных): при полной очереди его
+ * отбрасываем. Недroppable — ответ вызову: клиент ждёт его, поэтому при полной
+ * очереди вытесняем СТАРУЮ рассылку, а не ответ. */
+static uint8_t api_send_frame(api_private_t *core, api_peer_t *peer,
+                              api_frame_buffer_t *fb, uint8_t droppable) {
     if(fb == NULL) return HDL_FALSE;
     if((peer == NULL) || peer->closed) {
         api_buffer_release(fb);
@@ -259,8 +265,9 @@ static uint8_t api_send_frame(api_private_t *core, api_peer_t *peer, api_frame_b
         api_buffer_release(fb);
         return HDL_FALSE;
     }
-    frame->next = NULL;
-    frame->data = fb;
+    frame->next      = NULL;
+    frame->data      = fb;
+    frame->droppable = droppable;
     fb->holders++;
 
     api_frame_t **slot = &peer->tx_frames;
@@ -270,9 +277,28 @@ static uint8_t api_send_frame(api_private_t *core, api_peer_t *peer, api_frame_b
         queued++;
     }
     if(queued >= API_TX_QUEUE_MAX) {
-        api_log(core, API_LOG_WARN, "Peer %p tx queue full, frame dropped", peer->conn);
-        api_frame_release(frame);
-        return HDL_FALSE;
+        if(droppable) {
+            api_log(core, API_LOG_WARN, "Peer %p tx queue full, frame dropped", peer->conn);
+            api_frame_release(frame);
+            return HDL_FALSE;
+        }
+        /* Ответ не теряем: ищем самую старую рассылку и вытесняем её. */
+        api_frame_t **evict = &peer->tx_frames;
+        while((*evict != NULL) && !(*evict)->droppable)
+            evict = &(*evict)->next;
+        if(*evict == NULL) {
+            /* Очередь целиком из ответов — вытеснять нечего, теряем новый. */
+            api_log(core, API_LOG_WARN, "Peer %p tx queue full (no droppable), frame dropped",
+                    peer->conn);
+            api_frame_release(frame);
+            return HDL_FALSE;
+        }
+        api_frame_t *victim = *evict;
+        *evict = victim->next;
+        api_frame_release(victim);
+        /* Хвост мог сдвинуться — ищем заново. */
+        slot = &peer->tx_frames;
+        while(*slot != NULL) slot = &(*slot)->next;
     }
     *slot = frame;
     api_peer_tx_action(core, peer);               /* голова уходит сразу */
@@ -459,7 +485,7 @@ static void api_dispatch(api_private_t *core, api_call_t *call) {
         api_unlock(core);
         api_log(core, API_LOG_WARN, "No method for FID %s, replied NO_HANDLER", fid);
         api_send_frame(core, peer, api_frame_buffer_status(fid, has_sid, sid,
-                                                           API_CALL_ERROR_STATUS_NO_HANDLER));
+                                                           API_CALL_ERROR_STATUS_NO_HANDLER), 0);
         return;
     }
 
@@ -565,7 +591,7 @@ uint8_t api_call_send_status(void *call_handle, uint32_t sta) {
      * досылка и постановка кадра гоняют за один связный список. */
     api_lock(core);
     uint8_t res = api_send_frame(core, call->peer,
-                          api_frame_buffer_status(call->fid, call->has_sid, call->sid, sta));
+                          api_frame_buffer_status(call->fid, call->has_sid, call->sid, sta), 0);
     api_unlock(core);
     return res;
 }
@@ -576,7 +602,7 @@ uint8_t api_call_send_arg(void *call_handle, const char *arg, uint32_t len) {
     api_private_t *core = api_private(call->api);
     api_lock(core);
     uint8_t res = api_send_frame(core, call->peer,
-                          api_frame_buffer_json(call->fid, call->has_sid, call->sid, arg, len));
+                          api_frame_buffer_json(call->fid, call->has_sid, call->sid, arg, len), 0);
     api_unlock(core);
     return res;
 }
@@ -606,7 +632,7 @@ uint8_t api_call_send_response(void *call_handle, char *resp, uint32_t arg_len) 
         fb->len += sprintf(fb->buf + fb->len, ",\"FID\":\"%s\"}", call->fid);
     api_private_t *core = api_private(call->api);
     api_lock(core);
-    uint8_t res = api_send_frame(core, call->peer, fb);
+    uint8_t res = api_send_frame(core, call->peer, fb, 0);
     api_unlock(core);
     return res;
 }
@@ -623,7 +649,7 @@ static void api_group_send_action(linked_list_item_t *item, void *arg) {
     group_send_t *g = (group_send_t *)arg;
     api_call_t *call = linked_list_get_object(api_call_t, item);
     if(call->teardown || (strcmp(call->fid, g->fid) != 0)) return;
-    if(api_send_frame(g->core, call->peer, g->fb)) g->sent++;
+    if(api_send_frame(g->core, call->peer, g->fb, 1)) g->sent++;
 }
 
 static uint8_t api_group_send(api_private_t *core, const char *fid, api_frame_buffer_t *fb) {
@@ -712,7 +738,7 @@ static void api_receive(api_private_t *core, api_peer_t *peer, const void *data,
     if(!gw_json_parse(&json, (const char *)data, len, toks, API_FRAME_MAX_TOKENS)) {
         api_log(core, API_LOG_WARN, "Frame is not JSON, replied BAD_REQ");
         api_send_frame(core, peer, api_frame_buffer_status("", 0, 0,
-                                                           API_CALL_ERROR_STATUS_BAD_REQ));
+                                                           API_CALL_ERROR_STATUS_BAD_REQ), 0);
         return;
     }
 
@@ -720,13 +746,13 @@ static void api_receive(api_private_t *core, api_peer_t *peer, const void *data,
     if(!gw_json_str(&json, "FID", fid, sizeof(fid)) || !fid[0]) {
         api_log(core, API_LOG_WARN, "Frame has no FID, replied NO_FID");
         api_send_frame(core, peer, api_frame_buffer_status("", 0, 0,
-                                                           API_CALL_ERROR_STATUS_NO_FID));
+                                                           API_CALL_ERROR_STATUS_NO_FID), 0);
         return;
     }
     if(strlen(fid) >= API_FID_NAME_MAX) {
         api_log(core, API_LOG_WARN, "FID too long, replied NO_FID");
         api_send_frame(core, peer, api_frame_buffer_status("", 0, 0,
-                                                           API_CALL_ERROR_STATUS_NO_FID));
+                                                           API_CALL_ERROR_STATUS_NO_FID), 0);
         return;
     }
 
@@ -743,7 +769,7 @@ static void api_receive(api_private_t *core, api_peer_t *peer, const void *data,
         api_unlock(core);
         api_log(core, API_LOG_WARN, "No free call descriptors, replied NO_FREE_DESCRIPTORS");
         api_send_frame(core, peer, api_frame_buffer_status(fid, has_sid, (uint32_t)sid,
-                                                           API_CALL_ERROR_STATUS_NO_FREE_DESCRIPTORS));
+                                                           API_CALL_ERROR_STATUS_NO_FREE_DESCRIPTORS), 0);
         return;
     }
     call->api     = (api_t *)(void *)core;
@@ -759,7 +785,7 @@ static void api_receive(api_private_t *core, api_peer_t *peer, const void *data,
             api_call_release(core, call);
             api_unlock(core);
             api_send_frame(core, peer, api_frame_buffer_status(fid, has_sid, (uint32_t)sid,
-                                                               API_CALL_ERROR_STATUS_NO_MEM));
+                                                               API_CALL_ERROR_STATUS_NO_MEM), 0);
             return;
         }
         mem_cpy(copy, arg, arg_len);
