@@ -261,7 +261,10 @@ static uint8_t mb_call_parse(mb_call_ctx_t *ctx, uint8_t *data, uint32_t len) {
     }
 
     modbus_frame_t frame    = {0};
-    uint8_t        wr_buf[MB_PAYLOAD_SIZE] = {0};
+    /* Данные записи — сразу в буфер контекста вызова: кадр хранит указатель на
+     * них до конца транзакции (запрос может ждать линию в очереди), поэтому
+     * массив на стеке разбора не годится. */
+    uint8_t       *wr_buf   = ctx->wr_buf;
     uint32_t       awt_ms   = MB_DEFAULT_AWT_MS;
     uint8_t        parse_ok = 0;
 
@@ -306,7 +309,7 @@ static uint8_t mb_call_parse(mb_call_ctx_t *ctx, uint8_t *data, uint32_t len) {
 
     /* Линию здесь НЕ трогаем: сброс и настройка — в момент старта транзакции.
      * Иначе разбор второго запроса сбрасывал бы линию под транзакцией первого. */
-    ctx->req       = frame;                 /* pucData уже указывает на wr_buf */
+    ctx->req       = frame;                 /* pucData уже указывает на ctx->wr_buf */
     ctx->awt_ms    = (uint16_t)awt_ms;
     ctx->done      = 0;
     ctx->queued    = 0;

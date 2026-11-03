@@ -140,3 +140,41 @@ TEST(ApihModbus, FidPortNumberIsTheHardwarePort) {
     LONGS_EQUAL(1, gw_uart_stub_write_calls(&app.uart.port[2].desc));
     MEMCMP_EQUAL(req, gw_uart_stub_last_write_buf(&app.uart.port[2].desc), sizeof(req));
 }
+
+/* ── запись регистров ────────────────────────────────────────────────────── */
+
+TEST(ApihModbus, WriteRegistersGoToTheLineAsGiven) {
+    client_request(api, conn, 1, "{\"ADR\":1,\"FN\":16,\"RA\":0,\"RVC\":2,\"RD\":[1,2]}");
+    static const uint8_t req[] = { 0x01, 0x10, 0x00, 0x00, 0x00, 0x02, 0x04,
+                                   0x00, 0x01, 0x00, 0x02, 0x23, 0xAE };
+    LONGS_EQUAL(sizeof(req), gw_uart_stub_last_write_len(line));
+    MEMCMP_EQUAL(req, gw_uart_stub_last_write_buf(line), sizeof(req));
+}
+
+/* Регрессия: данные записи разбирались в массив на стеке разбора, а запрос
+ * хранил указатель на него. Запись, ждущая линию в очереди, уходила с тем,
+ * что к тому времени лежало на стеке. */
+static void clobber_stack(void) {
+    volatile uint8_t junk[1024];
+    for (unsigned i = 0; i < sizeof(junk); i++) junk[i] = 0xCC;
+    (void)junk[0];
+}
+
+TEST(ApihModbus, QueuedWriteKeepsItsData) {
+    ws_transport_stub_conn_t *conn2 = ws_transport_stub_connect(2);
+    client_request(api, conn, 1, "{\"ADR\":1,\"FN\":3,\"RA\":0,\"RVC\":1}");
+    client_request(api, conn2, 2, "{\"ADR\":1,\"FN\":16,\"RA\":0,\"RVC\":2,\"RD\":[1,2]}");
+    clobber_stack();
+
+    static const uint8_t resp[] = { 0x01, 0x03, 0x02, 0x00, 0x2A, 0x39, 0x9B };
+    gw_uart_stub_receive(line, resp, sizeof(resp), 1);
+    for (int i = 0; i < 4; i++) {
+        system_stub_advance_time(10);
+        api_worker(api);
+    }
+
+    static const uint8_t req[] = { 0x01, 0x10, 0x00, 0x00, 0x00, 0x02, 0x04,
+                                   0x00, 0x01, 0x00, 0x02, 0x23, 0xAE };
+    LONGS_EQUAL(2, gw_uart_stub_write_calls(line));
+    MEMCMP_EQUAL(req, gw_uart_stub_last_write_buf(line), sizeof(req));
+}
