@@ -16,6 +16,7 @@
 /* api.h транспорту не нужен: он знает только свой объект и подписчика. */
 #include "transport.h"
 #include "ws_transport.h"
+#include "ws_msg.h"
 #include "platform.h"
 
 #define GW_LOG_MODULE GW_LOG_WS
@@ -71,9 +72,7 @@ typedef struct {
     uint32_t gen;
     /* Сборка сообщения из фрагментов (первый кадр с FIN=0, дальше продолжения).
      * Буфер живёт до возврата из обработчика события RECEIVED. */
-    uint8_t *msg;
-    uint32_t msg_len;
-    uint32_t msg_cap;
+    ws_msg_t *msg;
     /* Сколько отправок в работе: дескриптор нельзя освободить, пока хоть одна не
      * завершилась — колбэк приходит позже закрытия сессии. */
     uint32_t sends_in_flight;
@@ -187,8 +186,7 @@ static void conn_release(ws_transport_conn_t *conn) {
     if ((conn == NULL) || !conn->busy) return;
     free(conn->tx_buf);
     conn->tx_buf = NULL;
-    free(conn->msg);
-    conn->msg = NULL;
+    ws_msg_free(&conn->msg);
     conn->fd  = -1;
     conn->busy = 0;
     conn->detached = 0;
@@ -318,10 +316,7 @@ static void session_free_ctx(void *ctx) {
     /* Сокет больше не наш — httpd мог отдать его новому соединению: -1 не даёт
      * позднему закрытию закрыть ЧУЖОЙ сокет. */
     conn->fd = -1;
-    free(conn->msg);
-    conn->msg    = NULL;
-    conn->msg_len  = 0;
-    conn->msg_cap  = 0;
+    ws_msg_free(&conn->msg);
 
     /* Ядру сообщаем о разрыве: свою сессию оно освободит по этому событию.
      * Дескриптор при этом ещё жив — ядро могло закрыть соединение само. */
@@ -926,26 +921,16 @@ static const transport_iface_t ws_iface = {
 
 /* --- Приём ---------------------------------------------------------------- */
 
-/* Запас места под ещё len байт. NULL — сообщение вышло за предел или нет памяти:
- * тогда соединение закрываем, принимать его негде. */
+/* Запас места под ещё len байт. NULL — сообщение ЦЕЛИКОМ вышло бы за предел
+ * (не один кадр: поток продолжений иначе растит буфер до исчерпания кучи) или
+ * нет памяти: тогда соединение закрываем, принимать его негде. */
 static uint8_t *msg_reserve(ws_transport_conn_t *conn, uint32_t len) {
-    if(len > TRANSPORT_MESSAGE_MAX_LEN) return NULL;
-    if(conn->msg_cap < conn->msg_len + len + 1) {
-        uint32_t cap = conn->msg_len + len + 1;
-        uint8_t *buf = realloc(conn->msg, cap);
-        if(buf == NULL) return NULL;
-        conn->msg   = buf;
-        conn->msg_cap = cap;
-    }
-    return conn->msg + conn->msg_len;
+    return ws_msg_reserve(&conn->msg, len, TRANSPORT_MESSAGE_MAX_LEN);
 }
 
 /* Отбросить недособранное сообщение. */
 static void drop_message(ws_transport_conn_t *conn) {
-    free(conn->msg);
-    conn->msg   = NULL;
-    conn->msg_len = 0;
-    conn->msg_cap = 0;
+    ws_msg_free(&conn->msg);
 }
 
 /* Предел того, что копится непринятым: очередь разбирают на каждом такте, но
@@ -957,7 +942,8 @@ static void drop_message(ws_transport_conn_t *conn) {
  * приложения, и ядро фрагментов не видит. Копия нужна, потому что буфер
  * соединения переиспользуется следующим кадром. */
 static void deliver_message(ws_transport_conn_t *conn) {
-    if(conn->msg_len == 0) {
+    uint32_t msg_len = ws_msg_len(conn->msg);
+    if(msg_len == 0) {
         /* Пустое сообщение ядру не нужно. */
         drop_message(conn);
         return;
@@ -966,7 +952,7 @@ static void deliver_message(ws_transport_conn_t *conn) {
     ws_transport_module_t *m = conn->module;
     if((m->recv_lock == NULL) ||
        (conn->recv_queued >= WS_RECV_QUEUE_MAX) ||
-       (m->recv_bytes + conn->msg_len > WS_RECV_QUEUE_BYTES)) {
+       (m->recv_bytes + msg_len > WS_RECV_QUEUE_BYTES)) {
         /* Разбирать негде или копится больше предела: закрываем соединение —
          * молча терять сообщения клиента нельзя, он ждёт ответа. */
         ESP_LOGW(TAG, "Очередь приёма заполнена (%lu Б в ней), закрываю fd=%d",
@@ -976,10 +962,10 @@ static void deliver_message(ws_transport_conn_t *conn) {
         return;
     }
 
-    ws_transport_recv_t *rec = malloc(sizeof(*rec) + conn->msg_len + 1);
+    ws_transport_recv_t *rec = malloc(sizeof(*rec) + msg_len + 1);
     if(rec == NULL) {
         ESP_LOGW(TAG, "Нет памяти под принятое сообщение (%lu Б), закрываю fd=%d",
-                 (unsigned long)conn->msg_len, conn->fd);
+                 (unsigned long)msg_len, conn->fd);
         drop_message(conn);
         web_server_session_close(m->server, conn->fd);
         return;
@@ -987,9 +973,9 @@ static void deliver_message(ws_transport_conn_t *conn) {
     rec->next = NULL;
     rec->conn = conn;
     rec->gen  = conn->gen;
-    rec->len  = conn->msg_len;
-    memcpy(rec->data, conn->msg, conn->msg_len);
-    rec->data[conn->msg_len] = '\0';   /* ядру удобно видеть строку в логе */
+    rec->len  = msg_len;
+    memcpy(rec->data, ws_msg_data(conn->msg), msg_len);
+    rec->data[msg_len] = '\0';   /* ядру удобно видеть строку в логе */
 
     platform_mutex_take(m->recv_lock, PLATFORM_WAIT_FOREVER);
     if(m->recv_tail != NULL) m->recv_tail->next = rec;
@@ -1113,7 +1099,7 @@ static esp_err_t ws_httpd_handler(httpd_req_t *req) {
                 return ret;
             }
         }
-        conn->msg_len += f.len;
+        ws_msg_commit(conn->msg, f.len);
         if(f.final) deliver_message(conn);
         return ESP_OK;
     }
@@ -1140,7 +1126,7 @@ static esp_err_t ws_httpd_handler(httpd_req_t *req) {
             return ret;
         }
     }
-    conn->msg_len += f.len;
+    ws_msg_commit(conn->msg, f.len);
     if(f.final) deliver_message(conn);
     return ESP_OK;
 }

@@ -1,7 +1,7 @@
 idf_component_register(SRCS "apih_modbus.c" "apih_uart.c"
                             "apih_sys.c" "apih_sys_common.c" "apih_wifi.c" "apih_device.c" "apih_files.c" "apih_fw.c"
                             "connection.c" "net_wifi.c" "net_scan.c" "net_link.c"
-                            "uart.c" "nvs_config.c" "web_file_server.c" "web_iface_policy.c" "ws_transport.c" "app.c" "web_server.c" "web_httpd.c" "file_system_helpers.c" "fs_path.c"
+                            "uart.c" "nvs_config.c" "web_file_server.c" "web_iface_policy.c" "ws_transport.c" "ws_msg.c" "app.c" "web_server.c" "web_httpd.c" "file_system_helpers.c" "fs_path.c"
                     REQUIRES api transport platform
                     PRIV_REQUIRES esp_http_server esp_wifi nvs_flash esp_eth esp_driver_uart esp_driver_gpio esp_timer app_update esp_rom
                     INCLUDE_DIRS ".")

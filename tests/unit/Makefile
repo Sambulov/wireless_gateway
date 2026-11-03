@@ -59,6 +59,7 @@ C_SRCS := \
     apih_sys_common.c \
     web_iface_policy.c \
     fs_path.c \
+    ws_msg.c \
     SegmentedRing.c \
     GwJson.c \
     jsmn.c \
@@ -82,6 +83,7 @@ CPP_SRCS := \
     ApihFwTest.cpp \
     WebIfacePolicyTest.cpp \
     FsPathTest.cpp \
+    WsMsgTest.cpp \
     SegRingTest.cpp
 
 C_OBJS   := $(patsubst %.c,  $(BUILD)/%.o, $(C_SRCS))
