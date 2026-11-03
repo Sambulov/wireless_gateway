@@ -20,10 +20,14 @@ INCLUDES := \
 # (MinGW-w64 без libasan/libubsan) — тогда сборка падает с "cannot find -lasan",
 # поэтому включаем санитайзеры только если тулчейн их действительно несёт.
 # Явный "make SANITIZE=..." по-прежнему главнее.
+# Рантайм ищется под именами обоих тулчейнов: .so — Linux, .dll.a — MinGW
+# (на ненайденное имя -print-file-name отвечает им же, wildcard даёт пусто).
+san_lib = $(wildcard $(shell $(CC) -print-file-name=lib$(1).so) \
+                     $(shell $(CC) -print-file-name=lib$(1).dll.a))
 SANITIZE := -fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer
-ifeq ($(wildcard $(shell $(CC) -print-file-name=libasan.dll.a)),)
+ifeq ($(call san_lib,asan),)
 SANITIZE :=
-else ifeq ($(wildcard $(shell $(CC) -print-file-name=libubsan.dll.a)),)
+else ifeq ($(call san_lib,ubsan),)
 SANITIZE :=
 endif
 
