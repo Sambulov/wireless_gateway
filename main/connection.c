@@ -150,14 +150,16 @@ static void eth_event_handler(void *arg, esp_event_base_t event_base,
 {
     if (event_base == IP_EVENT && event_id == IP_EVENT_ETH_GOT_IP) {
         ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
+        (void)event;
         LOGI(TAG, "Ethernet got IP: " IPSTR, IP2STR(&event->ip_info.ip));
     }
 }
 
 void eth_init_openeth(void)
 {
+    /* Цикл событий уже создан в net_init() — единственном месте, откуда
+     * эта функция вызывается. */
     ESP_ERROR_CHECK(esp_netif_init());
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
 
     esp_netif_config_t netif_cfg = ESP_NETIF_DEFAULT_ETH();
     esp_netif_t *netif_eth = esp_netif_new(&netif_cfg);
@@ -169,7 +171,7 @@ void eth_init_openeth(void)
     phy_config.reset_gpio_num = -1;
 
     esp_eth_mac_t *mac = esp_eth_mac_new_openeth(&mac_config);
-    esp_eth_phy_t *phy = esp_eth_phy_new_dp83848(&phy_config);
+    esp_eth_phy_t *phy = esp_eth_phy_new_generic(&phy_config);
 
     esp_eth_config_t eth_config = ETH_DEFAULT_CONFIG(mac, phy);
     esp_eth_handle_t eth_handle = NULL;
