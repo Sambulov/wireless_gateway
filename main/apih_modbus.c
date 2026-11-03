@@ -81,6 +81,7 @@ struct mb_call_ctx {
 static modbus_worker_t mb_workers[2];
 
 static void send_mb_frame(void *call, modbus_frame_t *f);
+static void send_mb_error(void *call, int code);
 
 
 /* Колбэк драйвера: транзакция закончилась (ответ, ошибка прибора или таймаут).
@@ -144,14 +145,25 @@ static void mb_queue_remove(modbus_worker_t *w, mb_call_ctx_t *c) {
 
 /* отдать голову очереди драйверу; 0 — драйвер занят, вызов подождёт такта */
 static uint8_t mb_worker_start(modbus_worker_t *w) {
-    mb_call_ctx_t *c = w->head;
-    if (!c || modbus_busy(&w->mb))
-        return 0;
+    mb_call_ctx_t *c;
+    uint16_t tid;
+    for (;;) {
+        c = w->head;
+        if (!c || modbus_busy(&w->mb))
+            return 0;
 
-    modbus_reset(&w->mb);
-    uint16_t tid = modbus_request(&w->mb, &c->req, mb_on_complete, c, c->awt_ms);
-    if (!tid)
-        return 0;
+        modbus_reset(&w->mb);
+        tid = modbus_request(&w->mb, &c->req, mb_on_complete, c, c->awt_ms);
+        if (tid)
+            break;
+        /* Линия только что сброшена, значит отказ — не «занято», а кадр, который
+         * драйвер собрать не может (код функции вне его таблицы). Ждать нечего:
+         * запрос снимаем с отказом, иначе он навсегда занял бы голову очереди, а
+         * линию — следующему. Контекст освободит обработчик по done. */
+        mb_queue_pop(w);
+        if (c->call) send_mb_error(c->call, MB_ERR_START);
+        c->done = 1;
+    }
 
     mb_queue_pop(w);
     w->active = c;
