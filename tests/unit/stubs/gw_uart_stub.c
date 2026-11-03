@@ -11,8 +11,9 @@ const gw_uart_config_t gw_uart_config_default = {
     .boud   = 115200
 };
 
-#define MAX_PORTS     2
+#define MAX_PORTS     3     /* аппаратные uart0..uart2 */
 #define MAX_WRITE_LEN 512
+#define MAX_RX_SUBS   2     /* служба UART и Modbus */
 
 static struct {
     void            *desc;
@@ -22,6 +23,7 @@ static struct {
     uint8_t          last_write_buf[MAX_WRITE_LEN];
     uint8_t          echo;
     uint8_t          rx_lost;
+    delegate_t      *rx_subs[MAX_RX_SUBS];      /* подписчики приёма порта */
 } g_slots[MAX_PORTS];
 
 static int find_slot(void *desc) {
@@ -88,14 +90,33 @@ uint8_t gw_uart_take_rx_loss(void *desc) {
     return 0;
 }
 
+/* Подписка запоминается по дескриптору порта: тест подаёт байты в линию
+ * (gw_uart_stub_receive), и их получает тот, кто подписан именно на этот порт. */
 void gw_uart_on_receive_subscribe(void *desc, delegate_t *d) {
-    (void)desc; (void)d;
+    int s = find_slot(desc);
+    for (int i = 0; i < MAX_RX_SUBS; i++) {
+        if (!g_slots[s].rx_subs[i] || g_slots[s].rx_subs[i] == d) {
+            g_slots[s].rx_subs[i] = d;
+            return;
+        }
+    }
 }
 
 void gw_uart_lock_rx(void *desc)   { (void)desc; }
 void gw_uart_unlock_rx(void *desc) { (void)desc; }
 
 /* ── Inspection ────────────────────────────────────────────────────────── */
+
+void gw_uart_stub_receive(void *desc, const uint8_t *data, uint32_t len, uint8_t end) {
+    gw_uart_event_data_t ev = { .buf = (uint8_t *)data, .size = len, .b_end = end };
+    for (int i = 0; i < MAX_PORTS; i++) {
+        if (g_slots[i].desc != desc) continue;
+        for (int k = 0; k < MAX_RX_SUBS; k++) {
+            delegate_t *d = g_slots[i].rx_subs[k];
+            if (d && d->handler) d->handler(&ev, desc, d->context);
+        }
+    }
+}
 
 void gw_uart_stub_set_rx_loss(void *desc) {
     g_slots[find_slot(desc)].rx_lost = 1;

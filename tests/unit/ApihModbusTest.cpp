@@ -2,8 +2,9 @@
  *
  * Клиент — кадр в стаб-транспорт плюс такт ядра, линия — заглушка драйвера
  * UART: что служба отправила в линию, видно по gw_uart_stub_last_write_buf, а
- * ответ прибора тест подаёт байтами тем же путём, что событие приёма UART
- * (apih_modbus_test_rx). Время — system_stub_advance_time. */
+ * ответ прибора тест подаёт в линию порта (gw_uart_stub_receive) — его
+ * получает тот, кто подписан на приём этого порта. Время —
+ * system_stub_advance_time. */
 extern "C" {
 #include "app.h"
 #include "api.h"
@@ -20,19 +21,23 @@ extern "C" {
 
 extern "C" {
     void apih_modbus_test_reset(void);
-    void apih_modbus_test_rx(int worker, const uint8_t *data, uint32_t len, uint8_t end);
 }
 
-/* Порт воркера 0 — "uart1.modbus"; его линия — дескриптор app.uart.port[0]
- * (так связывает ws_modbus_run). */
+/* "uartN.modbus" — линия аппаратного порта N, как и у "uartN.tx/rx/config":
+ * дескриптор app.uart.port[N]. Воркер 0 — "uart1.modbus". */
 #define MB_FID   ESP_WS_API_UART1_MODBUS_REQ
+
+static void client_request_fid(api_t *api, ws_transport_stub_conn_t *conn,
+                               const char *fid, int sid, const char *arg) {
+    char frame[256];
+    snprintf(frame, sizeof(frame), "{\"FID\":\"%s\",\"SID\":%d,\"ARG\":%s}", fid, sid, arg);
+    ws_transport_stub_frame(conn, WS_STUB_FRAME_TEXT, frame, strlen(frame), 1);
+    api_worker(api);
+}
 
 static void client_request(api_t *api, ws_transport_stub_conn_t *conn,
                            int sid, const char *arg) {
-    char frame[256];
-    snprintf(frame, sizeof(frame), "{\"FID\":\"%s\",\"SID\":%d,\"ARG\":%s}", MB_FID, sid, arg);
-    ws_transport_stub_frame(conn, WS_STUB_FRAME_TEXT, frame, strlen(frame), 1);
-    api_worker(api);
+    client_request_fid(api, conn, MB_FID, sid, arg);
 }
 
 TEST_GROUP(ApihModbus) {
@@ -52,7 +57,7 @@ TEST_GROUP(ApihModbus) {
         app.api_ap  = api;
         app.api_sta = NULL;
         LONGS_EQUAL(ESP_OK, ws_modbus_run(&app));
-        line = &app.uart.port[0].desc;
+        line = &app.uart.port[1].desc;
     }
     void teardown() {
         ws_transport_stub_reset();
@@ -72,7 +77,7 @@ TEST(ApihModbus, ReadRequestGoesToTheLineAndReplyComesBack) {
     MEMCMP_EQUAL(req, gw_uart_stub_last_write_buf(line), sizeof(req));
 
     static const uint8_t resp[] = { 0x01, 0x03, 0x02, 0x00, 0x2A, 0x39, 0x9B };
-    apih_modbus_test_rx(0, resp, sizeof(resp), 1);
+    gw_uart_stub_receive(line, resp, sizeof(resp), 1);
     system_stub_advance_time(10);
     api_worker(api);
 
@@ -108,7 +113,7 @@ TEST(ApihModbus, UnbuildableRequestInTheQueueIsSkipped) {
     LONGS_EQUAL(1, gw_uart_stub_write_calls(line));     /* обе ждут линию */
 
     static const uint8_t resp[] = { 0x01, 0x03, 0x02, 0x00, 0x2A, 0x39, 0x9B };
-    apih_modbus_test_rx(0, resp, sizeof(resp), 1);
+    gw_uart_stub_receive(line, resp, sizeof(resp), 1);
     for (int i = 0; i < 4; i++) {
         system_stub_advance_time(10);
         api_worker(api);
@@ -118,4 +123,20 @@ TEST(ApihModbus, UnbuildableRequestInTheQueueIsSkipped) {
     STRCMP_CONTAINS("\"ERR\":3", ws_transport_stub_last_sent(conn2));
     LONGS_EQUAL(2, gw_uart_stub_write_calls(line));     /* третья — на линии */
     LONGS_EQUAL(0x02, gw_uart_stub_last_write_buf(line)[0]);
+}
+
+/* Номер порта в имени FID — аппаратный, как у остальных служб UART: кадр
+ * "uartN.modbus" уходит в UART N, а консоль (UART0) Modbus не трогает. */
+TEST(ApihModbus, FidPortNumberIsTheHardwarePort) {
+    static const uint8_t req[] = { 0x01, 0x03, 0x00, 0x00, 0x00, 0x01, 0x84, 0x0A };
+
+    client_request_fid(api, conn, ESP_WS_API_UART1_MODBUS_REQ, 1,
+                       "{\"ADR\":1,\"FN\":3,\"RA\":0,\"RVC\":1}");
+    client_request_fid(api, conn, ESP_WS_API_UART2_MODBUS_REQ, 2,
+                       "{\"ADR\":1,\"FN\":3,\"RA\":0,\"RVC\":1}");
+
+    LONGS_EQUAL(0, gw_uart_stub_write_calls(&app.uart.port[0].desc));   /* консоль */
+    LONGS_EQUAL(1, gw_uart_stub_write_calls(&app.uart.port[1].desc));
+    LONGS_EQUAL(1, gw_uart_stub_write_calls(&app.uart.port[2].desc));
+    MEMCMP_EQUAL(req, gw_uart_stub_last_write_buf(&app.uart.port[2].desc), sizeof(req));
 }

@@ -13,6 +13,8 @@ int              gw_uart_stub_last_write_len(void *desc);
 const uint8_t   *gw_uart_stub_last_write_buf(void *desc);
 /* Драйвер «потерял» принятое: следующий take_rx_loss этого порта вернёт 1. */
 void             gw_uart_stub_set_rx_loss(void *desc);
+/* Байты пришли в линию порта: их получают подписчики приёма ЭТОГО порта. */
+void             gw_uart_stub_receive(void *desc, const uint8_t *data, uint32_t len, uint8_t end);
 
 #ifdef __cplusplus
 }

@@ -69,7 +69,7 @@ typedef enum {
 typedef struct {
 	app_context_t *app;
 	const char    *fid;   /* имя FID этой регистрации (строковый литерал app.h) */
-	uint8_t        port;  /* 0 — "uart1.*", 1 — "uart2.*" */
+	uint8_t        port;  /* аппаратный номер: N — "uartN.*" */
 	uint8_t        act;   /* uart_act_t */
 } uart_handler_ctx_t;
 
@@ -102,7 +102,7 @@ typedef struct {
     uint8_t *storage;
     uint16_t storage_size;
     platform_mutex_t lock;
-    uint8_t port;               /* 0 — "uart1", 1 — "uart2" */
+    uint8_t port;               /* аппаратный номер: N — "uartN" */
     /* Дескриптор порта: нужен, чтобы спросить у драйвера, не потерял ли он
      * принятое (переполнение приёма) — потеря должна уйти клиенту меткой. */
     void *desc;

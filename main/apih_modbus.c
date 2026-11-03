@@ -437,9 +437,13 @@ static uint8_t mb_register(api_t *api) {
 
 esp_err_t ws_modbus_run(app_context_t *app) {
     for (int i = 0; i < 2; i++) {
+        /* Номер в имени FID — аппаратный, как у "uartN.tx/rx/config": воркер i
+         * обслуживает "uart{i+1}.modbus", то есть UART i+1 (UART0 — консоль).
+         * app->uart.port[] индексируется аппаратными номерами. */
+        int hw = i + 1;
         modbus_worker_t *w = &mb_workers[i];
-        w->app_uart = &app->uart.port[i];
-        w->port_no  = i;
+        w->app_uart = &app->uart.port[hw];
+        w->port_no  = hw;
 
         modbus_config_t cfg = {
             .pxIface             = &mb_iface,
@@ -460,7 +464,7 @@ esp_err_t ws_modbus_run(app_context_t *app) {
             return ESP_FAIL;
         }
 
-        app->uart.port[i].proto_context = &w->mb;
+        app->uart.port[hw].proto_context = &w->mb;
 
         /* Байты линии приходят событиями UART — отдаём их библиотеке. */
         w->rx_delegate.handler = mb_rx_handler;
@@ -485,13 +489,8 @@ esp_err_t ws_modbus_run(app_context_t *app) {
 #include <string.h>
 
 /* Состояние портов статическое (как и на приборе): тесту нужен сброс между
- * случаями, а байты линии он подаёт тем же путём, что событие UART. */
+ * случаями. Байты линии тест подаёт через заглушку драйвера (подписка). */
 void apih_modbus_test_reset(void) {
     memset(mb_workers, 0, sizeof(mb_workers));
-}
-
-void apih_modbus_test_rx(int worker, const uint8_t *data, uint32_t len, uint8_t end) {
-    gw_uart_event_data_t ev = { .buf = (uint8_t *)data, .size = len, .b_end = end };
-    mb_rx_handler(&ev, NULL, &mb_workers[worker]);
 }
 #endif
