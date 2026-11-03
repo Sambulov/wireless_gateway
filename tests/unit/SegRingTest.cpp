@@ -339,6 +339,53 @@ TEST(SegRing, LongSegmentAcrossWrapKeepsOneFrame) {
     CHECK(ends[0] == 20);
 }
 
+/* Читатель просит меньше, чем лежит в сегменте через излом: второй проход
+ * копирования (после конца кольца) обязан ограничиться остатком просьбы, а не
+ * всей просьбой — иначе он пишет за конец приёмника. Раскладка: после сдвига
+ * головы сегмент из 20 байт лежит 18 до конца кольца и 2 в начале; просьба 19
+ * ровно на байт заходит за излом. */
+TEST(SegRing, ShortReadAcrossWrapStaysInsideBuffer) {
+    char out[96];
+    uint16_t ends[8], losts[8];
+    uint8_t n_ends, n_losts;
+    uint8_t buf[24];
+    seg_ring_chunk_t chunk;
+
+    seg_ring_write(&ring, (const uint8_t *)"0123456789", 10, 1);   /* сдвиг головы */
+    LONGS_EQUAL(10, drain(out, ends, &n_ends, losts, &n_losts));
+    seg_ring_write(&ring, (const uint8_t *)"abcdefghijklmnopqrst", 20, 1);
+
+    memset(buf, 0xEE, sizeof(buf));
+    CHECK(seg_ring_read(&ring, buf, 19, &chunk) == 1);
+    LONGS_EQUAL(19, chunk.len);
+    LONGS_EQUAL(0, chunk.end);
+    MEMCMP_EQUAL("abcdefghijklmnopqrs", buf, 19);
+    for (int i = 19; i < (int)sizeof(buf); i++)
+        LONGS_EQUAL(0xEE, buf[i]);                   /* за концом просьбы — нетронуто */
+
+    /* Остаток сегмента — следующим чтением, с концом передачи. */
+    LONGS_EQUAL(1, drain(out, ends, &n_ends, losts, &n_losts));
+    STRCMP_EQUAL("t", out);
+    LONGS_EQUAL(1, n_ends);
+}
+
+/* Справка о сегменте через излом рассказывает о нём целиком: длина — все
+ * байты сегмента, конец — есть, а не только часть до конца кольца. */
+TEST(SegRing, InfoModeAcrossWrapReportsWholeSegment) {
+    char out[96];
+    uint16_t ends[8], losts[8];
+    uint8_t n_ends, n_losts;
+    seg_ring_chunk_t chunk;
+
+    seg_ring_write(&ring, (const uint8_t *)"0123456789", 10, 1);   /* сдвиг головы */
+    LONGS_EQUAL(10, drain(out, ends, &n_ends, losts, &n_losts));
+    seg_ring_write(&ring, (const uint8_t *)"abcdefghijklmnopqrst", 20, 1);
+
+    CHECK(seg_ring_read(&ring, NULL, 0, &chunk) == 1);
+    LONGS_EQUAL(20, chunk.len);
+    LONGS_EQUAL(1, chunk.end);
+}
+
 /* Непрерывный поток: линия не замолкает, сегмент так и не закрывается, а
  * читатель исправно забирает. Кольцо обязано возвращать себе уже отданное —
  * иначе место кончается там, где на самом деле пусто, и писатель начинает
