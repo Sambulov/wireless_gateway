@@ -45,7 +45,7 @@ typedef enum {
 
 #define GW_UART_PRIVATE(size)    uint32_t __private[(size + sizeof(void *) - 1) >> 2]
 
-#define GW_UART_PRIVATE_SIZE     48
+#define GW_UART_PRIVATE_SIZE    52
 
 typedef struct {
   GW_UART_PRIVATE(GW_UART_PRIVATE_SIZE);
