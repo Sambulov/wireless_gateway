@@ -47,6 +47,11 @@ int gw_json_find(const gw_json_t *j, const char *key);
 uint8_t gw_json_int(const gw_json_t *j, const char *key, int32_t *out);
 uint8_t gw_json_int_at(const gw_json_t *j, int idx, int32_t *out);
 
+/* 32 бита без знака: целое 0..4294967295 или строка "0x" + 1..8 hex-цифр (так
+ * сервер печатает SID в ответе). Всё прочее, в том числе переполнение, —
+ * отказ (0), out при этом не меняется. */
+uint8_t gw_json_uint32(const gw_json_t *j, const char *key, uint32_t *out);
+
 /* Строка: раскрывается экранирование, результат копируется в out и всегда
  * заканчивается нулём. 0 — значение есть, но не влезло в out_size. */
 uint8_t gw_json_str(const gw_json_t *j, const char *key, char *out, size_t out_size);

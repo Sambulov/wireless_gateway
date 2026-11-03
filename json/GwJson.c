@@ -122,6 +122,46 @@ uint8_t gw_json_int_at(const gw_json_t *j, int idx, int32_t *out)
     return out ? tok_to_int(j, idx, out) : 0;
 }
 
+uint8_t gw_json_uint32(const gw_json_t *j, const char *key, uint32_t *out)
+{
+    if (!out)
+        return 0;
+    int idx = gw_json_find(j, key);
+    if (idx < 0)
+        return 0;
+    const char *s = j->js + j->tok[idx].start;
+    int len = j->tok[idx].end - j->tok[idx].start;
+    uint64_t v = 0;
+
+    if (j->tok[idx].type == JSMN_PRIMITIVE) {
+        if (len <= 0)
+            return 0;
+        for (int i = 0; i < len; i++) {
+            if (s[i] < '0' || s[i] > '9')
+                return 0;            /* знак, дробь, true/false/null */
+            v = v * 10 + (uint64_t)(s[i] - '0');
+            if (v > 0xFFFFFFFFull)
+                return 0;
+        }
+    } else if (j->tok[idx].type == JSMN_STRING) {
+        if (len < 3 || len > 10 || s[0] != '0' || (s[1] != 'x' && s[1] != 'X'))
+            return 0;
+        for (int i = 2; i < len; i++) {
+            char c = s[i];
+            int d = (c >= '0' && c <= '9') ? c - '0'
+                  : (c >= 'a' && c <= 'f') ? c - 'a' + 10
+                  : (c >= 'A' && c <= 'F') ? c - 'A' + 10 : -1;
+            if (d < 0)
+                return 0;
+            v = (v << 4) | (uint64_t)d;
+        }
+    } else {
+        return 0;
+    }
+    *out = (uint32_t)v;
+    return 1;
+}
+
 uint8_t gw_json_int(const gw_json_t *j, const char *key, int32_t *out)
 {
     if (!out)

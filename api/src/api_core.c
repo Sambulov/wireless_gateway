@@ -770,8 +770,18 @@ static void api_receive(api_private_t *core, const void *conn, const void *data,
         return;
     }
 
-    int32_t sid = 0;
-    uint8_t has_sid = gw_json_int(&json, "SID", &sid) ? 1 : 0;
+    /* SID — 32 бита без знака (число или "0x…", как в ответе). Поле есть, но
+     * в нём не то — отказ: тихая подмена склеила бы чужие вызовы. */
+    uint32_t sid = 0;
+    uint8_t has_sid = 0;
+    if(gw_json_find(&json, "SID") >= 0) {
+        if(!gw_json_uint32(&json, "SID", &sid)) {
+            api_log(core, API_LOG_WARN, "Bad SID, replied BAD_REQ");
+            api_reply_status(core, conn, fid, 0, 0, API_CALL_ERROR_STATUS_BAD_REQ);
+            return;
+        }
+        has_sid = 1;
+    }
 
     const char *arg = NULL;
     size_t arg_len = 0;

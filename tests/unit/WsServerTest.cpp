@@ -966,6 +966,40 @@ TEST(WsServerSend, ResponseBuilderBuildsFrameInPlace) {
     STRCMP_CONTAINS("\"SID\":\"0x00000003\"", ws_transport_stub_last_sent(conn));
 }
 
+/* SID — 32 бита без знака, как и печатается в ответе ("0x%08lx"). Раньше он
+ * читался как int32 с насыщением: все SID больше 2^31 становились
+ * 0x7fffffff, и разные вызовы склеивались. */
+TEST(WsServerSend, LargeSidIsEchoedExactly) {
+    api_call_register(api, builder_handler, "send.sid", NULL);
+    send_text(conn, "{\"FID\":\"send.sid\",\"SID\":3000000000}");
+    api_worker(api);
+    STRCMP_CONTAINS("\"SID\":\"0xb2d05e00\"", ws_transport_stub_last_sent(conn));
+}
+
+/* SID строкой — в том же виде, в каком его возвращает сервер. */
+TEST(WsServerSend, HexStringSidIsAccepted) {
+    api_call_register(api, builder_handler, "send.sid", NULL);
+    send_text(conn, "{\"FID\":\"send.sid\",\"SID\":\"0x0000002a\"}");
+    api_worker(api);
+    STRCMP_CONTAINS("\"SID\":\"0x0000002a\"", ws_transport_stub_last_sent(conn));
+}
+
+/* SID есть, но не 32-битное число без знака — отказ, а не тихая подмена. */
+TEST(WsServerSend, InvalidSidIsRefused) {
+    api_call_register(api, builder_handler, "send.sid", NULL);
+    const char *bad[] = {
+        "{\"FID\":\"send.sid\",\"SID\":-1}",
+        "{\"FID\":\"send.sid\",\"SID\":4294967296}",
+        "{\"FID\":\"send.sid\",\"SID\":1.5}",
+        "{\"FID\":\"send.sid\",\"SID\":\"abc\"}",
+    };
+    for (unsigned i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+        send_text(conn, bad[i]);
+        api_worker(api);
+        STRCMP_CONTAINS("\"STA\":\"0x80000000\"", ws_transport_stub_last_sent(conn));
+    }
+}
+
 TEST(WsServerSend, CancelResponseReleasesBuffer) {
     /* Подготовленный и неотправленный ответ освобождается (иначе LeakSanitizer) */
     char *arg = api_call_begin_response(16);

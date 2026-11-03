@@ -130,6 +130,28 @@ TEST(GwJsonParse, ValueAfterTheRootObjectIsRefused) {
     CHECK(parse("{\"FID\":\"x\"}  \n"));            /* пробелы после — можно */
 }
 
+TEST(GwJsonParse, Uint32AcceptsTheFullRangeAndHexStrings) {
+    uint32_t v = 0;
+    CHECK(parse("{\"S\":4294967295}"));
+    CHECK(gw_json_uint32(&j, "S", &v));
+    LONGS_EQUAL(0xFFFFFFFFu, v);
+    CHECK(parse("{\"S\":\"0xB2D05E00\"}"));
+    CHECK(gw_json_uint32(&j, "S", &v));
+    LONGS_EQUAL(0xB2D05E00u, v);
+}
+
+TEST(GwJsonParse, Uint32RefusesWhatDoesNotFit) {
+    uint32_t v = 7;
+    const char *bad[] = { "{\"S\":-1}", "{\"S\":4294967296}", "{\"S\":1.5}",
+                          "{\"S\":true}", "{\"S\":\"12\"}", "{\"S\":\"0x\"}",
+                          "{\"S\":\"0x123456789\"}", "{\"S\":\"0xZZ\"}" };
+    for (unsigned i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+        CHECK(parse(bad[i]));
+        CHECK_FALSE(gw_json_uint32(&j, "S", &v));
+    }
+    LONGS_EQUAL(7, v);                       /* при отказе не трогается */
+}
+
 TEST(GwJsonParse, EmptyArgObjectIsParsed) {
     CHECK(parse("{\"FID\":16,\"FLAGS\":0,\"ARG\":{}}"));
     const char *start = NULL;
