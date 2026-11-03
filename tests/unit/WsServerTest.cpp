@@ -175,6 +175,8 @@ static void send_cont(ws_transport_stub_conn_t *conn, const char *json, int fina
  * остаётся. */
 #define TRANSPORT_TEARDOWN()                                 \
     do {                                                     \
+        /* очередь пира — только под замком ядра, в любом тесте */ \
+        LONGS_EQUAL(0, ws_transport_stub_unlocked_sends());  \
         ws_transport_stub_reset();                           \
         api_deinit(api);                                     \
         api = NULL;                                          \
@@ -877,6 +879,22 @@ TEST(WsServerSend, SendRefusedByTransportReleasesBuffer) {
     /* Вызов снят обработчиком (он вернул FALSE) — и ничего не утекло */
     char buf[] = "{}";
     LONGS_EQUAL(0, api_call_group_fid_data(api, "send.refuse", buf, 2));
+}
+
+/* Ответы-отказы, которые ядро шлёт само (кривой кадр, нет FID, нет
+ * обработчика), правят очередь пира — значит, только под замком ядра. На
+ * приборе разбор кадра идёт в задаче транспорта, а очередь параллельно правит
+ * задача ядра: отправка без замка рвала связный список. */
+TEST(WsServerSend, CoreRepliesAreSentUnderTheCoreLock) {
+    send_text(conn, "not json");
+    STRCMP_CONTAINS("0x80000", ws_transport_stub_last_sent(conn));
+    send_text(conn, "{\"SID\":1}");
+    send_text(conn, "{\"FID\":\"no.such.fid\",\"SID\":2}");
+    api_worker(api);
+    STRCMP_CONTAINS("\"FID\":\"no.such.fid\"", ws_transport_stub_last_sent(conn));
+
+    LONGS_EQUAL(3, ws_transport_stub_send_attempts(conn));
+    LONGS_EQUAL(0, ws_transport_stub_unlocked_sends());
 }
 
 TEST(WsServerSend, ReplyToFullQueueNeverEvictsTheFrameInFlight) {

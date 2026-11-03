@@ -79,6 +79,8 @@ void        ws_transport_stub_set_send_result(ws_transport_stub_conn_t *conn,
                                              transport_result_t res);
 int         ws_transport_stub_send_attempts(ws_transport_stub_conn_t *conn);
 const char *ws_transport_stub_last_sent(ws_transport_stub_conn_t *conn);
+/* Сколько отправок ядро начало БЕЗ своего замка (с последнего reset). */
+int         ws_transport_stub_unlocked_sends(void);
 int         ws_transport_stub_delivered(ws_transport_stub_conn_t *conn);
 
 /* Отложенные завершения: при deferred == 1 begin_send копит отправки, а

@@ -69,6 +69,7 @@ typedef struct { int depth; } stub_mutex_t;
 static uint32_t stub_mutex_takes;
 static uint32_t stub_mutex_creates;
 static uint32_t stub_mutex_alive;
+static int      stub_mutex_held;      /* сумма глубин всех мьютексов стаба */
 
 platform_mutex_t platform_mutex_create(void) {
     void *m = stub_track(calloc(1, sizeof(stub_mutex_t)), free);
@@ -78,17 +79,18 @@ platform_mutex_t platform_mutex_create(void) {
 
 int platform_mutex_take(platform_mutex_t m, uint32_t timeout_ms) {
     (void)timeout_ms;
-    if (m) { ((stub_mutex_t *)m)->depth++; stub_mutex_takes++; }
+    if (m) { ((stub_mutex_t *)m)->depth++; stub_mutex_takes++; stub_mutex_held++; }
     return 1;
 }
 
 void platform_mutex_give(platform_mutex_t m) {
-    if (m) ((stub_mutex_t *)m)->depth--;
+    if (m) { ((stub_mutex_t *)m)->depth--; stub_mutex_held--; }
 }
 
 uint32_t system_stub_mutex_takes(void)   { return stub_mutex_takes; }
 uint32_t system_stub_mutex_creates(void) { return stub_mutex_creates; }
 uint32_t system_stub_mutex_alive(void)   { return stub_mutex_alive; }
+int      system_stub_mutex_held(void)    { return stub_mutex_held; }
 
 /* ── Queue ────────────────────────────────────────────────────────────── */
 
@@ -258,5 +260,6 @@ void system_stub_reset(void) {
     stub_mutex_takes        = 0;
     stub_mutex_creates      = 0;
     stub_mutex_alive        = 0;
+    stub_mutex_held         = 0;
     stub_restart_count      = 0;
 }

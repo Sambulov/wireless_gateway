@@ -41,6 +41,9 @@ uint32_t system_stub_mutex_creates(void);
 /* Сколько мьютексов создано и ещё не освобождено (после api_deinit остаётся
  * один — системный, ядро его не удаляет). */
 uint32_t system_stub_mutex_alive(void);
+/* Взят ли сейчас хоть один мьютекс стаба (сумма глубин). Транспорт-стаб
+ * проверяет по нему, что ядро отправляет только под своим замком. */
+int      system_stub_mutex_held(void);
 
 /* Queue introspection — how many items are currently pending in a queue */
 uint32_t system_stub_queue_count(void *queue);

@@ -480,16 +480,15 @@ static void api_dispatch(api_private_t *core, api_call_t *call) {
 
     api_handler_item_t *reg = api_handler_find(core, call->fid);
     if(reg == NULL) {
-        api_peer_t *peer = call->peer;
-        uint8_t has_sid = call->has_sid;
-        uint32_t sid = call->sid;
+        /* Отказ — под замком и до освобождения вызова: очередь пира правится
+         * только под замком, а пира держит вызов (peer->calls), пока он жив. */
         char fid[API_FID_NAME_MAX];
         mem_cpy(fid, call->fid, sizeof(fid));
+        api_send_frame(core, call->peer, api_frame_buffer_status(fid, call->has_sid, call->sid,
+                                                                 API_CALL_ERROR_STATUS_NO_HANDLER), 0);
         api_call_release(core, call);
         api_unlock(core);
         api_log(core, API_LOG_WARN, "No method for FID %s, replied NO_HANDLER", fid);
-        api_send_frame(core, peer, api_frame_buffer_status(fid, has_sid, sid,
-                                                           API_CALL_ERROR_STATUS_NO_HANDLER), 0);
         return;
     }
 
@@ -730,8 +729,22 @@ static void api_transfer_done(api_private_t *core, const void *conn) {
     api_unlock(core);
 }
 
-/* Разбор кадра клиента: конверта FID/SID/ARG, без дерева значений. */
-static void api_receive(api_private_t *core, api_peer_t *peer, const void *data, uint32_t len) {
+/* Отказ, который ядро шлёт само, не дойдя до обработчика. Пир ищется под
+ * замком в момент отправки: разбор кадра идёт в задаче транспорта без замка,
+ * и за это время соединение могло закрыться, а пир — уйти в уборку (закрытый
+ * пир из peers уже снят и не найдётся). Очередь пира — только под замком. */
+static void api_reply_status(api_private_t *core, const void *conn, const char *fid,
+                             uint8_t has_sid, uint32_t sid, uint32_t status) {
+    api_lock(core);
+    api_peer_t *peer = api_peer_find(core, conn);
+    if(peer != NULL)
+        api_send_frame(core, peer, api_frame_buffer_status(fid, has_sid, sid, status), 0);
+    api_unlock(core);
+}
+
+/* Разбор кадра клиента: конверта FID/SID/ARG, без дерева значений. Пир не
+ * передаётся: он ищется под замком там, где нужен (см. api_reply_status). */
+static void api_receive(api_private_t *core, const void *conn, const void *data, uint32_t len) {
     if((data == NULL) || (len == 0)) {
         api_log(core, API_LOG_INFO, "Empty message dropped");
         return;
@@ -741,22 +754,19 @@ static void api_receive(api_private_t *core, api_peer_t *peer, const void *data,
     gw_json_t json;
     if(!gw_json_parse(&json, (const char *)data, len, toks, API_FRAME_MAX_TOKENS)) {
         api_log(core, API_LOG_WARN, "Frame is not JSON, replied BAD_REQ");
-        api_send_frame(core, peer, api_frame_buffer_status("", 0, 0,
-                                                           API_CALL_ERROR_STATUS_BAD_REQ), 0);
+        api_reply_status(core, conn, "", 0, 0, API_CALL_ERROR_STATUS_BAD_REQ);
         return;
     }
 
     char fid[API_FID_NAME_MAX * 2];
     if(!gw_json_str(&json, "FID", fid, sizeof(fid)) || !fid[0]) {
         api_log(core, API_LOG_WARN, "Frame has no FID, replied NO_FID");
-        api_send_frame(core, peer, api_frame_buffer_status("", 0, 0,
-                                                           API_CALL_ERROR_STATUS_NO_FID), 0);
+        api_reply_status(core, conn, "", 0, 0, API_CALL_ERROR_STATUS_NO_FID);
         return;
     }
     if(strlen(fid) >= API_FID_NAME_MAX) {
         api_log(core, API_LOG_WARN, "FID too long, replied NO_FID");
-        api_send_frame(core, peer, api_frame_buffer_status("", 0, 0,
-                                                           API_CALL_ERROR_STATUS_NO_FID), 0);
+        api_reply_status(core, conn, "", 0, 0, API_CALL_ERROR_STATUS_NO_FID);
         return;
     }
 
@@ -768,12 +778,19 @@ static void api_receive(api_private_t *core, api_peer_t *peer, const void *data,
     gw_json_raw(&json, "ARG", &arg, &arg_len);
 
     api_lock(core);
+    api_peer_t *peer = api_peer_find(core, conn);
+    if(peer == NULL) {
+        /* Закрылось, пока кадр разбирался: вызов заводить не для кого. */
+        api_unlock(core);
+        api_log(core, API_LOG_WARN, "Message for unknown connection %p, dropped", conn);
+        return;
+    }
     api_call_t *call = api_call_alloc(core);
     if(call == NULL) {
-        api_unlock(core);
-        api_log(core, API_LOG_WARN, "No free call descriptors, replied NO_FREE_DESCRIPTORS");
         api_send_frame(core, peer, api_frame_buffer_status(fid, has_sid, (uint32_t)sid,
                                                            API_CALL_ERROR_STATUS_NO_FREE_DESCRIPTORS), 0);
+        api_unlock(core);
+        api_log(core, API_LOG_WARN, "No free call descriptors, replied NO_FREE_DESCRIPTORS");
         return;
     }
     call->api     = (api_t *)(void *)core;
@@ -786,10 +803,10 @@ static void api_receive(api_private_t *core, api_peer_t *peer, const void *data,
     if((arg != NULL) && (arg_len > 0)) {
         uint8_t *copy = malloc(arg_len);
         if(copy == NULL) {
-            api_call_release(core, call);
-            api_unlock(core);
             api_send_frame(core, peer, api_frame_buffer_status(fid, has_sid, (uint32_t)sid,
                                                                API_CALL_ERROR_STATUS_NO_MEM), 0);
+            api_call_release(core, call);
+            api_unlock(core);
             return;
         }
         mem_cpy(copy, arg, arg_len);
@@ -825,17 +842,9 @@ static void api_transport_event(void *event_trigger, void *sender, void *context
         api_peer_close(core, sender);
         return;
 
-    case TRANSPORT_RECEIVED: {
-        api_lock(core);
-        api_peer_t *peer = api_peer_find(core, sender);
-        api_unlock(core);
-        if(peer == NULL) {
-            api_log(core, API_LOG_WARN, "Message for unknown connection %p, dropped", sender);
-            return;
-        }
-        api_receive(core, peer, ev->data.ptr, ev->data.length);
+    case TRANSPORT_RECEIVED:
+        api_receive(core, sender, ev->data.ptr, ev->data.length);
         return;
-    }
 
     case TRANSPORT_TRANSFER_COMPLETE:
     case TRANSPORT_TRANSFER_ERR:

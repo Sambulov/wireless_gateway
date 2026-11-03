@@ -205,11 +205,18 @@ static transport_result_t stub_break_sending(const void *self) {
     return TRANSPORT_OK;
 }
 
+static int stub_unlocked_sends;
+
+int ws_transport_stub_unlocked_sends(void) { return stub_unlocked_sends; }
+
 /* Отправка идёт одним куском: прерывать нечего (как у httpd). */
 static transport_result_t stub_begin_send(const void *self, const void *data, uint32_t length) {
     ws_transport_stub_conn_t *conn = conn_of(self);
     if((conn == NULL) || (data == NULL) || (length == 0)) return TRANSPORT_BAD_CALL;
     conn->send_attempts++;
+    /* Очередь пира ядро правит только под своим замком; отправка без него —
+     * гонка с задачей ядра (на приборе — другой поток). */
+    if(system_stub_mutex_held() <= 0) stub_unlocked_sends++;
 
     /* Транспорт мог отказаться от отправки (нет памяти, соединение мертво) —
      * тогда колбэка не будет, и буфер освобождает ядро. */
@@ -531,6 +538,7 @@ void ws_transport_stub_reset(void) {
     }
     conns = NULL;
     next_iface = GW_IFACE_AP;
+    stub_unlocked_sends = 0;
     /* Отложенные события принадлежат прошлому тесту: их получатели (соединения и
      * ядро) уже не существуют. */
     notify_queued = 0;
