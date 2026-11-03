@@ -8,6 +8,9 @@
 #include "net_iface.h"
 
 #include <stdarg.h>
+#include <dirent.h>
+#include <string.h>
+#include <sys/stat.h>
 
 #define GW_LOG_MODULE GW_LOG_APP
 #include "gw_log.h"
@@ -126,6 +129,44 @@ static void register_pages(web_server_t *srv, uint8_t with_config_page) {
     web_server_register_uri(srv, &file_server);
 }
 
+/* ── Список веб-ресурсов в консоли ──────────────────────────────────────────
+ *
+ * Печатаем, что реально доступно по HTTP: страницы LittleFS (каталоги — вглубь,
+ * поэтому видны и /terminal/index.html), вшитая страница конфигурации и
+ * псевдоним /modbus. Список собирается с файловой системы, а не из константы:
+ * файлы можно менять файловым менеджером без перепрошивки. Это пользовательский
+ * список, а не отладочный лог, поэтому печатается всегда — переключатель
+ * GW_LOG_APP на него не распространяется. */
+static void log_html_files(const char *dir) {
+    DIR *d;
+    struct dirent *entry;
+    struct stat st;
+    char path[512];
+
+    d = opendir(dir);
+    if (d == NULL)
+        return;
+    while ((entry = readdir(d)) != NULL) {
+        if (entry->d_name[0] == '.')
+            continue;
+        snprintf(path, sizeof(path), "%s/%s", dir, entry->d_name);
+        if (stat(path, &st) != 0)
+            continue;
+        if (S_ISDIR(st.st_mode)) {
+            log_html_files(path);
+            continue;
+        }
+        if (strstr(entry->d_name, ".html") != NULL)
+            ESP_LOGI("app", "  http://<ip>%s", path + sizeof("/lfs") - 1);
+    }
+    closedir(d);
+}
+
+static void log_web_resources(void) {
+    ESP_LOGI("app", "Web pages:");
+    log_html_files("/lfs");
+}
+
 void app_main(void)
 {
     static app_context_t app_context;
@@ -223,6 +264,7 @@ void app_main(void)
 #ifdef CONFIG_QEMU_BUILD
     register_pages(app_context.web_eth, 0);
 #endif
+    log_web_resources();
 
     /* Транспорт порождает приложение: ws_transport_create только заполняет
      * объект (методы + веб-сервер как контекст), а путь, подписка и цикл — в open,
