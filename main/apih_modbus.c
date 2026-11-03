@@ -15,6 +15,8 @@
 
 #define MB_PAYLOAD_SIZE    255
 #define MB_DEFAULT_AWT_MS  500
+/* предел ожидания ответа: awt хранится в uint16 вместе с запасом +500 мс */
+#define MB_AWT_MAX_MS      60000
 
 /* токенов на разбор ARG: ADR/FN/RA/RVC/AWT и список RD; длиннее — отказ разбора */
 #define MB_ARG_MAX_TOKENS  48
@@ -276,19 +278,39 @@ static uint8_t mb_call_parse(mb_call_ctx_t *ctx, uint8_t *data, uint32_t len) {
         if (!gw_json_int(&json, "FN", &val) || val < 0 || val > 127) break;
         frame.ucFunc = (uint8_t)val;
 
-        if (gw_json_int(&json, "RA",  &val) && val >= 0) frame.usRegAddr       = (uint16_t)val;
-        if (gw_json_int(&json, "RVC", &val) && val >= 0) frame.usRegValueCount = (uint16_t)val;
-        if (gw_json_int(&json, "AWT", &val) && val > 0)  awt_ms                = (uint32_t)val;
+        /* Поля, которые есть, обязаны помещаться в свои разряды: молчаливое
+         * усечение адресовало бы не тот регистр, а AWT 65536 давал таймаут 0. */
+        uint8_t has_rvc = 0;
+        if (gw_json_int(&json, "RA", &val)) {
+            if (val < 0 || val > 0xFFFF) break;
+            frame.usRegAddr = (uint16_t)val;
+        }
+        if (gw_json_int(&json, "RVC", &val)) {
+            if (val < 0 || val > 0xFFFF) break;
+            frame.usRegValueCount = (uint16_t)val;
+            has_rvc = 1;
+        }
+        if (gw_json_int(&json, "AWT", &val) && val > 0) {
+            if (val > MB_AWT_MAX_MS) break;
+            awt_ms = (uint32_t)val;
+        }
 
         int n;
         if (gw_json_arr_len(&json, "RD", &n) && n > 0) {
             int stride = (frame.ucFunc == MB_FUNC_WRITE_COILS) ? 1 : 2;
+            int32_t vmax = (stride == 2) ? 0xFFFF : 0xFF;
             if (n * stride > MB_PAYLOAD_SIZE) break;
+            /* Запись регистров: число в запросе — это число значений. */
+            if (has_rvc && (frame.ucFunc == MB_FUNC_WRITE_HOLDINGS) &&
+                (frame.usRegValueCount != n)) break;
             frame.ucLengthCode = (uint8_t)(n * stride);
             frame.pucData      = wr_buf;
-            for (int i = 0; i < n; i++) {
+            int i;
+            for (i = 0; i < n; i++) {
                 int32_t v;
-                if (!gw_json_arr_int(&json, "RD", i, &v)) break;
+                /* Нечисловое или не влезающее значение — отказ всего запроса,
+                 * а не ноль в регистре прибора. */
+                if (!gw_json_arr_int(&json, "RD", i, &v) || v < 0 || v > vmax) break;
                 uint32_t u = (uint32_t)v;
                 if (stride == 2) {
                     wr_buf[i * 2]     = (u >> 8) & 0xff;
@@ -297,6 +319,7 @@ static uint8_t mb_call_parse(mb_call_ctx_t *ctx, uint8_t *data, uint32_t len) {
                     wr_buf[i] = u & 0xff;
                 }
             }
+            if (i < n) break;
         }
 
         parse_ok = 1;

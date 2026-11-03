@@ -178,3 +178,44 @@ TEST(ApihModbus, QueuedWriteKeepsItsData) {
     LONGS_EQUAL(2, gw_uart_stub_write_calls(line));
     MEMCMP_EQUAL(req, gw_uart_stub_last_write_buf(line), sizeof(req));
 }
+
+/* ── разбор ARG ──────────────────────────────────────────────────────────── */
+
+/* Отказ разбора: клиенту ERR 2, в линию ничего не уходит. */
+static void expect_arg_refused(api_t *api, ws_transport_stub_conn_t *conn, void *line,
+                               const char *arg) {
+    client_request(api, conn, 7, arg);
+    STRCMP_CONTAINS("\"ERR\":2", ws_transport_stub_last_sent(conn));
+    LONGS_EQUAL(0, gw_uart_stub_write_calls(line));
+}
+
+/* Регрессия: нечисловой элемент RD молча становился нулём и уходил в
+ * регистр прибора. */
+TEST(ApihModbus, NonIntegerRegisterValueIsRefused) {
+    expect_arg_refused(api, conn, line, "{\"ADR\":1,\"FN\":16,\"RA\":0,\"RVC\":3,\"RD\":[100,\"x\",3]}");
+}
+
+TEST(ApihModbus, RegisterValueOutOfRangeIsRefused) {
+    expect_arg_refused(api, conn, line, "{\"ADR\":1,\"FN\":16,\"RA\":0,\"RVC\":1,\"RD\":[70000]}");
+}
+
+TEST(ApihModbus, NegativeRegisterValueIsRefused) {
+    expect_arg_refused(api, conn, line, "{\"ADR\":1,\"FN\":16,\"RA\":0,\"RVC\":1,\"RD\":[-1]}");
+}
+
+TEST(ApihModbus, RegisterAddressOutOfRangeIsRefused) {
+    expect_arg_refused(api, conn, line, "{\"ADR\":1,\"FN\":3,\"RA\":70000,\"RVC\":1}");
+}
+
+TEST(ApihModbus, RegisterCountOutOfRangeIsRefused) {
+    expect_arg_refused(api, conn, line, "{\"ADR\":1,\"FN\":3,\"RA\":0,\"RVC\":70000}");
+}
+
+/* AWT усекался до uint16: 65536 давал таймаут 0, 70000 — 4,4 с. */
+TEST(ApihModbus, AnswerWaitTimeOutOfRangeIsRefused) {
+    expect_arg_refused(api, conn, line, "{\"ADR\":1,\"FN\":3,\"RA\":0,\"RVC\":1,\"AWT\":65536}");
+}
+
+TEST(ApihModbus, WriteRegistersCountMustMatchTheValues) {
+    expect_arg_refused(api, conn, line, "{\"ADR\":1,\"FN\":16,\"RA\":0,\"RVC\":3,\"RD\":[1,2]}");
+}
