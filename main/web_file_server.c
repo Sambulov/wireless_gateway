@@ -10,6 +10,7 @@
 #include "esp_http_server.h"
 
 #include "app.h"
+#include "fs_path.h"
 
 #define GW_LOG_MODULE GW_LOG_HTTP
 #include "gw_log.h"
@@ -18,31 +19,7 @@
 
 #define BASE_PATH  "/lfs"
 
-/* Копирует в dest полный путь (база + uri без query и якоря) и возвращает
- * указатель на часть после базы; NULL — не влезло. */
-static char* get_path_from_uri(char *dest, const char *base_path, const char *uri, size_t destsize)
-{
-    const size_t base_pathlen = strlen(base_path);
-    size_t pathlen = strlen(uri);
-
-    const char *quest = strchr(uri, '?');
-    if (quest) {
-        pathlen = MIN(pathlen, quest - uri);
-    }
-    const char *hash = strchr(uri, '#');
-    if (hash) {
-        pathlen = MIN(pathlen, hash - uri);
-    }
-
-    if (base_pathlen + pathlen + 1 > destsize) {
-        return NULL;
-    }
-
-    strcpy(dest, base_path);
-    strlcpy(dest + base_pathlen, uri, pathlen + 1);
-
-    return dest;
-}
+#define INDEX_FILE "/index.html"
 
 #define IS_FILE_EXT(filename, ext) \
     (strcasecmp(&filename[strlen(filename) - sizeof(ext) + 1], ext) == 0)
@@ -71,29 +48,30 @@ static esp_err_t common_http_handler(httpd_req_t *req)
 {
     LOGD(TAG, "%s: common handler is called", __func__);
 
-    char path_buf[FILE_PATH_MAX];
-    char *path = get_path_from_uri(path_buf, BASE_PATH, req->uri, FILE_PATH_MAX);
+    /* Путь из URI — через общую проверку (fs_path.c): без query и якоря,
+     * без "..", длинный — отказ. Нормализуется сразу на место после базы, а
+     * место под "/index.html" оставлено в конце, поэтому дописывание ниже не
+     * обрезается (лишних буферов на стеке задачи httpd нет). */
+    char path[FILE_PATH_MAX];
+    const size_t base_len = sizeof(BASE_PATH) - 1;
+    memcpy(path, BASE_PATH, base_len);
+    if (fs_path_from_uri(req->uri, path + base_len,
+                         sizeof(path) - base_len - (sizeof(INDEX_FILE) - 1)) == NULL)
+        return httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "File does not exist");
 
     LOGD(TAG, "%s: path requested", path);
 
     struct stat st;
-    if(stat(path, &st) == 0) {
-        if(S_ISDIR(st.st_mode)) {
-            const char index_file[] = "index.html";
-            size_t pathlen = strlen(path_buf);
-            if (pathlen + sizeof(index_file) + 1 >= FILE_PATH_MAX)
-                path = NULL;
-            else {
-                strcpy(&path_buf[pathlen], index_file);
-                if (stat(path, &st) != 0)
-                    path = NULL;
-            }
-        }
-    }
-    else path = NULL;
-
-    if(path == NULL)
+    if (stat(path, &st) != 0)
         return httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "File does not exist");
+    if (S_ISDIR(st.st_mode)) {
+        /* Корень нормализован в "/", остальные каталоги — без хвостового '/'. */
+        size_t n = strlen(path);
+        snprintf(path + n, sizeof(path) - n, "%s",
+                 (path[n - 1] == '/') ? INDEX_FILE + 1 : INDEX_FILE);
+        if (stat(path, &st) != 0)
+            return httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "File does not exist");
+    }
 
     FILE *fd = fopen(path, "r");
     if (!fd) {

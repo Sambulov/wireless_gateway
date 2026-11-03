@@ -106,3 +106,32 @@ TEST(FsPath, TempNameIsRefusedForDirectoriesAndTightBuffers) {
     STRCMP_EQUAL("/.m.part", tmp);
     CHECK_FALSE(fs_path_temp(NULL, tmp, sizeof(tmp)));
 }
+
+/* ── путь из URI запроса страницы ───────────────────────────────────────── */
+
+TEST(FsPath, UriQueryAndFragmentAreDropped) {
+    STRCMP_EQUAL("/index.html", fs_path_from_uri("/index.html?v=3#top", out, sizeof(out)));
+    STRCMP_EQUAL("/a/b.js", fs_path_from_uri("/a//b.js#x", out, sizeof(out)));
+    STRCMP_EQUAL("/", fs_path_from_uri("/?x=1", out, sizeof(out)));
+}
+
+/* Регрессия: длинный URI давал NULL, и обработчик звал stat(NULL) — прибор
+ * падал от одного GET. Отказ должен быть именно отказом, а не обрезанием. */
+TEST(FsPath, UriLongerThanTheBufferIsRefused) {
+    char uri[400];
+    uri[0] = '/';
+    memset(uri + 1, 'a', sizeof(uri) - 2);
+    uri[sizeof(uri) - 1] = '\0';
+    POINTERS_EQUAL(NULL, fs_path_from_uri(uri, out, sizeof(out)));
+
+    char big[512];                     /* влезает — принимается, без своего предела */
+    CHECK(fs_path_from_uri(uri, big, sizeof(big)) != NULL);
+    LONGS_EQUAL(sizeof(uri) - 1, strlen(big));
+}
+
+TEST(FsPath, UriEscapingTheRootIsRefused) {
+    POINTERS_EQUAL(NULL, fs_path_from_uri("/../secret", out, sizeof(out)));
+    POINTERS_EQUAL(NULL, fs_path_from_uri("/a/../../b?x", out, sizeof(out)));
+    POINTERS_EQUAL(NULL, fs_path_from_uri("noslash", out, sizeof(out)));
+    POINTERS_EQUAL(NULL, fs_path_from_uri(NULL, out, sizeof(out)));
+}

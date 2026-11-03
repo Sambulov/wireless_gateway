@@ -7,15 +7,17 @@
  * ровно тот случай, когда дырка появляется в одном из них. Модуль не зависит от
  * платформы, поэтому проверяется хостовым тестом (tests/unit/FsPathTest.cpp). */
 
-const char *fs_path_sanitize(const char *in, char *out, size_t out_size) {
-    if (!in || !out || out_size < 2 || in[0] != '/')
+/* Нормализация первых in_len символов in (строка может продолжаться). */
+static const char *sanitize_n(const char *in, size_t in_len, char *out, size_t out_size) {
+    if (!in || !out || out_size < 2 || in_len == 0 || in[0] != '/')
         return NULL;
     size_t o = 0;
     const char *p = in;
-    while (*p) {
-        while (*p == '/') p++;                    /* схлопываем слэши */
+    const char *end = in + in_len;
+    while (p < end) {
+        while (p < end && *p == '/') p++;         /* схлопываем слэши */
         const char *seg = p;
-        while (*p && *p != '/') p++;
+        while (p < end && *p != '/') p++;
         size_t len = (size_t)(p - seg);
         if (len == 0)
             break;
@@ -32,6 +34,18 @@ const char *fs_path_sanitize(const char *in, char *out, size_t out_size) {
         out[o++] = '/';
     out[o] = '\0';
     return out;
+}
+
+const char *fs_path_sanitize(const char *in, char *out, size_t out_size) {
+    return in ? sanitize_n(in, strlen(in), out, out_size) : NULL;
+}
+
+const char *fs_path_from_uri(const char *uri, char *out, size_t out_size) {
+    if (!uri || !out || out_size < 2)
+        return NULL;
+    /* Нормализуется только путь — до query и якоря, без копии (стек задачи
+     * httpd, откуда это зовётся, невелик). */
+    return sanitize_n(uri, strcspn(uri, "?#"), out, out_size);
 }
 
 uint8_t fs_path_temp(const char *path, char *out, size_t out_size) {
