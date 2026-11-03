@@ -32,6 +32,11 @@ uint8_t gw_json_parse(gw_json_t *j, const char *js, size_t len,
     j->tok   = tok;
     j->cap   = cap;
     j->count = n;
+
+    /* Запрос — ровно один объект: jsmn в нестрогом режиме разбирает и то,
+     * что после него ("{…} \"SID\" 5"), а поиск ключа ушёл бы туда. */
+    if (gw_json_skip(j, 0) != n)
+        return 0;
     return 1;
 }
 

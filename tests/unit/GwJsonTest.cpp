@@ -120,6 +120,16 @@ TEST(GwJsonParse, NotJsonIsRefused) {
     CHECK_FALSE(parse("[1,2,3]"));   /* корень обязан быть объектом */
 }
 
+/* Запрос — один объект. Всё, что jsmn (нестрогий режим) разобрал после
+ * него, — мусор, а не поля: раньше поиск ключа шёл и туда, и "SID" за
+ * объектом находился как поле запроса. */
+TEST(GwJsonParse, ValueAfterTheRootObjectIsRefused) {
+    CHECK_FALSE(parse("{\"FID\":\"x\"} \"SID\" 5"));
+    CHECK_FALSE(parse("{\"FID\":\"x\"}{\"SID\":5}"));
+    CHECK_FALSE(parse("{\"FID\":\"x\"} junk"));
+    CHECK(parse("{\"FID\":\"x\"}  \n"));            /* пробелы после — можно */
+}
+
 TEST(GwJsonParse, EmptyArgObjectIsParsed) {
     CHECK(parse("{\"FID\":16,\"FLAGS\":0,\"ARG\":{}}"));
     const char *start = NULL;
