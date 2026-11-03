@@ -9,6 +9,7 @@ INCLUDES := \
     -I$(ROOT)/transport/include \
     -I$(ROOT)/platform/include \
     -I$(ROOT)/CodeLibrary/CL \
+    -I$(ROOT)/CodeLibrary/CL/Proto \
     -I$(ROOT)/json/jsmn \
     -I$(ROOT)/json \
     -I$(ROOT)/main \
@@ -50,12 +51,15 @@ VPATH := \
     $(ROOT)/CodeLibrary/CL/DataStructures/Src \
     $(ROOT)/CodeLibrary/CL/Converters/Src \
     $(ROOT)/CodeLibrary/CL/Workflow/Src \
+    $(ROOT)/CodeLibrary/CL/Proto/Src \
     stubs
 
 C_SRCS := \
     api_core.c \
     apih_uart.c \
     apih_fw.c \
+    apih_modbus.c \
+    ModBus.c \
     apih_sys_common.c \
     web_iface_policy.c \
     fs_path.c \
@@ -81,6 +85,7 @@ CPP_SRCS := \
     WsServerTest.cpp \
     ApihUartTest.cpp \
     ApihFwTest.cpp \
+    ApihModbusTest.cpp \
     WebIfacePolicyTest.cpp \
     FsPathTest.cpp \
     WsMsgTest.cpp \

@@ -43,6 +43,8 @@ typedef int esp_err_t;
 #define ESP_WS_API_UART2_RAW_RX      "uart2.rx"
 #define ESP_WS_API_UART2_RAW_TX      "uart2.tx"
 #define ESP_WS_API_UART2_ECHO        "uart2.echo"
+#define ESP_WS_API_UART1_MODBUS_REQ  "uart1.modbus"
+#define ESP_WS_API_UART2_MODBUS_REQ  "uart2.modbus"
 #define ESP_WS_API_SYS_FW_BEGIN      "sys.fw.begin"
 #define ESP_WS_API_SYS_FW_WRITE      "sys.fw.write"
 #define ESP_WS_API_SYS_FW_END        "sys.fw.end"
@@ -66,6 +68,8 @@ typedef struct {
         } port[3];   /* по аппаратным номерам: uart0, uart1, uart2 */
     } uart;
 } app_context_t;
+
+esp_err_t ws_modbus_run(app_context_t *app);
 
 /* Очередей у ядра нет: запрос приходит вызовом обработчика, ответ уходит по
  * дескриптору вызова, а рассылка — публичным вызовом api_broadcast (ядро

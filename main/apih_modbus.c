@@ -1,8 +1,16 @@
 
-#include "app.h"
+#include <stdio.h>
+
+#ifdef APIH_HOST_TEST
+/* хостовые тесты собирают службу без ESP-IDF: тень app.h (tests/unit/stubs) */
+#  include "apih_sys_app_types.h"
+#else
+#  include "app.h"
+#endif
 #include "uart.h"
 #include "GwJson.h"
 #include "api.h"
+#include "platform.h"
 #include "ModBusHelpers.h"
 
 #define MB_PAYLOAD_SIZE    255
@@ -13,7 +21,7 @@
 
 static uint32_t mb_timer_fn(const void *ctx) {
     (void)ctx;
-    return xTaskGetTickCount() * portTICK_PERIOD_MS;
+    return platform_ticks_to_ms(platform_tick());
 }
 
 /* приём: байты линии библиотеке отдаёт mb_rx_handler, в интерфейсе — передача и
@@ -64,7 +72,7 @@ struct mb_call_ctx {
     modbus_frame_t   req;
     uint8_t          wr_buf[MB_PAYLOAD_SIZE];
     uint16_t         awt_ms;
-    TickType_t       deadline;
+    uint32_t         deadline;                  /* тики платформы */
     mb_call_ctx_t   *next;
     uint8_t          queued;
     volatile uint8_t done;                      /* драйвер ответил, ответ отправлен */
@@ -149,7 +157,7 @@ static uint8_t mb_worker_start(modbus_worker_t *w) {
     w->active = c;
     /* Таймаут транзакции считается от её начала: пока вызов ждал линию, его
      * время не должно сгорать (иначе последний в очереди не успевает). */
-    c->deadline = xTaskGetTickCount() + pdMS_TO_TICKS(c->awt_ms + 500);
+    c->deadline = platform_tick() + platform_ms_to_ticks(c->awt_ms + 500);
     /* Кадр уходит в линию сразу, не дожидаясь следующего такта. */
     modbus_work(&w->mb);
     return 1;
@@ -354,7 +362,7 @@ static uint8_t mb_api_handler(void *call, void **context, uint8_t *data, uint32_
             return 0;
         }
         if (c->worker->queue_len >= MB_QUEUE_MAX) {
-            ESP_LOGW(TAG, "modbus порт %d: очередь полна (%d)", c->worker->port_no, MB_QUEUE_MAX);
+            platform_log_w(TAG, "modbus порт %d: очередь полна (%d)\n", c->worker->port_no, MB_QUEUE_MAX);
             send_mb_error(call, MB_ERR_BUSY);
             *context = c->worker;
             free(c);
@@ -387,8 +395,8 @@ static uint8_t mb_api_handler(void *call, void **context, uint8_t *data, uint32_
             free(c);
             return 0;
         }
-        if ((int32_t)(xTaskGetTickCount() - c->deadline) >= 0) {
-            ESP_LOGW(TAG, "modbus: прибор не ответил на порту %d", w->port_no);
+        if ((int32_t)(platform_tick() - c->deadline) >= 0) {
+            platform_log_w(TAG, "modbus: прибор не ответил на порту %d\n", w->port_no);
             modbus_reset(&w->mb);
             w->active = NULL;
             if (c->call) send_mb_error(c->call, MB_ERR_TIMEOUT);
@@ -436,7 +444,7 @@ esp_err_t ws_modbus_run(app_context_t *app) {
         };
 
         if (!modbus_init(&w->mb, &cfg)) {
-            ESP_LOGE(TAG, "modbus_init failed for port %d", i);
+            platform_log_w(TAG, "modbus_init failed for port %d\n", i);
             return ESP_FAIL;
         }
 
@@ -455,8 +463,23 @@ esp_err_t ws_modbus_run(app_context_t *app) {
      * вызов. */
     if (!mb_register(app->api_ap) ||
         ((app->api_sta != NULL) && !mb_register(app->api_sta))) {
-        ESP_LOGE(TAG, "не удалось зарегистрировать обработчики Modbus");
+        platform_log_w(TAG, "не удалось зарегистрировать обработчики Modbus\n");
         return ESP_FAIL;
     }
     return ESP_OK;
 }
+
+#ifdef APIH_HOST_TEST
+#include <string.h>
+
+/* Состояние портов статическое (как и на приборе): тесту нужен сброс между
+ * случаями, а байты линии он подаёт тем же путём, что событие UART. */
+void apih_modbus_test_reset(void) {
+    memset(mb_workers, 0, sizeof(mb_workers));
+}
+
+void apih_modbus_test_rx(int worker, const uint8_t *data, uint32_t len, uint8_t end) {
+    gw_uart_event_data_t ev = { .buf = (uint8_t *)data, .size = len, .b_end = end };
+    mb_rx_handler(&ev, NULL, &mb_workers[worker]);
+}
+#endif
