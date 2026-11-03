@@ -97,6 +97,7 @@ extern "C" {
 
 #include <stdlib.h>
 #include <string.h>
+#include <string>
 
 /* Отдельных тест-хуков у ядра нет: такт — это публичный api_worker (его зовёт
  * задача приложения), и тест зовёт ровно его, потому что в хосте задачи нет.
@@ -876,6 +877,48 @@ TEST(WsServerSend, SendRefusedByTransportReleasesBuffer) {
     /* Вызов снят обработчиком (он вернул FALSE) — и ничего не утекло */
     char buf[] = "{}";
     LONGS_EQUAL(0, api_call_group_fid_data(api, "send.refuse", buf, 2));
+}
+
+TEST(WsServerSend, ReplyToFullQueueNeverEvictsTheFrameInFlight) {
+    /* Очередь пира полна рассылками, голова уже у транспорта (отправка
+     * zero-copy: транспорт пишет прямо из буфера ядра). Пришёл ответ — он
+     * вытесняет самую старую рассылку, но НЕ голову: её буфер ещё читает
+     * транспорт, а TRANSFER_COMPLETE снимет голову как отправленную. */
+    api_call_register(api, teardown_ask_handler, "send.full", NULL);
+    api_call_register(api, refusing_reply_handler, "send.reply", NULL);
+    send_text(conn, "{\"FID\":\"send.full\",\"SID\":1}");
+    api_worker(api);                                   /* подписка жива */
+    ws_transport_stub_set_deferred(conn, 1);
+
+    char body[16];
+    for (int n = 1; n <= 8; n++) {                     /* API_TX_QUEUE_MAX кадров */
+        int len = snprintf(body, sizeof(body), "{\"n\":%d}", n);
+        LONGS_EQUAL(1, api_call_group_fid_data(api, "send.full", body, (uint32_t)len));
+    }
+    LONGS_EQUAL(1, ws_transport_stub_pending_count(conn));  /* голова в работе */
+
+    send_text(conn, "{\"FID\":\"send.reply\",\"SID\":2}");
+    api_worker(api);                                   /* ответ в полную очередь */
+
+    /* Буфер головы жив и не тронут (под ASan вытеснение головы — UAF здесь). */
+    LONGS_EQUAL(1, ws_transport_stub_pending_count(conn));
+    const char *head = (const char *)ws_transport_stub_pending_data(conn, 0);
+    uint32_t head_len = ws_transport_stub_pending_len(conn, 0);
+    std::string head_frame(head, head_len);
+    STRCMP_CONTAINS("\"ARG\":{\"n\":1}", head_frame.c_str());
+
+    /* Дальше уходят рассылки 3..8 (вытеснена 2-я) и ответ — последним. */
+    std::string order;
+    for (int i = 0; i < 16 && ws_transport_stub_pending_count(conn); i++) {
+        ws_transport_stub_complete_pending(conn, TRANSPORT_OK);
+        if (!ws_transport_stub_pending_count(conn))
+            break;                                     /* новой отправки нет */
+        const char *s = ws_transport_stub_last_sent(conn);
+        const char *n = strstr(s, "\"n\":");
+        if (n) order += n[4];
+        else if (strstr(s, "\"FID\":\"send.reply\"")) order += 'R';
+    }
+    STRCMP_EQUAL("345678R", order.c_str());
 }
 
 /* Ответ, собранный прямо в кадре (§3.7): begin_response отдаёт область ARG,

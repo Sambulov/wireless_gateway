@@ -282,8 +282,12 @@ static uint8_t api_send_frame(api_private_t *core, api_peer_t *peer,
             api_frame_release(frame);
             return HDL_FALSE;
         }
-        /* Ответ не теряем: ищем самую старую рассылку и вытесняем её. */
+        /* Ответ не теряем: ищем самую старую рассылку и вытесняем её. Голову,
+         * уже отданную транспорту, не трогаем: он пишет прямо из её буфера, а
+         * TRANSFER_COMPLETE снимет голову очереди как отправленную. */
         api_frame_t **evict = &peer->tx_frames;
+        if(peer->tx_busy && (*evict != NULL))
+            evict = &(*evict)->next;
         while((*evict != NULL) && !(*evict)->droppable)
             evict = &(*evict)->next;
         if(*evict == NULL) {
