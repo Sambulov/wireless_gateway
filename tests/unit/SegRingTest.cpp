@@ -200,6 +200,19 @@ TEST(SegRing, InfoModeDoesNotConsume) {
     LONGS_EQUAL(0, (uint16_t)(RING - seg_ring_free(&ring)));
 }
 
+/* Справка с непустым буфером его не трогает: размер приёмника ей неизвестен. */
+TEST(SegRing, InfoModeLeavesTheBufferAlone) {
+    seg_ring_chunk_t chunk;
+    uint8_t buf[4];
+
+    seg_ring_write(&ring, (const uint8_t *)"abcdefgh", 8, 1);
+    memset(buf, 0xEE, sizeof(buf));
+    CHECK(seg_ring_read(&ring, buf, 0, &chunk) == 1);
+    LONGS_EQUAL(8, chunk.len);
+    for (int i = 0; i < (int)sizeof(buf); i++)
+        LONGS_EQUAL(0xEE, buf[i]);
+}
+
 TEST(SegRing, InfoModeOfOpenSegmentHasNoEnd) {
     seg_ring_chunk_t chunk;
 
@@ -476,4 +489,47 @@ TEST(SegRing, LongStreamThroughSmallRingStaysIntact) {
     LONGS_EQUAL(0, (uint16_t)(RING - seg_ring_free(&ring)));
     LONGS_EQUAL(pos, received);
     MEMCMP_EQUAL(expected, got, pos);   /* и порядок байт не поехал на изломах */
+}
+
+/* ── отметка потери снаружи ─────────────────────────────────────────────── */
+
+/* Потеря, случившаяся до записи (её заметил драйвер, а не кольцо), ставится
+ * пустым сегментом с признаком потери: читатель получает разрыв ДО данных,
+ * а не «ровный» поток с дырой неизвестно где. */
+TEST(SegRing, MarkLostOnEmptyRingGivesLossBeforeData) {
+    char out[96];
+    uint16_t ends[8], losts[8];
+    uint8_t n_ends, n_losts;
+
+    CHECK(seg_ring_mark_lost(&ring) == 1);
+    seg_ring_write(&ring, (const uint8_t *)"AB", 2, 1);
+
+    LONGS_EQUAL(2, drain(out, ends, &n_ends, losts, &n_losts));
+    STRCMP_EQUAL("AB", out);
+    LONGS_EQUAL(1, n_losts);
+    LONGS_EQUAL(0, losts[0]);        /* потеря — до первого байта */
+    LONGS_EQUAL(2, n_ends);          /* пустой сегмент потери и сам "AB" */
+}
+
+/* Открытый сегмент отметка закрывает: его байты пришли до потери. */
+TEST(SegRing, MarkLostClosesTheOpenSegment) {
+    char out[96];
+    uint16_t ends[8], losts[8];
+    uint8_t n_ends, n_losts;
+
+    seg_ring_write(&ring, (const uint8_t *)"abc", 3, 0);
+    CHECK(seg_ring_mark_lost(&ring) == 1);
+
+    LONGS_EQUAL(3, drain(out, ends, &n_ends, losts, &n_losts));
+    STRCMP_EQUAL("abc", out);
+    LONGS_EQUAL(1, n_losts);
+    LONGS_EQUAL(3, losts[0]);
+}
+
+/* Места под метку нет — отметка честно отказывает, а не портит кольцо. */
+TEST(SegRing, MarkLostOnFullRingRefuses) {
+    uint8_t fill[RING];
+    memset(fill, 'x', sizeof(fill));
+    seg_ring_write(&ring, fill, sizeof(fill), 1);    /* занято всё кольцо */
+    LONGS_EQUAL(0, seg_ring_mark_lost(&ring));
 }

@@ -21,6 +21,7 @@ static struct {
     int              last_write_len;
     uint8_t          last_write_buf[MAX_WRITE_LEN];
     uint8_t          echo;
+    uint8_t          rx_lost;
 } g_slots[MAX_PORTS];
 
 static int find_slot(void *desc) {
@@ -74,9 +75,16 @@ uint8_t gw_uart_get_echo(void *desc) {
     return g_slots[find_slot(desc)].echo;
 }
 
-/* На хосте драйвер принятое не теряет: потерь нет. */
+/* Потерю драйвера тест заказывает сам (gw_uart_stub_set_rx_loss). Поиск —
+ * только по точному дескриптору, без занятия слота: чужой указатель (не
+ * дескриптор порта) потери не находит, как и настоящий драйвер. */
 uint8_t gw_uart_take_rx_loss(void *desc) {
-    (void)desc;
+    for (int i = 0; i < MAX_PORTS; i++) {
+        if (g_slots[i].desc == desc && g_slots[i].rx_lost) {
+            g_slots[i].rx_lost = 0;
+            return 1;
+        }
+    }
     return 0;
 }
 
@@ -88,6 +96,10 @@ void gw_uart_lock_rx(void *desc)   { (void)desc; }
 void gw_uart_unlock_rx(void *desc) { (void)desc; }
 
 /* ── Inspection ────────────────────────────────────────────────────────── */
+
+void gw_uart_stub_set_rx_loss(void *desc) {
+    g_slots[find_slot(desc)].rx_lost = 1;
+}
 
 gw_uart_config_t gw_uart_stub_last_config(void *desc) {
     return g_slots[find_slot(desc)].cfg;

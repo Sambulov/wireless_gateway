@@ -106,6 +106,9 @@ typedef struct {
     /* Дескриптор порта: нужен, чтобы спросить у драйвера, не потерял ли он
      * принятое (переполнение приёма) — потеря должна уйти клиенту меткой. */
     void *desc;
+    /* Потеря драйвера снята с драйвера, но метка в кольцо ещё не встала (места
+     * не было): ставится с первым же куском, когда место появится. */
+    uint8_t loss_pending;
     /* Ядро — не здесь, а в uart_apis: ядер у сервиса два. */
 } uart_subscription_context_t;
 
@@ -148,17 +151,29 @@ static void uart_event_on_rx(void *event_trigger, void *sender, void *context) {
 
     platform_mutex_take(buf_desc->lock, PLATFORM_WAIT_FOREVER);
     /* Драйвер сам потерял часть принятого (переполнение FIFO/кольца — типично на
-     * высокой скорости): помечаем потерю ДО данных, чтобы клиент увидел разрыв, а
-     * не «ровный» поток с дырой неизвестно где. */
-    if (gw_uart_take_rx_loss(&buf_desc->desc))
-        seg_ring_write(&buf_desc->ring, NULL, 0, 1);
-    taken = seg_ring_write(&buf_desc->ring, data->buf, (uint16_t)sz, data->b_end);
+     * высокой скорости): помечаем потерю ДО этого куска, чтобы клиент увидел
+     * разрыв, а не «ровный» поток с дырой неизвестно где. Точность места — до
+     * объёма буфера драйвера: байты, ещё лежащие в нём, старше потерянных, но
+     * придут уже после метки. Флаг драйвера снимается сразу, поэтому, если
+     * места под метку нет, потеря ждёт в контексте порта. */
+    if (gw_uart_take_rx_loss(buf_desc->desc))
+        buf_desc->loss_pending = 1;
+    if (buf_desc->loss_pending && seg_ring_mark_lost(&buf_desc->ring))
+        buf_desc->loss_pending = 0;
+    /* Сегмент закрываем отдельно, а не флагом записи: иначе при нехватке места
+     * запись сама закрыла бы его с потерей, и метка ниже легла бы второй. */
+    taken = seg_ring_write(&buf_desc->ring, data->buf, (uint16_t)sz, 0);
     if (taken < sz) {
-        /* Переполнение: закрываем сегмент пустой меткой СРАЗУ. Иначе признак
+        /* Переполнение: закрываем сегмент меткой потери СРАЗУ. Иначе признак
          * потери защёлкивается в открытом сегменте, а снимается только его
          * закрытием — то есть простоем линии, которого у непрерывного потока
-         * нет: порт замолкает навсегда. */
-        seg_ring_write(&buf_desc->ring, NULL, 0, 1);
+         * нет: порт замолкает навсегда. Если открыть сегмент было негде (кольцо
+         * занято закрытыми сегментами до конца), метке тоже места нет — потеря
+         * ждёт вместе с потерей драйвера. */
+        if (!seg_ring_mark_lost(&buf_desc->ring))
+            buf_desc->loss_pending = 1;
+    } else if (data->b_end) {
+        seg_ring_write(&buf_desc->ring, NULL, 0, 1);   /* конец передачи */
     }
     platform_mutex_give(buf_desc->lock);
 
@@ -835,6 +850,7 @@ void apih_uart_test_reset(void) {
         uart_rx_pending[i]     = 0;
         uart_rx_pending_len[i] = 0;
         uart_rx_pending_tick[i] = 0;
+        uart_context[i].loss_pending = 0;
     }
 }
 
@@ -857,5 +873,12 @@ void apih_uart_test_fill_rx_idle(int port, const uint8_t *data, uint32_t len,
     (void)gap_us;
     if (len > 0xFFFF) len = 0xFFFF;
     seg_ring_write(&ctx->ring, data, (uint16_t)len, idle ? 1 : 0);
+}
+
+/* Кусок приёма тем же путём, что от драйвера: через обработчик события
+ * (uart_event_on_rx), а не прямо в кольцо — с опросом потерь драйвера. */
+void apih_uart_test_deliver_rx(int port, const uint8_t *data, uint32_t len, uint8_t end) {
+    gw_uart_event_data_t ev = { .buf = (uint8_t *)data, .size = len, .b_end = end };
+    uart_event_on_rx(&ev, NULL, &uart_context[port]);
 }
 #endif

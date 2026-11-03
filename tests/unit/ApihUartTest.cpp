@@ -22,6 +22,7 @@ extern "C" {
     void apih_uart_test_fill_rx(int port, const uint8_t *data, uint32_t len);
     void apih_uart_test_fill_rx_idle(int port, const uint8_t *data, uint32_t len,
                                      uint32_t gap_us, uint8_t idle);
+    void apih_uart_test_deliver_rx(int port, const uint8_t *data, uint32_t len, uint8_t end);
 }
 
 /* ── Клиентская сторона ───────────────────────────────────────────────────
@@ -302,6 +303,83 @@ TEST(ApihUartRx, FilledBufferSendsBase64Response) {
      * '#' на конце — признак «передача на линии закончилась» (fill_rx так и
      * кладёт данные: кусок с концом передачи). */
     STRCMP_CONTAINS("\"RX\":\"SGVsbG8=#\"", ws_transport_stub_last_sent(conn));
+}
+
+/* Драйвер сам потерял часть принятого (переполнение FIFO): потеря уходит
+ * клиенту меткой '~' ДО следующих данных, а флаг драйвера снимается — одна
+ * потеря сообщается один раз. Флаг спрашивается у дескриптора ПОРТА. */
+TEST(ApihUartRx, DriverLossIsReportedBeforeTheData) {
+    client_subscription(api, conn, ESP_WS_API_UART0_RAW_RX, 1);
+
+    gw_uart_stub_set_rx_loss(&app.uart.port[0].desc);
+    apih_uart_test_deliver_rx(0, (const uint8_t *)"AB", 2, 1);
+    worker_tick(api, 100);
+    STRCMP_CONTAINS("\"RX\":\"~QUI=#\"", ws_transport_stub_last_sent(conn));
+
+    /* Флаг снят: следующий кусок — без метки. */
+    apih_uart_test_deliver_rx(0, (const uint8_t *)"AB", 2, 1);
+    worker_tick(api, 100);
+    STRCMP_CONTAINS("\"RX\":\"QUI=#\"", ws_transport_stub_last_sent(conn));
+}
+
+/* Кольцо полно до последнего байта — метке потери места нет, а флаг драйвера
+ * уже снят. Потеря не пропадает: метка встаёт с первым куском после того, как
+ * клиент вычитал кольцо. */
+TEST(ApihUartRx, DriverLossWaitsForRoomInTheRing) {
+    static uint8_t fill[4096 - 2];                 /* UART_RX_ACC_SIZE минус метка */
+    memset(fill, 'x', sizeof(fill));
+    client_subscription(api, conn, ESP_WS_API_UART0_RAW_RX, 1);
+    apih_uart_test_fill_rx(0, fill, sizeof(fill)); /* кольцо занято целиком */
+
+    gw_uart_stub_set_rx_loss(&app.uart.port[0].desc);
+    apih_uart_test_deliver_rx(0, (const uint8_t *)"AB", 2, 1);   /* места нет */
+
+    for (int i = 0; i < 20; i++)                   /* клиент вычитывает кольцо */
+        worker_tick(api, 100);
+
+    apih_uart_test_deliver_rx(0, (const uint8_t *)"CD", 2, 1);
+    worker_tick(api, 100);
+    STRCMP_CONTAINS("\"RX\":\"~Q0Q=#\"", ws_transport_stub_last_sent(conn));
+
+    /* Метка поставлена — ожидание снято: следующий кусок без метки. */
+    apih_uart_test_deliver_rx(0, (const uint8_t *)"AB", 2, 1);
+    worker_tick(api, 100);
+    STRCMP_CONTAINS("\"RX\":\"QUI=#\"", ws_transport_stub_last_sent(conn));
+}
+
+/* Кусок не влез в кольцо, занятое закрытыми сегментами до конца (открыть
+ * сегмент негде, признак потери в нём не поставить): потеря всё равно доходит
+ * до клиента меткой, когда место появится. */
+TEST(ApihUartRx, ChunkLostInClosedFullRingIsReported) {
+    static uint8_t fill[4096 - 2];
+    memset(fill, 'x', sizeof(fill));
+    client_subscription(api, conn, ESP_WS_API_UART0_RAW_RX, 1);
+    apih_uart_test_fill_rx(0, fill, sizeof(fill));
+
+    apih_uart_test_deliver_rx(0, (const uint8_t *)"AB", 2, 1);   /* пропал */
+    for (int i = 0; i < 20; i++)
+        worker_tick(api, 100);
+
+    apih_uart_test_deliver_rx(0, (const uint8_t *)"CD", 2, 1);
+    worker_tick(api, 100);
+    STRCMP_CONTAINS("\"RX\":\"~Q0Q=#\"", ws_transport_stub_last_sent(conn));
+}
+
+/* Кусок с концом передачи влез в кольцо лишь частично: потеря отмечена
+ * ОДИН раз — на нём самом, а не ещё раз пустой меткой перед следующим. */
+TEST(ApihUartRx, PartlyLostEndingChunkIsMarkedOnce) {
+    static uint8_t fill[4096 - 2 - 10];            /* свободно 10 байт */
+    memset(fill, 'x', sizeof(fill));
+    client_subscription(api, conn, ESP_WS_API_UART0_RAW_RX, 1);
+    apih_uart_test_fill_rx(0, fill, sizeof(fill));
+
+    apih_uart_test_deliver_rx(0, (const uint8_t *)"ABCDEFGHIJKLMNOPQRST", 20, 1);
+    for (int i = 0; i < 20; i++)
+        worker_tick(api, 100);
+
+    apih_uart_test_deliver_rx(0, (const uint8_t *)"CD", 2, 1);
+    worker_tick(api, 100);
+    STRCMP_CONTAINS("\"RX\":\"Q0Q=#\"", ws_transport_stub_last_sent(conn));
 }
 
 /* Кусок приёма, закончившийся на линии, отдаётся с разделителем '#': несколько
