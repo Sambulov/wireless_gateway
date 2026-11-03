@@ -25,10 +25,20 @@ static const char *TAG = "api";
 #define API_FRAME_MAX_TOKENS 48
 
 /* Скопировать имя FID в буфер. 0 — пустое или слишком длинное имя. */
+/* Имя FID — идентификатор [A-Za-z0-9._-]: оно печатается в ответ как есть
+ * (%s), поэтому кавычка или '\\' в нём сломали бы или подменили JSON. */
+static uint8_t api_fid_char_ok(char c) {
+    return ((c >= 'a') && (c <= 'z')) || ((c >= 'A') && (c <= 'Z')) ||
+           ((c >= '0') && (c <= '9')) || (c == '.') || (c == '_') || (c == '-');
+}
+
 static uint8_t api_fid_set(char *dst, const char *name) {
     if(!dst || !name || !name[0]) return 0;
     size_t n = 0;
-    while(name[n] && n < API_FID_NAME_MAX - 1) n++;
+    while(name[n] && n < API_FID_NAME_MAX - 1) {
+        if(!api_fid_char_ok(name[n])) return 0;
+        n++;
+    }
     if(name[n] != '\0') return 0;
     for(size_t i = 0; i < n; i++) dst[i] = name[i];
     dst[n] = '\0';
@@ -763,6 +773,14 @@ static void api_receive(api_private_t *core, const void *conn, const void *data,
         api_log(core, API_LOG_WARN, "Frame has no FID, replied NO_FID");
         api_reply_status(core, conn, "", 0, 0, API_CALL_ERROR_STATUS_NO_FID);
         return;
+    }
+    for(const char *c = fid; *c; c++) {
+        if(!api_fid_char_ok(*c)) {
+            /* Клиентскую строку в ответ не возвращаем: FID в отказе — пустой. */
+            api_log(core, API_LOG_WARN, "FID has foreign characters, replied NO_FID");
+            api_reply_status(core, conn, "", 0, 0, API_CALL_ERROR_STATUS_NO_FID);
+            return;
+        }
     }
     if(strlen(fid) >= API_FID_NAME_MAX) {
         api_log(core, API_LOG_WARN, "FID too long, replied NO_FID");

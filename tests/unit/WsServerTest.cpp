@@ -1000,6 +1000,22 @@ TEST(WsServerSend, InvalidSidIsRefused) {
     }
 }
 
+/* Имя FID — идентификатор [A-Za-z0-9._-]. Клиентская строка с кавычкой
+ * раньше вставлялась в ответ как есть (%s без экранирования): FID
+ * 'a","STA":"0x0' подменял поле STA в ответе или ломал JSON. */
+TEST(WsServerSend, FidWithForeignCharactersIsRefusedWithoutEchoingIt) {
+    send_text(conn, "{\"FID\":\"a\\\",\\\"STA\\\":\\\"0x0\",\"SID\":1}");
+    api_worker(api);
+    const char *r = ws_transport_stub_last_sent(conn);
+    STRCMP_EQUAL("{\"FID\":\"\",\"STA\":\"0x80000002\"}", r);
+}
+
+TEST(WsServerSend, FidWithForeignCharactersCannotBeRegistered) {
+    LONGS_EQUAL(0, api_call_register(api, builder_handler, "bad\"name", NULL));
+    LONGS_EQUAL(0, api_call_register(api, builder_handler, "with space", NULL));
+    LONGS_EQUAL(1, api_call_register(api, builder_handler, "Good_name-1.x", NULL));
+}
+
 TEST(WsServerSend, CancelResponseReleasesBuffer) {
     /* Подготовленный и неотправленный ответ освобождается (иначе LeakSanitizer) */
     char *arg = api_call_begin_response(16);
