@@ -269,6 +269,16 @@ void app_main(void)
     /* Транспорт порождает приложение: ws_transport_create только заполняет
      * объект (методы + веб-сервер как контекст), а путь, подписка и цикл — в open,
      * который зовёт api_init. */
+#ifdef CONFIG_QEMU_BUILD
+    /* В QEMU живёт один интерфейс — Ethernet: админ-ядро вешается на него,
+     * ядра станции нет (сервисы терпят NULL-ядро). */
+    transport_t *ws_eth = ws_transport_create(app_context.web_eth);
+    if (ws_eth == NULL) ESP_LOGE(TAG, "WebSocket transport (ETH) not created");
+    app_context.api_ap  = api_init(ws_eth, "/api", &app_api_system);
+    app_context.api_sta = NULL;
+    if (app_context.api_ap == NULL)
+        ESP_LOGE(TAG, "API core (ETH) not started");
+#else
     transport_t *ws_ap  = ws_transport_create(app_context.web_ap);
     transport_t *ws_sta = ws_transport_create(app_context.web_sta);
     if (ws_ap == NULL)  ESP_LOGE(TAG, "WebSocket transport (AP) not created");
@@ -283,10 +293,11 @@ void app_main(void)
         ESP_LOGE(TAG, "API core (AP) not started");
     if (app_context.api_sta == NULL)
         ESP_LOGE(TAG, "API core (STA) not started");
+#endif
 
     /* Задача такта — одна на оба ядра (см. api_worker_task), и только когда есть
      * что обслуживать: у снятого ядра такт — пустой вызов. */
-    if ((app_context.api_ap != NULL) && (app_context.api_sta != NULL))
+    if (app_context.api_ap != NULL)
         platform_task_create(api_worker_task, "api_work", 8192, &app_context, 5);
 
     LOGI(TAG, "Run");
@@ -294,7 +305,7 @@ void app_main(void)
     /* Сервисы регистрируют свои FID на конкретных ядрах (app.api_ap/app.api_sta).
      * Если ядро не поднялось, регистрировать некуда — задачи сервисов не
      * запускаем: они крутились бы вхолостую, а FID никому не оказаны. */
-    if ((app_context.api_ap != NULL) && (app_context.api_sta != NULL)) {
+    if (app_context.api_ap != NULL) {
         ret = ws_uart_run(&app_context);
         if (ret != ESP_OK)
             ESP_LOGE("app", "can't run ws_uart task: %s", esp_err_to_name(ret));

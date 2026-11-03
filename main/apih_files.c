@@ -615,17 +615,19 @@ esp_err_t apih_files_run(app_context_t *app) {
      * Перестройка шлюза по-прежнему только у администратора точки доступа: wifi.sta/ap
      * и sys.net на STA-ядре — с контекстом «только чтение». */
     ok &= register_service(ap,  sys_files_handler,       ESP_WS_API_SYS_FILES,       NULL);
-    ok &= register_service(sta, sys_files_handler,       ESP_WS_API_SYS_FILES,       NULL);
     ok &= register_service(ap,  sys_file_write_handler,  ESP_WS_API_SYS_FILE_WRITE,  NULL);
-    ok &= register_service(sta, sys_file_write_handler,  ESP_WS_API_SYS_FILE_WRITE,  NULL);
     ok &= register_service(ap,  sys_file_delete_handler, ESP_WS_API_SYS_FILE_DELETE, NULL);
-    ok &= register_service(sta, sys_file_delete_handler, ESP_WS_API_SYS_FILE_DELETE, NULL);
     ok &= register_service(ap,  sys_file_rename_handler, ESP_WS_API_SYS_FILE_RENAME, NULL);
-    ok &= register_service(sta, sys_file_rename_handler, ESP_WS_API_SYS_FILE_RENAME, NULL);
     ok &= register_service(ap,  sys_file_mkdir_handler,  ESP_WS_API_SYS_FILE_MKDIR,  NULL);
-    ok &= register_service(sta, sys_file_mkdir_handler,  ESP_WS_API_SYS_FILE_MKDIR,  NULL);
     ok &= register_service(ap,  sys_file_rmdir_handler,  ESP_WS_API_SYS_FILE_RMDIR,  NULL);
-    ok &= register_service(sta, sys_file_rmdir_handler,  ESP_WS_API_SYS_FILE_RMDIR,  NULL);
+    if (sta != NULL) {
+        ok &= register_service(sta, sys_files_handler,       ESP_WS_API_SYS_FILES,       NULL);
+        ok &= register_service(sta, sys_file_write_handler,  ESP_WS_API_SYS_FILE_WRITE,  NULL);
+        ok &= register_service(sta, sys_file_delete_handler, ESP_WS_API_SYS_FILE_DELETE, NULL);
+        ok &= register_service(sta, sys_file_rename_handler, ESP_WS_API_SYS_FILE_RENAME, NULL);
+        ok &= register_service(sta, sys_file_mkdir_handler,  ESP_WS_API_SYS_FILE_MKDIR,  NULL);
+        ok &= register_service(sta, sys_file_rmdir_handler,  ESP_WS_API_SYS_FILE_RMDIR,  NULL);
+    }
 
     return ok ? ESP_OK : ESP_FAIL;
 }

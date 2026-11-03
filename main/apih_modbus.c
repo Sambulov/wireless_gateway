@@ -453,7 +453,8 @@ esp_err_t ws_modbus_run(app_context_t *app) {
      * воркер порта. Политики по интерфейсам у Modbus нет, поэтому оба FID
      * регистрируются на ОБОИХ ядрах, а ответ уходит через то ядро, откуда пришёл
      * вызов. */
-    if (!mb_register(app->api_ap) || !mb_register(app->api_sta)) {
+    if (!mb_register(app->api_ap) ||
+        ((app->api_sta != NULL) && !mb_register(app->api_sta))) {
         ESP_LOGE(TAG, "не удалось зарегистрировать обработчики Modbus");
         return ESP_FAIL;
     }

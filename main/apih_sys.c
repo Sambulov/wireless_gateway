@@ -47,7 +47,8 @@ esp_err_t api_sys_run(app_context_t *app) {
      * регистрируется здесь, без политики и без контекста, по экземпляру на
      * каждом ядре */
     ok &= register_service(app->api_ap,  sys_echo_handler, ESP_WS_API_ECHO_ID, NULL);
-    ok &= register_service(app->api_sta, sys_echo_handler, ESP_WS_API_ECHO_ID, NULL);
+    if (app->api_sta != NULL)
+        ok &= register_service(app->api_sta, sys_echo_handler, ESP_WS_API_ECHO_ID, NULL);
 
     if (!ok) return ESP_FAIL;
 

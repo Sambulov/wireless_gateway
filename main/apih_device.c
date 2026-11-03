@@ -349,17 +349,15 @@ esp_err_t apih_device_run(app_context_t *app) {
 
     /* sys.net меняет настройки: на AP-ядре администратор, на STA-ядре только чтение */
     ok &= register_service(ap,  sys_net_handler, ESP_WS_API_SYS_NET, &sys_svc_ap);
-    ok &= register_service(sta, sys_net_handler, ESP_WS_API_SYS_NET, &sys_svc_ro);
-
-    /* sys.info — чтение, но по FROM_AP и CAN_CONFIGURE страница решает, показывать
-     * ли кнопки записи: они берутся из контекста того ядра, куда пришёл вызов. */
     ok &= register_service(ap,  sys_info_handler, ESP_WS_API_SYS_INFO, &sys_svc_ap);
-    ok &= register_service(sta, sys_info_handler, ESP_WS_API_SYS_INFO, &sys_svc_ro);
-
-    /* перезагрузка — не настройка, доступна с любого интерфейса: на STA-ядре у неё
-     * контекст, который менять разрешает, но клиент не на точке доступа */
     ok &= register_service(ap,  sys_reboot_handler, ESP_WS_API_SYS_REBOOT, &sys_svc_ap);
-    ok &= register_service(sta, sys_reboot_handler, ESP_WS_API_SYS_REBOOT, &sys_svc_mut);
+    if (sta != NULL) {
+        ok &= register_service(sta, sys_net_handler, ESP_WS_API_SYS_NET, &sys_svc_ro);
+        ok &= register_service(sta, sys_info_handler, ESP_WS_API_SYS_INFO, &sys_svc_ro);
+        /* перезагрузка — не настройка, доступна с любого интерфейса: на STA-ядре у неё
+         * контекст, который менять разрешает, но клиент не на точке доступа */
+        ok &= register_service(sta, sys_reboot_handler, ESP_WS_API_SYS_REBOOT, &sys_svc_mut);
+    }
 
     return ok ? ESP_OK : ESP_FAIL;
 }

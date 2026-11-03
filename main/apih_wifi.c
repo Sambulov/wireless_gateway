@@ -600,16 +600,19 @@ esp_err_t apih_wifi_run(app_context_t *app) {
      * ОБОИХ ядрах с разным контекстом — на AP-ядре «администратор», на STA-ядре
      * «только чтение». */
     ok &= register_service(ap,  sys_sta_handler, ESP_WS_API_SYS_WIFI_STA, &sys_svc_ap);
-    ok &= register_service(sta, sys_sta_handler, ESP_WS_API_SYS_WIFI_STA, &sys_svc_ro);
     ok &= register_service(ap,  sys_ap_handler,  ESP_WS_API_SYS_WIFI_AP,  &sys_svc_ap);
-    ok &= register_service(sta, sys_ap_handler,  ESP_WS_API_SYS_WIFI_AP,  &sys_svc_ro);
     ok &= register_service(ap,  sys_mac_handler, ESP_WS_API_SYS_WIFI_MAC, &sys_svc_ap);
-    ok &= register_service(sta, sys_mac_handler, ESP_WS_API_SYS_WIFI_MAC, &sys_svc_ro);
 
     /* Скан эфира — чтение: ни настроек, ни паролей он не трогает, поэтому есть на
      * обоих ядрах. */
     ok &= register_service(ap,  sys_scan_handler, ESP_WS_API_SYS_WIFI_SCAN, NULL);
-    ok &= register_service(sta, sys_scan_handler, ESP_WS_API_SYS_WIFI_SCAN, NULL);
+
+    if (sta != NULL) {
+        ok &= register_service(sta, sys_sta_handler, ESP_WS_API_SYS_WIFI_STA, &sys_svc_ro);
+        ok &= register_service(sta, sys_ap_handler,  ESP_WS_API_SYS_WIFI_AP,  &sys_svc_ro);
+        ok &= register_service(sta, sys_mac_handler, ESP_WS_API_SYS_WIFI_MAC, &sys_svc_ro);
+        ok &= register_service(sta, sys_scan_handler, ESP_WS_API_SYS_WIFI_SCAN, NULL);
+    }
 
     return ok ? ESP_OK : ESP_FAIL;
 }
