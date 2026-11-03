@@ -391,7 +391,7 @@
     }
 
     // ── WebSocket ─────────────────────────────────────────────────────────────
-    const WS_PORT = 81; // must match Kconfig CONFIG_WEB_SOCKET_SERVER_PORT
+    const WS_PORT = (window.location.port === '8080') ? '8081' : 81; // под QEMU WS проброшен на 8081
     function connect() {
         ws = new WebSocket(`ws://${window.location.hostname}:${WS_PORT}/api`);
         ws.onopen    = onOpen;

@@ -638,7 +638,7 @@ function reconnectWs() {
 
 // ── Init ───────────────────────────────────────────────────────
 
-const WS_PORT    = 81; // must match Kconfig CONFIG_WEB_SOCKET_SERVER_PORT
+const WS_PORT    = (window.location.port === '8080') ? '8081' : 81; // под QEMU WS проброшен на 8081
 const gateway    = `ws://${window.location.hostname}:${WS_PORT}/api`;
 const gauge_fb   = new Gauge('160px', 'Hz',  '—', '#3b82f6');
 const gauge_rpm  = new Gauge('160px', 'RPM', '—', '#8b5cf6');

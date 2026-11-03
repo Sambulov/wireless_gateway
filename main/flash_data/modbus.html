@@ -151,7 +151,7 @@
  *  Карты лежат на устройстве в /regmaps/*.jsonc, спецификация — tools/regmap/FORMAT.md
  * ═══════════════════════════════════════════════════════════════════════════ */
 
-const WS_PORT = 81;                                  // CONFIG_WEB_SOCKET_SERVER_PORT
+const WS_PORT = (location.port === '8080') ? '8081' : 81;  // под QEMU WS проброшен на 8081
 const REGMAP_DIR = '/regmaps';
 
 /* ── JSONC: комментарии и висячие запятые ─────────────────────────────────── */
