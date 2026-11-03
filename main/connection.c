@@ -155,10 +155,10 @@ static void eth_event_handler(void *arg, esp_event_base_t event_base,
     }
 }
 
+/* Вызывается из net_init() после того, как там уже создан цикл событий, —
+ * поэтому повторно цикл здесь не создаётся. */
 void eth_init_openeth(void)
 {
-    /* Цикл событий уже создан в net_init() — единственном месте, откуда
-     * эта функция вызывается. */
     ESP_ERROR_CHECK(esp_netif_init());
 
     esp_netif_config_t netif_cfg = ESP_NETIF_DEFAULT_ETH();
