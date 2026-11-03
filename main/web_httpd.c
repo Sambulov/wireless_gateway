@@ -51,6 +51,7 @@ typedef struct {
     int fd;                          /* 0 — слот свободен */
     web_server_t *srv;               /* чей объект обслуживает сессию */
     TickType_t last_ok;              /* когда отправка в последний раз прошла */
+    uint8_t refuse;                  /* заняла резервный слот: ей — отказ и закрытие */
 } web_httpd_session_t;
 
 struct web_httpd {
@@ -95,6 +96,7 @@ static web_httpd_session_t *session_take(web_httpd_t *port, int fd) {
             port->sessions[i].fd      = fd;
             port->sessions[i].srv     = NULL;
             port->sessions[i].last_ok = xTaskGetTickCount();
+            port->sessions[i].refuse  = 0;
             return &port->sessions[i];
         }
     }
@@ -237,7 +239,13 @@ static esp_err_t port_session_open(httpd_handle_t hd, int sockfd) {
     }
 
     web_httpd_session_t *s = session_take(port, sockfd);
-    if (s != NULL) s->srv = srv;
+    if (s != NULL) {
+        s->srv = srv;
+        /* Резервный слот (сверх refuse_above) — под отказ: решается один раз, при
+         * открытии, и только для ЭТОЙ сессии. Иначе, пока лишняя сессия жива,
+         * отказ получали бы запросы всех остальных. */
+        s->refuse = (port->kind == WEB_ROUTE_HTTP) && (session_count(port) > port->refuse_above);
+    }
     if (!web_server_session_open(srv, sockfd))
         ESP_LOGW(TAG, "Учёт сессий интерфейса %lu: мест нет, fd=%d",
                  (unsigned long)iface, sockfd);
@@ -288,14 +296,23 @@ static esp_err_t port_guard(httpd_req_t *req) {
                  reg->uri, (unsigned long)iface, fd);
         return ESP_FAIL;             /* httpd закроет сессию */
     }
-    /* Все слоты заняты (свободен только резервный, под отказ): отвечаем сразу и
-     * понятно, а не заставляем клиента ждать своего таймаута. */
-    if ((port->kind == WEB_ROUTE_HTTP) && (session_count(port) > port->refuse_above)) {
+    /* Сессия заняла резервный слот (см. port_session_open): отвечаем сразу и
+     * понятно, а не заставляем клиента ждать своего таймаута, — и закрываем её,
+     * иначе keep-alive держал бы слот, а порт оставался бы «полным». Отказ —
+     * только пока порт всё ещё сверх предела: соединение, открытое заранее
+     * (preconnect браузера), к первому запросу могло получить свободное место. */
+    web_httpd_session_t *s = session_find(port, fd);
+    if ((port->kind == WEB_ROUTE_HTTP) && (s != NULL) && s->refuse &&
+        (session_count(port) <= port->refuse_above))
+        s->refuse = 0;
+    if ((port->kind == WEB_ROUTE_HTTP) && ((s == NULL) || s->refuse)) {
         LOGI(TAG, "Порт занят (%u сессий) — отказ %s", (unsigned)session_count(port), reg->uri);
         httpd_resp_set_status(req, "503 Service Unavailable");
         httpd_resp_set_hdr(req, "Retry-After", "1");
+        httpd_resp_set_hdr(req, "Connection", "close");
         httpd_resp_set_type(req, "text/plain");
-        return httpd_resp_send(req, "busy\n", HTTPD_RESP_USE_STRLEN);
+        httpd_resp_send(req, "busy\n", HTTPD_RESP_USE_STRLEN);
+        return ESP_FAIL;             /* ответ ушёл; httpd закроет сессию сразу */
     }
     return web_server_handle(srv, port->kind, reg->uri, req);
 }
