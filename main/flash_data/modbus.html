@@ -1176,10 +1176,11 @@ async function runCommand(cmd) {
         const w = step.write;
         const words = Array.isArray(w.value) ? w.value : [w.value];
         const arg = { AWT: 800, FN: words.length > 1 ? 16 : 6, ADR: adr, RA: w.addr,
-                      RVC: words.length > 1 ? words.length : words[0] };
-        if (words.length > 1) arg.RD = words.map(x => '0x' + (x & 0xffff).toString(16).padStart(4, '0'));
+                      RVC: words.length > 1 ? words.length : (words[0] & 0xffff) };
+        // значения — числами: строку шлюз в регистр не пишет (отказ ERR 2)
+        if (words.length > 1) arg.RD = words.map(x => x & 0xffff);
         const res = await wsSend(fid, arg, 3000);
-        if (res && res.ERR) { msg('cmd-msg', `Шаг не выполнен (адрес ${w.addr}), код ${res.CV}`, 'err'); return; }
+        if (res && res.ERR) { msg('cmd-msg', `Шаг не выполнен (адрес ${w.addr}), код ${res.CV ?? res.ERR}`, 'err'); return; }
         if (step.delay_ms) await new Promise(r => setTimeout(r, step.delay_ms));
     }
     msg('cmd-msg', `Команда «${cmd.name || cmd.id}» выполнена`, 'ok');

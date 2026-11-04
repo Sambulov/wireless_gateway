@@ -300,9 +300,12 @@ static uint8_t mb_call_parse(mb_call_ctx_t *ctx, uint8_t *data, uint32_t len) {
             int stride = (frame.ucFunc == MB_FUNC_WRITE_COILS) ? 1 : 2;
             int32_t vmax = (stride == 2) ? 0xFFFF : 0xFF;
             if (n * stride > MB_PAYLOAD_SIZE) break;
-            /* Запись регистров: число в запросе — это число значений. */
-            if (has_rvc && (frame.ucFunc == MB_FUNC_WRITE_HOLDINGS) &&
-                (frame.usRegValueCount != n)) break;
+            /* Запись регистров: число в запросе — это число значений; не
+             * указано — берётся из них (иначе в кадре ушло бы 0). */
+            if (frame.ucFunc == MB_FUNC_WRITE_HOLDINGS) {
+                if (has_rvc && (frame.usRegValueCount != n)) break;
+                frame.usRegValueCount = (uint16_t)n;
+            }
             frame.ucLengthCode = (uint8_t)(n * stride);
             frame.pucData      = wr_buf;
             int i;

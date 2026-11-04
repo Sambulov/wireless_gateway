@@ -232,3 +232,44 @@ TEST(ApihModbus, WriteOfHundredRegistersGoesToTheLine) {
     LONGS_EQUAL(1, gw_uart_stub_write_calls(line));
     LONGS_EQUAL(7 + 200 + 2, gw_uart_stub_last_write_len(line));
 }
+
+/* ── границы диапазонов: крайние допустимые значения проходят ───────────── */
+
+TEST(ApihModbus, RegisterValueAtTheTopOfTheRangeIsAccepted) {
+    client_request(api, conn, 1, "{\"ADR\":1,\"FN\":16,\"RA\":65535,\"RVC\":1,\"RD\":[65535]}");
+    LONGS_EQUAL(1, gw_uart_stub_write_calls(line));
+    const uint8_t *b = gw_uart_stub_last_write_buf(line);
+    LONGS_EQUAL(0xFF, b[2]); LONGS_EQUAL(0xFF, b[3]);          /* RA */
+    LONGS_EQUAL(0xFF, b[7]); LONGS_EQUAL(0xFF, b[8]);          /* значение */
+}
+
+TEST(ApihModbus, AnswerWaitTimeAtTheLimitIsAccepted) {
+    client_request(api, conn, 1, "{\"ADR\":1,\"FN\":3,\"RA\":0,\"RVC\":1,\"AWT\":60000}");
+    LONGS_EQUAL(1, gw_uart_stub_write_calls(line));
+}
+
+TEST(ApihModbus, SingleRegisterValueAtTheTopIsAccepted) {
+    client_request(api, conn, 1, "{\"ADR\":1,\"FN\":6,\"RA\":1,\"RVC\":65535}");
+    LONGS_EQUAL(1, gw_uart_stub_write_calls(line));
+    const uint8_t *b = gw_uart_stub_last_write_buf(line);
+    LONGS_EQUAL(0xFF, b[4]); LONGS_EQUAL(0xFF, b[5]);
+}
+
+/* Катушки (FN 15): значения RD — упакованные байты, 0..255. */
+TEST(ApihModbus, CoilByteRangeIsChecked) {
+    client_request(api, conn, 1, "{\"ADR\":1,\"FN\":15,\"RA\":0,\"RVC\":8,\"RD\":[255]}");
+    LONGS_EQUAL(1, gw_uart_stub_write_calls(line));
+}
+
+TEST(ApihModbus, CoilByteOverTheRangeIsRefused) {
+    expect_arg_refused(api, conn, line, "{\"ADR\":1,\"FN\":15,\"RA\":0,\"RVC\":8,\"RD\":[256]}");
+}
+
+/* Запись регистров без RVC: число в кадре — число значений, а не 0. */
+TEST(ApihModbus, WriteRegistersWithoutCountTakesItFromTheValues) {
+    client_request(api, conn, 1, "{\"ADR\":1,\"FN\":16,\"RA\":0,\"RD\":[1,2]}");
+    static const uint8_t req[] = { 0x01, 0x10, 0x00, 0x00, 0x00, 0x02, 0x04,
+                                   0x00, 0x01, 0x00, 0x02, 0x23, 0xAE };
+    LONGS_EQUAL(sizeof(req), gw_uart_stub_last_write_len(line));
+    MEMCMP_EQUAL(req, gw_uart_stub_last_write_buf(line), sizeof(req));
+}
