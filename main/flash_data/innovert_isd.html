@@ -54,8 +54,8 @@
     <label>Адрес MB:&nbsp;<input type="number" id="mb-addr" value="1" min="1" max="247" style="width:52px"></label>
     <label>UART:&nbsp;
         <select id="uart-sel">
-            <option value="4371">UART1 (0x1113)</option>
-            <option value="4387" selected>UART2 (0x1123)</option>
+            <option value="uart1.modbus">UART1</option>
+            <option value="uart2.modbus" selected>UART2</option>
         </select>
     </label>
     <button onclick="reconnectWs()">Переподключить</button>
@@ -503,7 +503,7 @@ class InnovertISDmini {
             if (isNaN(fval)) { alert('Некорректное значение'); return; }
             val = reg.OPT?.SCALE ? Math.round(fval * reg.OPT.SCALE) : Math.round(fval);
         }
-        const req = `{"FID":${getMbFid()},"SID":${nextSid()},"ARG":{"FN":6,"ADR":${getMbAddr()},"RA":${addr},"RVC":${val}}}`;
+        const req = `{"FID":${JSON.stringify(getMbFid())},"SID":${nextSid()},"ARG":{"FN":6,"ADR":${getMbAddr()},"RA":${addr},"RVC":${val}}}`;
         if (this.websocket?.readyState === WebSocket.OPEN) this.websocket.send(req);
         else alert('Соединение не установлено');
     }
@@ -525,8 +525,8 @@ class InnovertISDmini {
 
     wsMessage(e) {
         const obj = JSON.parse(e.data);
-        const fid = parseInt(obj.FID, 16);
-        if (fid === 0x1010 || fid === 0x1020) return;
+        const fid = obj.FID;              // имя FID, как его шлёт шлюз
+        if (fid === 'uart1.config' || fid === 'uart2.config') return;
         if (fid === getMbFid()) this.modbusHandler(obj.ARG);
     }
 
@@ -553,7 +553,7 @@ class InnovertISDmini {
         }
         ranges.push({s, n: e - s + 1});
         for (const {s, n} of ranges) {
-            const req = `{"FID":${fid},"SID":${nextSid()},"ARG":{"AWT":500,"RDL":250,"FN":3,"ADR":${addr},"RA":${s},"RVC":${n}}}`;
+            const req = `{"FID":${JSON.stringify(fid)},"SID":${nextSid()},"ARG":{"AWT":500,"RDL":250,"FN":3,"ADR":${addr},"RA":${s},"RVC":${n}}}`;
             if (this.websocket?.readyState === WebSocket.OPEN) this.websocket.send(req);
         }
     }
@@ -607,8 +607,9 @@ class Gauge {
 
 // ── Helpers ────────────────────────────────────────────────────
 
-function getMbFid()  { return parseInt(document.getElementById('uart-sel').value); }
-function getCnfFid() { return getMbFid() === 0x1113 ? 0x1010 : 0x1020; }
+// FID — имена: "uartN.modbus" и "uartN.config" (N — аппаратный порт)
+function getMbFid()  { return document.getElementById('uart-sel').value; }
+function getCnfFid() { return getMbFid().replace('.modbus', '.config'); }
 function getMbAddr() { return parseInt(document.getElementById('mb-addr').value) || 1; }
 
 let _sid = 1;
