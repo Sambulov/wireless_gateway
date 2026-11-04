@@ -114,6 +114,9 @@ typedef struct {
     uint8_t  ctrl_pending;
     uint8_t  ctrl_buf[2 + WS_CONTROL_PAYLOAD_MAX_LEN];
     uint32_t ctrl_len;
+    uint32_t ctrl_off;           /* сколько байт управляющего кадра уже ушло */
+    uint32_t ctrl_since;         /* тик постановки или последнего прогресса */
+    uint8_t  close_after;        /* ответ CLOSE ждёт, пока допишется PONG */
     /* Адрес КЛИЕНТА на момент открытия (getpeername): по нему видно, что fd всё
      * ещё наша WS-сессия. Номер fd переиспользуется, и запись/закрытие «по fd» из
      * чужой задачи могли ударить по живому клиенту или по сокету страницы. */
@@ -162,6 +165,18 @@ static uint32_t            ws_conn_gen;
  * разных потока, и без замка досылка читает поле, которое ещё только пишется
  * (header ушёл, а tx_len ещё ноль → битый кадр/зависание). */
 static platform_mutex_t    ws_frame_lock;
+/* Замок событий и учёта жизни слота. event_raise (CL) помечает делегатов в
+ * общем списке без своего замка, а события одного экземпляра поднимают две
+ * задачи: такт транспорта (RECEIVED, TRANSFER_*) и задача httpd (ESTABLISHED,
+ * CLOSED). Без замка параллельный подъём пропускал помеченного делегата —
+ * CLOSED не доходил до ядра, и пир со слотом пула утекали. Под этим же замком
+ * — счётчики recv_queued/in_callback/detached и решение вернуть слот: их
+ * правят те же две задачи. Порядок замков: event → api_lock ядра (его берёт
+ * обработчик) → frame; обратного нет — под api_lock ядро зовёт только
+ * begin_send zero-copy, который событий не поднимает. Режимы begin_send с
+ * TRANSFER_BUFFER (tx_offer) поднимают событие синхронно, и звать их под
+ * своим замком подписчику нельзя. */
+static platform_mutex_t    ws_event_lock;
 
 static ws_transport_conn_t *conn_alloc(void) {
     ws_transport_conn_t *conn = NULL;
@@ -184,15 +199,19 @@ static ws_transport_conn_t *conn_alloc(void) {
  * отправок в работе нет, очередь приёма пуста. */
 static void conn_release(ws_transport_conn_t *conn) {
     if ((conn == NULL) || !conn->busy) return;
+    /* Под замком пула, как и conn_alloc: иначе alloc мог занять (memset) слот,
+     * который здесь ещё дочищается. busy снимается последним. */
+    platform_mutex_take(ws_pool_lock, PLATFORM_WAIT_FOREVER);
     free(conn->tx_buf);
     conn->tx_buf = NULL;
     ws_msg_free(&conn->msg);
     conn->fd  = -1;
-    conn->busy = 0;
     conn->detached = 0;
     conn->in_callback = 0;
     conn->sends_in_flight = 0;
     conn->recv_queued = 0;
+    conn->busy = 0;
+    platform_mutex_give(ws_pool_lock);
 }
 
 /* ── Экземпляр транспорта ───────────────────────────────────────────────────
@@ -255,7 +274,33 @@ static uint32_t notify_event(ws_transport_conn_t *conn, const transport_event_tr
     /* Возврат — сколько подписчиков событие получило: ноль — обслуживать некому. */
     ws_transport_module_t *m = (conn != NULL) ? conn->module : NULL;
     if(m == NULL) return 0;
-    return event_raise(&m->on_event, conn, (void *)ev);
+    platform_mutex_take(ws_event_lock, PLATFORM_WAIT_FOREVER);
+    uint32_t n = event_raise(&m->on_event, conn, (void *)ev);
+    platform_mutex_give(ws_event_lock);
+    return n;
+}
+
+/* Событие об отправке и проверка, не пора ли вернуть слот: сессию могли закрыть,
+ * пока колбэк шёл (detached), — тогда слот возвращает последний пользователь.
+ * Всё — под замком событий, иначе session_free_ctx вклинивался между проверкой
+ * и возвратом (утечка слота или двойной возврат). */
+static void notify_callback(ws_transport_conn_t *conn, uint32_t gen,
+                            const transport_event_trigger_t *ev) {
+    platform_mutex_take(ws_event_lock, PLATFORM_WAIT_FOREVER);
+    /* Событие считано под замком кадра, а поднимается после: за это время
+     * сессия могла закрыться, слот — вернуться в пул и уйти НОВОМУ соединению
+     * с тем же указателем. Его ядру чужое событие об отправке снимало бы
+     * голову очереди. Поколение слота это отличает. */
+    if(!conn->busy || (conn->gen != gen)) {
+        platform_mutex_give(ws_event_lock);
+        return;
+    }
+    conn->in_callback = 1;
+    notify_event(conn, ev);
+    conn->in_callback = 0;
+    if(conn->detached && !conn->sends_in_flight && !conn->recv_queued)
+        conn_release(conn);
+    platform_mutex_give(ws_event_lock);
 }
 
 static void conn_list_add(ws_transport_module_t *m, ws_transport_conn_t *conn) {
@@ -304,6 +349,9 @@ static void session_free_ctx(void *ctx) {
     if(conn == NULL) return;
     event_unsubscribe(&conn->delegate);
     conn_list_remove(conn->module, conn);
+    /* Состояние кадра — под тем же замком, что у такта, который может прямо
+     * сейчас досылать кадр из tx_buf (иначе — запись из освобождённого буфера). */
+    platform_mutex_take(ws_frame_lock, PLATFORM_WAIT_FOREVER);
     free(conn->tx_buf);
     conn->tx_buf      = NULL;
     conn->tx_data     = NULL;
@@ -313,23 +361,29 @@ static void session_free_ctx(void *ctx) {
     conn->hdr_off     = 0;
     conn->tx_mode     = 0;
     conn->out_pending = 0;
+    conn->ctrl_pending = 0;
+    conn->ctrl_off     = 0;
+    conn->close_after  = 0;
     /* Сокет больше не наш — httpd мог отдать его новому соединению: -1 не даёт
      * позднему закрытию закрыть ЧУЖОЙ сокет. */
     conn->fd = -1;
+    platform_mutex_give(ws_frame_lock);
     ws_msg_free(&conn->msg);
 
     /* Ядру сообщаем о разрыве: свою сессию оно освободит по этому событию.
-     * Дескриптор при этом ещё жив — ядро могло закрыть соединение само. */
+     * Дескриптор при этом ещё жив — ядро могло закрыть соединение само. Решение
+     * о слоте — под замком событий вместе с самим событием. */
+    platform_mutex_take(ws_event_lock, PLATFORM_WAIT_FOREVER);
     transport_event_trigger_t ev = { .event = TRANSPORT_CLOSED };
     notify_event(conn, &ev);
-
     if(conn->sends_in_flight || conn->in_callback || conn->recv_queued) {
         /* Дескриптором ещё пользуются отправки и уведомляющий колбэк — слот
          * вернёт последний из них. */
         conn->detached = 1;
-        return;
+    } else {
+        conn_release(conn);
     }
-    conn_release(conn);
+    platform_mutex_give(ws_event_lock);
 }
 
 static void link_event_handler(void *event_trigger, void *sender, void *context) {
@@ -355,6 +409,7 @@ static void link_event_handler(void *event_trigger, void *sender, void *context)
 static int  out_flush(ws_transport_conn_t *conn);
 static void ws_out_pump(ws_transport_module_t *m);
 static void tx_offer(ws_transport_conn_t *conn);
+static int  ws_frame_header(uint8_t *hdr, uint32_t len, uint8_t opcode);
 
 static void ws_httpd_poll(const void *self) {
     ws_transport_module_t *m = (ws_transport_module_t *)self;
@@ -388,14 +443,15 @@ static void ws_httpd_poll(const void *self) {
         ev.data.ptr    = rec->data;
         ev.data.length = rec->len;
         ev.data.left   = 0;                   /* сообщение отдано целиком */
+        platform_mutex_take(ws_event_lock, PLATFORM_WAIT_FOREVER);
         notify_event(conn, &ev);
 
         /* Дескриптор ждал этого сообщения: теперь его можно освободить. */
-        if(conn != NULL && conn->recv_queued) conn->recv_queued--;
-        uint8_t release = (conn != NULL) && conn->detached && !conn->sends_in_flight
-                          && !conn->recv_queued && !conn->in_callback;
+        if(conn->recv_queued) conn->recv_queued--;
+        if(conn->detached && !conn->sends_in_flight && !conn->recv_queued && !conn->in_callback)
+            conn_release(conn);
+        platform_mutex_give(ws_event_lock);
         free(rec);
-        if(release) conn_release(conn);
     }
 }
 
@@ -480,6 +536,10 @@ static uint8_t ws_conn_flush_once(ws_transport_module_t *m, ws_transport_conn_t 
          * недоданный кадр и режим выдачи гасим — иначе такт снова выдаст буфер
          * мёртвому соединению. tx_buf доедает conn_release/session_free_ctx. */
         platform_mutex_take(ws_frame_lock, PLATFORM_WAIT_FOREVER);
+        uint32_t gen = conn->gen;
+        uint8_t had = (conn->hdr_len || conn->tx_len || (conn->tx_mode != 0));
+        const uint8_t *lost_ptr = (conn->tx_mode == 1) ? conn->tx_data : NULL;
+        uint32_t lost_len = (conn->tx_mode == 1) ? conn->tx_len : 0;
         conn->tx_dead = 1;
         conn->hdr_len = 0;
         conn->hdr_off = 0;
@@ -489,6 +549,14 @@ static uint8_t ws_conn_flush_once(ws_transport_module_t *m, ws_transport_conn_t 
         conn->tx_mode = 0;
         conn->out_pending = 0;
         platform_mutex_give(ws_frame_lock);
+        if(had) {
+            /* Издатель ждёт завершения кадра: без события его очередь стоит
+             * (голова «в работе») до разрыва. */
+            transport_event_trigger_t ev = { .event = TRANSPORT_TRANSFER_ERR };
+            ev.data.ptr    = lost_ptr;
+            ev.data.length = lost_len;
+            notify_callback(conn, gen, &ev);
+        }
         return 0;
     }
 
@@ -504,6 +572,7 @@ static uint8_t ws_conn_flush_once(ws_transport_module_t *m, ws_transport_conn_t 
     uint8_t dead = 0;
 
     platform_mutex_take(ws_frame_lock, PLATFORM_WAIT_FOREVER);
+    uint32_t gen = conn->gen;
     done_ptr = conn->tx_data;
     done_len = conn->tx_len;
     {
@@ -542,18 +611,12 @@ static uint8_t ws_conn_flush_once(ws_transport_module_t *m, ws_transport_conn_t 
         ev.data.ptr    = done_ptr;
         ev.data.length = done_len;
         ev.data.left   = 0;
-        conn->in_callback = 1;
-        notify_event(conn, &ev);
-        conn->in_callback = 0;
-        if(conn->detached && !conn->sends_in_flight && !conn->recv_queued)
-            conn_release(conn);
+        notify_callback(conn, gen, &ev);
         return 1;
     }
     if(do_mode2_done) {
         transport_event_trigger_t ev = { .event = TRANSPORT_TRANSFER_COMPLETE };
-        conn->in_callback = 1;
-        notify_event(conn, &ev);
-        conn->in_callback = 0;
+        notify_callback(conn, gen, &ev);
         return 0;
     }
     if(do_offer) {
@@ -563,21 +626,55 @@ static uint8_t ws_conn_flush_once(ws_transport_module_t *m, ws_transport_conn_t 
 }
 
 /* Отправить ожидающий управляющий кадр (PONG/CLOSE), если он стоит в дескрипторе.
- * Отвечаем ТОЛЬКО когда кадр данных не идёт (hdr_len==0 && tx_len==0) — на границе
- * кадров и под тем же ws_frame_lock, что и данные. PING/PONG нужен, чтобы найти
- * ПОВИСШЕЕ (простаивающее) соединение, поэтому во время активного обмена ответ
- * не шлём вовсе: клиент, которому нужен keepalive, шлёт PING только в простое и
- * здесь его PONG получит. Не ушёл весь (сокет полон) — останется на следующий такт. */
-static void ws_conn_ctrl_flush(ws_transport_conn_t *conn) {
-    if((conn == NULL) || (conn->fd < 0)) return;
+ * Только на границе кадров данных: текущий кадр ещё не начат (ни байта заголовка
+ * и тела не ушло) — он может быть уже поставлен begin_send, это не мешает. Запись
+ * частичная (сокет полон) — досылается со смещения на следующих тактах, а данные
+ * этого соединения до конца управляющего кадра не стартуют (см. ws_out_pump):
+ * иначе байты данных легли бы внутрь PONG/CLOSE («invalid opcode» на клиенте).
+ * Возврат: CTRL_IDLE — данные можно слать, CTRL_BLOCKS — управляющий кадр ещё
+ * не дописан и держит данные, CTRL_DEAD — сокет сломан или клиент не принимает
+ * дольше dead_ticks (тот же детектор, что у данных: пока кадр держит данные,
+ * ws_conn_flush_once не зовётся). */
+#define CTRL_IDLE   0
+#define CTRL_BLOCKS 1
+#define CTRL_DEAD   2
+static uint8_t ws_conn_ctrl_flush(ws_transport_conn_t *conn, uint32_t now, uint32_t dead_ticks) {
+    if((conn == NULL) || (conn->fd < 0)) return CTRL_IDLE;
+    uint8_t ours = conn_is_ours(conn);            /* fd мог уйти другому сокету */
+    uint8_t dead = 0;
     platform_mutex_take(ws_frame_lock, PLATFORM_WAIT_FOREVER);
-    if(conn->ctrl_pending && (conn->hdr_len == 0) && (conn->tx_len == 0)) {
+    uint8_t at_boundary = (conn->hdr_off == 0) && (conn->tx_off == 0);
+    if(conn->ctrl_pending && !ours) {
+        conn->ctrl_pending = 0;                   /* писать некуда */
+        conn->ctrl_off     = 0;
+        conn->close_after  = 0;
+    } else if(conn->ctrl_pending && at_boundary) {
         int rc = web_server_write(conn->module->server, conn->fd,
-                                  (const char *)conn->ctrl_buf, conn->ctrl_len, 0);
-        if(rc == (int)conn->ctrl_len)
+                                  (const char *)conn->ctrl_buf + conn->ctrl_off,
+                                  conn->ctrl_len - conn->ctrl_off, 0);
+        if(rc < 0) {
+            dead = 1;
+        } else if(rc > 0) {
+            conn->ctrl_off  += (uint32_t)rc;
+            conn->ctrl_since = now;
+        } else if((uint32_t)(now - conn->ctrl_since) > dead_ticks) {
+            dead = 1;                             /* клиент не принимает */
+        }
+        if(!dead && (conn->ctrl_off >= conn->ctrl_len)) {
             conn->ctrl_pending = 0;
+            conn->ctrl_off     = 0;
+            if(conn->close_after) {               /* CLOSE ждал конца PONG */
+                conn->close_after  = 0;
+                conn->ctrl_len     = (uint32_t)ws_frame_header(conn->ctrl_buf, 0, 0x8);
+                conn->ctrl_pending = 1;
+                conn->ctrl_since   = now;
+            }
+        }
     }
+    uint8_t blocks = conn->ctrl_pending && at_boundary;
     platform_mutex_give(ws_frame_lock);
+    if(dead) return CTRL_DEAD;
+    return blocks ? CTRL_BLOCKS : CTRL_IDLE;
 }
 
 static void ws_out_pump(ws_transport_module_t *m) {
@@ -590,8 +687,14 @@ static void ws_out_pump(ws_transport_module_t *m) {
         ws_transport_conn_t *conn = list[i];
         if(!conn->busy || (conn->fd < 0)) continue;
 
-        /* Управляющий кадр идёт впереди данных, но на границе кадров. */
-        ws_conn_ctrl_flush(conn);
+        /* Управляющий кадр идёт впереди данных, но на границе кадров; пока он
+         * не дописан, данные этого соединения ждут. */
+        uint8_t ctrl = ws_conn_ctrl_flush(conn, platform_tick(), dead_ticks);
+        if(ctrl == CTRL_DEAD) {
+            conn_close_session(conn, "клиент не принимает управляющий кадр");
+            continue;
+        }
+        if(ctrl == CTRL_BLOCKS) continue;
 
         for(int round = 0; round < WS_TX_FRAMES_PER_CYCLE; round++) {
             if(!conn->hdr_len && !conn->tx_len) {
@@ -707,6 +810,7 @@ static transport_result_t ws_httpd_break_sending(const void *self) {
     uint32_t done_len;
 
     platform_mutex_take(ws_frame_lock, PLATFORM_WAIT_FOREVER);
+    uint32_t gen = conn->gen;
     had = (conn->hdr_len || conn->tx_len || (conn->tx_mode != 0));
     done_ptr = (conn->tx_mode == 1) ? conn->tx_data : NULL;
     done_len = (conn->tx_mode == 1) ? conn->tx_len : 0;
@@ -727,11 +831,7 @@ static transport_result_t ws_httpd_break_sending(const void *self) {
         transport_event_trigger_t ev = { .event = TRANSPORT_TRANSFER_ERR };
         ev.data.ptr    = done_ptr;
         ev.data.length = done_len;
-        conn->in_callback = 1;
-        notify_event(conn, &ev);
-        conn->in_callback = 0;
-        if(conn->detached && !conn->sends_in_flight && !conn->recv_queued)
-            conn_release(conn);
+        notify_callback(conn, gen, &ev);
     }
     return TRANSPORT_OK;
 }
@@ -950,9 +1050,15 @@ static void deliver_message(ws_transport_conn_t *conn) {
     }
 
     ws_transport_module_t *m = conn->module;
-    if((m->recv_lock == NULL) ||
-       (conn->recv_queued >= WS_RECV_QUEUE_MAX) ||
-       (m->recv_bytes + msg_len > WS_RECV_QUEUE_BYTES)) {
+    /* recv_queued правит и такт (уменьшает, под замком событий): проверка и
+     * резерв места — под тем же замком. Резерв снимается, если записи не будет. */
+    platform_mutex_take(ws_event_lock, PLATFORM_WAIT_FOREVER);
+    uint8_t full = (m->recv_lock == NULL) ||
+                   (conn->recv_queued >= WS_RECV_QUEUE_MAX) ||
+                   (m->recv_bytes + msg_len > WS_RECV_QUEUE_BYTES);
+    if(!full) conn->recv_queued++;
+    platform_mutex_give(ws_event_lock);
+    if(full) {
         /* Разбирать негде или копится больше предела: закрываем соединение —
          * молча терять сообщения клиента нельзя, он ждёт ответа. */
         ESP_LOGW(TAG, "Очередь приёма заполнена (%lu Б в ней), закрываю fd=%d",
@@ -966,6 +1072,9 @@ static void deliver_message(ws_transport_conn_t *conn) {
     if(rec == NULL) {
         ESP_LOGW(TAG, "Нет памяти под принятое сообщение (%lu Б), закрываю fd=%d",
                  (unsigned long)msg_len, conn->fd);
+        platform_mutex_take(ws_event_lock, PLATFORM_WAIT_FOREVER);
+        conn->recv_queued--;                      /* резерв не понадобился */
+        platform_mutex_give(ws_event_lock);
         drop_message(conn);
         web_server_session_close(m->server, conn->fd);
         return;
@@ -982,7 +1091,6 @@ static void deliver_message(ws_transport_conn_t *conn) {
     else                     m->recv_head = rec;
     m->recv_tail   = rec;
     m->recv_bytes += rec->len + 1;
-    conn->recv_queued++;
     platform_mutex_give(m->recv_lock);
 
     drop_message(conn);
@@ -1022,12 +1130,35 @@ static esp_err_t ws_httpd_control_frame(ws_transport_conn_t *conn, httpd_req_t *
          * («invalid opcode»). Поэтому кадр кладём в дескриптор, а отправит его
          * ТАКТ транспорта под ws_frame_lock, в очередь с кадрами данных. */
         uint8_t opcode = (f->type == HTTPD_WS_TYPE_PING) ? 0xA : 0x8;   /* PONG/CLOSE */
-        int hlen = ws_frame_header(conn->ctrl_buf, f->len, opcode);
-        if(f->len) memcpy(conn->ctrl_buf + hlen, payload, f->len);
+        uint8_t frame[sizeof(conn->ctrl_buf)];
+        int hlen = ws_frame_header(frame, f->len, opcode);
+        if(f->len) memcpy(frame + hlen, payload, f->len);
 
+        /* В дескриптор — под замком и только если предыдущий управляющий кадр
+         * не пишется прямо сейчас (такт досылает его из ctrl_buf): начатый кадр
+         * дописывается, а ответ на новый PING можно и не давать (RFC 6455
+         * §5.5.3 — достаточно ответа на последний). */
         platform_mutex_take(ws_frame_lock, PLATFORM_WAIT_FOREVER);
-        conn->ctrl_len     = (uint32_t)hlen + f->len;
-        conn->ctrl_pending = 1;
+        if((opcode == 0x8) && !conn->ctrl_pending &&
+           (conn->hdr_off == 0) && (conn->tx_off == 0)) {
+            /* CLOSE: httpd сам помечает сессию закрытой (ws_close) и снимет её
+             * сразу после этого обработчика — ответ из такта не успевал бы.
+             * Пишем здесь: под замком кадра такт не пишет, а кадр данных не
+             * начат — вклиниться не во что. Не ушёл целиком — не беда, сессия
+             * всё равно закрывается. */
+            web_server_write(conn->module->server, fd, (const char *)frame,
+                             (size_t)hlen + f->len, 0);
+        } else if(!(conn->ctrl_pending && conn->ctrl_off)) {
+            memcpy(conn->ctrl_buf, frame, (size_t)hlen + f->len);
+            conn->ctrl_len     = (uint32_t)hlen + f->len;
+            conn->ctrl_off     = 0;
+            conn->ctrl_pending = 1;
+            conn->ctrl_since   = platform_tick();
+        } else if(opcode == 0x8) {
+            /* CLOSE отвечать обязательно (§5.5.1): уйдёт сразу за начатым
+             * кадром — без тела, кода статуса в ответе может и не быть. */
+            conn->close_after = 1;
+        }
         platform_mutex_give(ws_frame_lock);
     }
     return ESP_OK;
@@ -1252,6 +1383,8 @@ transport_t *ws_transport_create(web_server_t *server) {
     if(ws_pool_lock == NULL) return NULL;
     if(ws_frame_lock == NULL) ws_frame_lock = platform_mutex_create();
     if(ws_frame_lock == NULL) return NULL;
+    if(ws_event_lock == NULL) ws_event_lock = platform_mutex_create();
+    if(ws_event_lock == NULL) return NULL;
 
     transport_t *transport = malloc(sizeof(*transport));
     if(transport == NULL) return NULL;
