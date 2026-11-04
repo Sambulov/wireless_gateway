@@ -18,8 +18,9 @@
 /* предел ожидания ответа: awt хранится в uint16 вместе с запасом +500 мс */
 #define MB_AWT_MAX_MS      60000
 
-/* токенов на разбор ARG: ADR/FN/RA/RVC/AWT и список RD; длиннее — отказ разбора */
-#define MB_ARG_MAX_TOKENS  48
+/* токенов на разбор ARG (в куче, по потребности): ADR/FN/RA/RVC/AWT и до 127
+ * значений RD; больше — отказ разбора */
+#define MB_ARG_MAX_TOKENS  160
 
 static uint32_t mb_timer_fn(const void *ctx) {
     (void)ctx;
@@ -255,9 +256,8 @@ static uint8_t mb_call_parse(mb_call_ctx_t *ctx, uint8_t *data, uint32_t len) {
 
     /* разбор ARG — jsmn, без дерева и без памяти на элемент: слишком длинный
      * список значений отвергается разбором, а не кучей */
-    GW_JSON_TOKENS(toks, MB_ARG_MAX_TOKENS);
     gw_json_t json;
-    if (!gw_json_parse(&json, (const char *)data, len, toks, MB_ARG_MAX_TOKENS)) {
+    if (!gw_json_parse_heap(&json, (const char *)data, len, MB_ARG_MAX_TOKENS)) {
         send_mb_error(ctx->call, MB_ERR_ARG);
         return 0;
     }
@@ -324,6 +324,7 @@ static uint8_t mb_call_parse(mb_call_ctx_t *ctx, uint8_t *data, uint32_t len) {
 
         parse_ok = 1;
     } while (0);
+    gw_json_release(&json);                 /* дальше документ не нужен */
 
     if (!parse_ok) {
         send_mb_error(ctx->call, MB_ERR_ARG);

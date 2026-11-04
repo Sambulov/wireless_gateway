@@ -22,7 +22,9 @@ static const char *TAG = "api";
 #define API_FRAME_OVERHEAD   64      /* FID, SID, скобки ARG/STA и терминатор */
 #define API_ARG_PROP        "\"ARG\":"
 #define API_ARG_PROP_LEN      6      /* без открывающей скобки: её пишет кадр */
-#define API_FRAME_MAX_TOKENS 48
+/* Токенов на кадр вместе с ARG (в куче, по потребности): запись ~127
+ * регистров Modbus — около 150. */
+#define API_FRAME_MAX_TOKENS 192
 
 /* Скопировать имя FID в буфер. 0 — пустое или слишком длинное имя. */
 /* Имя FID — идентификатор [A-Za-z0-9._-]: оно печатается в ответ как есть
@@ -754,19 +756,28 @@ static void api_reply_status(api_private_t *core, const void *conn, const char *
 
 /* Разбор кадра клиента: конверта FID/SID/ARG, без дерева значений. Пир не
  * передаётся: он ищется под замком там, где нужен (см. api_reply_status). */
+static void api_receive_parsed(api_private_t *core, const void *conn, gw_json_t *jp);
+
 static void api_receive(api_private_t *core, const void *conn, const void *data, uint32_t len) {
     if((data == NULL) || (len == 0)) {
         api_log(core, API_LOG_INFO, "Empty message dropped");
         return;
     }
 
-    GW_JSON_TOKENS(toks, API_FRAME_MAX_TOKENS);
+    /* Токены — в куче: конверт разбирается вместе с ARG, а длинный список
+     * значений законен; массив на стеке задачи транспорта стоил бы килобайты. */
     gw_json_t json;
-    if(!gw_json_parse(&json, (const char *)data, len, toks, API_FRAME_MAX_TOKENS)) {
+    if(!gw_json_parse_heap(&json, (const char *)data, len, API_FRAME_MAX_TOKENS)) {
         api_log(core, API_LOG_WARN, "Frame is not JSON, replied BAD_REQ");
         api_reply_status(core, conn, "", 0, 0, API_CALL_ERROR_STATUS_BAD_REQ);
         return;
     }
+    api_receive_parsed(core, conn, &json);
+    gw_json_release(&json);
+}
+
+static void api_receive_parsed(api_private_t *core, const void *conn, gw_json_t *jp) {
+    gw_json_t json = *jp;
 
     char fid[API_FID_NAME_MAX * 2];
     if(!gw_json_str(&json, "FID", fid, sizeof(fid)) || !fid[0]) {

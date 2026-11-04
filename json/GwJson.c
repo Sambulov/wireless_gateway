@@ -1,5 +1,6 @@
 #include "GwJson.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 /* jsmn: разбор итеративный, без выделения памяти. Токенов столько, сколько
@@ -32,12 +33,48 @@ uint8_t gw_json_parse(gw_json_t *j, const char *js, size_t len,
     j->tok   = tok;
     j->cap   = cap;
     j->count = n;
+    j->heap  = 0;
 
     /* Запрос — ровно один объект: jsmn в нестрогом режиме разбирает и то,
      * что после него ("{…} \"SID\" 5"), а поиск ключа ушёл бы туда. */
     if (gw_json_skip(j, 0) != n)
         return 0;
     return 1;
+}
+
+uint8_t gw_json_parse_heap(gw_json_t *j, const char *js, size_t len, int max)
+{
+    if (!j)
+        return 0;
+    j->tok  = NULL;
+    j->heap = 0;
+    if (!js || max <= 0)
+        return 0;
+
+    jsmn_parser p;
+    jsmn_init(&p);
+    int need = jsmn_parse(&p, js, len, NULL, 0);   /* только подсчёт */
+    if (need < 1 || need > max)
+        return 0;
+    jsmntok_t *tok = malloc((size_t)need * sizeof(*tok));
+    if (!tok)
+        return 0;
+    if (!gw_json_parse(j, js, len, tok, need)) {
+        free(tok);
+        j->tok = NULL;
+        return 0;
+    }
+    j->heap = 1;
+    return 1;
+}
+
+void gw_json_release(gw_json_t *j)
+{
+    if (j && j->heap) {
+        free(j->tok);
+        j->tok  = NULL;
+        j->heap = 0;
+    }
 }
 
 /* Индекс токена, следующего за значением idx со всем его поддеревом.

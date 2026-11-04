@@ -29,6 +29,7 @@ typedef struct {
     jsmntok_t  *tok;
     int         cap;
     int         count;      /* сколько токенов получилось */
+    uint8_t     heap;       /* tok выделен gw_json_parse_heap */
 } gw_json_t;
 
 /* Объявить массив токенов нужного размера рядом с gw_json_t. */
@@ -38,6 +39,13 @@ typedef struct {
  * не хватило (cap мал). Никогда не выделяет память и не уходит в рекурсию. */
 uint8_t gw_json_parse(gw_json_t *j, const char *js, size_t len,
                       jsmntok_t *tok, int cap);
+
+/* То же, но токены — в куче: ровно столько, сколько нужно документу, и не
+ * больше max (иначе отказ). Для входа, где длинный список значений законен, а
+ * массив на стеке задачи стоил бы килобайты. После успеха — gw_json_release;
+ * после отказа release тоже безопасен. */
+uint8_t gw_json_parse_heap(gw_json_t *j, const char *js, size_t len, int max);
+void    gw_json_release(gw_json_t *j);
 
 /* Значение по ключу ВЕРХНЕГО уровня (наш протокол плоский: FID/FLAGS/SID/ARG,
  * внутри ARG — свои поля). Возвращает индекс токена значения или -1. */

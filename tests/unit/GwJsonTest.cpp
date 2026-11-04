@@ -152,6 +152,36 @@ TEST(GwJsonParse, Uint32RefusesWhatDoesNotFit) {
     LONGS_EQUAL(7, v);                       /* при отказе не трогается */
 }
 
+/* Разбор с токенами в куче: ровно столько, сколько нужно документу, но не
+ * больше предела — длинный список значений не упирается в массив на стеке. */
+static std::string array_doc(int n) {
+    std::string d = "{\"RD\":[";
+    for (int i = 0; i < n; i++) { if (i) d += ","; d += std::to_string(i); }
+    return d + "]}";
+}
+
+TEST(GwJsonParse, HeapParseTakesAsManyTokensAsTheDocumentNeeds) {
+    std::string d = array_doc(150);
+    gw_json_t h;
+    CHECK(gw_json_parse_heap(&h, d.c_str(), d.size(), 160));
+    int n = 0;
+    CHECK(gw_json_arr_len(&h, "RD", &n));
+    LONGS_EQUAL(150, n);
+    int32_t v = 0;
+    CHECK(gw_json_arr_int(&h, "RD", 149, &v));
+    LONGS_EQUAL(149, v);
+    gw_json_release(&h);                      /* иначе LeakSanitizer */
+}
+
+TEST(GwJsonParse, HeapParseRefusesOverTheLimitAndBrokenInput) {
+    std::string d = array_doc(200);
+    gw_json_t h;
+    CHECK_FALSE(gw_json_parse_heap(&h, d.c_str(), d.size(), 160));
+    CHECK_FALSE(gw_json_parse_heap(&h, "{\"a\":", 5, 160));
+    CHECK_FALSE(gw_json_parse_heap(&h, "[1,2]", 5, 160));
+    gw_json_release(&h);                      /* после отказа — безопасно */
+}
+
 TEST(GwJsonParse, EmptyArgObjectIsParsed) {
     CHECK(parse("{\"FID\":16,\"FLAGS\":0,\"ARG\":{}}"));
     const char *start = NULL;

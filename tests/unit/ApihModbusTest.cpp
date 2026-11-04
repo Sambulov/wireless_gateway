@@ -29,8 +29,9 @@ extern "C" {
 
 static void client_request_fid(api_t *api, ws_transport_stub_conn_t *conn,
                                const char *fid, int sid, const char *arg) {
-    char frame[256];
-    snprintf(frame, sizeof(frame), "{\"FID\":\"%s\",\"SID\":%d,\"ARG\":%s}", fid, sid, arg);
+    char frame[2048];
+    int n = snprintf(frame, sizeof(frame), "{\"FID\":\"%s\",\"SID\":%d,\"ARG\":%s}", fid, sid, arg);
+    CHECK(n > 0 && n < (int)sizeof(frame));          /* кадр не обрезан */
     ws_transport_stub_frame(conn, WS_STUB_FRAME_TEXT, frame, strlen(frame), 1);
     api_worker(api);
 }
@@ -218,4 +219,16 @@ TEST(ApihModbus, AnswerWaitTimeOutOfRangeIsRefused) {
 
 TEST(ApihModbus, WriteRegistersCountMustMatchTheValues) {
     expect_arg_refused(api, conn, line, "{\"ADR\":1,\"FN\":16,\"RA\":0,\"RVC\":3,\"RD\":[1,2]}");
+}
+
+/* Запись 100 регистров: раньше разбор ARG упирался в 48 токенов. */
+TEST(ApihModbus, WriteOfHundredRegistersGoesToTheLine) {
+    char arg[1024];
+    int off = snprintf(arg, sizeof(arg), "{\"ADR\":1,\"FN\":16,\"RA\":0,\"RVC\":100,\"RD\":[");
+    for (int i = 0; i < 100; i++)
+        off += snprintf(arg + off, sizeof(arg) - off, "%s%d", i ? "," : "", i);
+    snprintf(arg + off, sizeof(arg) - off, "]}");
+    client_request(api, conn, 1, arg);
+    LONGS_EQUAL(1, gw_uart_stub_write_calls(line));
+    LONGS_EQUAL(7 + 200 + 2, gw_uart_stub_last_write_len(line));
 }

@@ -1016,6 +1016,29 @@ TEST(WsServerSend, FidWithForeignCharactersCannotBeRegistered) {
     LONGS_EQUAL(1, api_call_register(api, builder_handler, "Good_name-1.x", NULL));
 }
 
+/* Конверт разбирается вместе с ARG: длинный список значений (запись ~127
+ * регистров Modbus) раньше упирался в 48 токенов и получал BAD_REQ, не
+ * дойдя до обработчика. */
+static uint32_t big_arg_len;
+static uint8_t big_arg_handler(void *call, void **ctx, uint8_t *data, uint32_t len) {
+    (void)ctx; (void)data;
+    big_arg_len = len;
+    api_call_send_status(call, 0);
+    return HDL_FALSE;
+}
+
+TEST(WsServerSend, LongArgArrayReachesTheHandler) {
+    api_call_register(api, big_arg_handler, "send.big", NULL);
+    std::string arg = "{\"RD\":[";
+    for (int i = 0; i < 127; i++) { if (i) arg += ","; arg += "65535"; }
+    arg += "]}";
+    std::string frame = "{\"FID\":\"send.big\",\"SID\":1,\"ARG\":" + arg + "}";
+    big_arg_len = 0;
+    send_text(conn, frame.c_str());
+    api_worker(api);
+    LONGS_EQUAL(arg.size(), big_arg_len);
+}
+
 TEST(WsServerSend, CancelResponseReleasesBuffer) {
     /* Подготовленный и неотправленный ответ освобождается (иначе LeakSanitizer) */
     char *arg = api_call_begin_response(16);
