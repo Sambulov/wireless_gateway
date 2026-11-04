@@ -25,14 +25,7 @@ MAX_CLIENTS = int(os.environ.get("WG_WS_MAX_CLIENTS", "10"))   # CONFIG_WEB_SOCK
 
 
 def connect(timeout=10):
-    # Одна повторная попытка: под частыми подключениями рукопожатие изредка
-    # не отвечает ~10 с — это отдельная, более старая находка (есть и до
-    # фикса транспорта, issues/2026-11-03_review_4f5017b_a53dcc8.txt, #15).
-    # Утечку слотов повтор не прячет: она даёт постоянные отказы.
-    try:
-        return websocket.create_connection(URL, timeout=timeout)
-    except websocket.WebSocketTimeoutException:
-        return websocket.create_connection(URL, timeout=timeout)
+    return websocket.create_connection(URL, timeout=timeout)
 
 
 def echo(ws, sid, arg):
@@ -120,9 +113,16 @@ def test_client_that_stops_reading_is_disconnected():
     ws = websocket.create_connection(
         URL, timeout=10, sockopt=[(socket.SOL_SOCKET, socket.SO_RCVBUF, 2048)])
     big = {"pad": "z" * 3000}
-    for sid in range(1, 41):
-        ws.send(json.dumps({"FID": "echo", "SID": sid, "ARG": big}))
-    ws.ping(b"stuck")
+    try:
+        for sid in range(1, 41):
+            ws.send(json.dumps({"FID": "echo", "SID": sid, "ARG": big}))
+        ws.ping(b"stuck")
+    except (ConnectionResetError, BrokenPipeError,
+            websocket.WebSocketConnectionClosedException):
+        ws.sock.close()
+        return                  # прибор оборвал соединение уже во время заливки
+    except websocket.WebSocketTimeoutException:
+        pass                    # прибор перестал читать — ждём, закроет ли
     time.sleep(32)                                  # > WS_OUT_DEAD_MS, не читаем
 
     closed = False
