@@ -419,9 +419,10 @@ function wsConnect() {
         let obj;
         try { obj = JSON.parse(e.data); } catch (_) { return; }
         const arg = (obj.ARG && typeof obj.ARG === 'object') ? obj.ARG : {};
-        if (arg.STA === '0x00000005') return;                 // DELIVERED
+        // Отказ шлюза (BAD_REQ, NO_HANDLER, NO_MEM…) приходит кадром со STA
+        // на верхнем уровне, без ARG: отдаём его колбэку, а не пустой ответ.
         const cb = pending.get(obj.SID);
-        if (cb) { pending.delete(obj.SID); cb(arg); }
+        if (cb) { pending.delete(obj.SID); cb(obj.STA !== undefined ? { STA: obj.STA } : arg); }
     };
 }
 
@@ -463,7 +464,7 @@ async function withRetry(what, tries, fn) {
 async function loadMapList() {
     const sel = $('map-sel');
     const res = await withRetry('Список карт', 4, () => wsSend('sys.files', { PATH: REGMAP_DIR }, 8000));
-    if (!res || res.ERR) {
+    if (!res || res.ERR || res.STA) {
         sel.innerHTML = '<option>— карты не найдены —</option>';
         msg('conn-msg', `Не удалось прочитать каталог ${REGMAP_DIR}. `
             + 'Проверьте связь и нажмите «Подключить».', 'err');
@@ -1124,7 +1125,11 @@ async function writeRegister(reg, value) {
                   RVC: words.length > 1 ? words.length : words[0] };
     if (words.length > 1) arg.RD = words;
     const res = await wsSend(fid, arg, 3000);
-    if (res && res.ERR) { msg('conn-msg', `Ошибка записи ${reg.addr}: код ${res.CV} (${res.ERR})`, 'err'); return; }
+    if (!res || res.ERR || res.STA) {
+        const why = !res ? 'нет ответа' : res.STA ? `шлюз отказал (${res.STA})` : `код ${res.CV} (${res.ERR})`;
+        msg('conn-msg', `Ошибка записи ${reg.addr}: ${why}`, 'err');
+        return;
+    }
     msg('conn-msg', `Регистр ${reg.addr} записан: ${value}${reg.value && reg.value.unit ? ' ' + reg.value.unit : ''}`, 'ok');
     state.delete(reg.addr);          /* перечитаем именно этот регистр */
     needFull = false;
@@ -1180,7 +1185,12 @@ async function runCommand(cmd) {
         // значения — числами: строку шлюз в регистр не пишет (отказ ERR 2)
         if (words.length > 1) arg.RD = words.map(x => x & 0xffff);
         const res = await wsSend(fid, arg, 3000);
-        if (res && res.ERR) { msg('cmd-msg', `Шаг не выполнен (адрес ${w.addr}), код ${res.CV ?? res.ERR}`, 'err'); return; }
+        // неудача: нет ответа, ошибка Modbus/каркаса (ERR) или отказ шлюза (STA)
+        if (!res || res.ERR || res.STA) {
+            const why = !res ? 'нет ответа' : res.STA ? `шлюз отказал (${res.STA})` : `код ${res.CV ?? res.ERR}`;
+            msg('cmd-msg', `Шаг не выполнен (адрес ${w.addr}), ${why}`, 'err');
+            return;
+        }
         if (step.delay_ms) await new Promise(r => setTimeout(r, step.delay_ms));
     }
     msg('cmd-msg', `Команда «${cmd.name || cmd.id}» выполнена`, 'ok');
@@ -1203,7 +1213,7 @@ async function connectAndPoll() {
         SB: parseInt($('mb-sb').value, 10),
         WL: 1,
     });
-    if (!cfg || cfg.ERR) { msg('conn-msg', 'Не удалось настроить UART шлюза', 'err'); return; }
+    if (!cfg || cfg.ERR || cfg.STA) { msg('conn-msg', 'Не удалось настроить UART шлюза', 'err'); return; }
     connected = true;
     setPollBadge(true);
     msg('conn-msg', `Опрос запущен: ${$('port-sel').selectedOptions[0].textContent}, `
