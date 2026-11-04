@@ -513,10 +513,11 @@ class InnovertISDmini {
         this.websocket.onopen = () => {
             setWsStatus(true);
             sendUartConfig();
-            this.subscribeRegs();
+            this.startPolling();
         };
         this.websocket.onclose = () => {
             setWsStatus(false);
+            this.stopPolling();
             setTimeout(() => this.runExchange(), 500);
         };
         this.websocket.onmessage = (e) => this.wsMessage(e);
@@ -527,7 +528,10 @@ class InnovertISDmini {
         const obj = JSON.parse(e.data);
         const fid = obj.FID;              // имя FID, как его шлёт шлюз
         if (fid === 'uart1.config' || fid === 'uart2.config') return;
-        if (fid === getMbFid()) this.modbusHandler(obj.ARG);
+        if (fid === getMbFid()) {
+            if (this._inflight > 0) this._inflight--;   // ответ (или отказ) на круг опроса
+            this.modbusHandler(obj.ARG);
+        }
     }
 
     modbusHandler(arg) {
@@ -541,6 +545,29 @@ class InnovertISDmini {
         this.updateRegistersTable();
     }
 
+    // Опрос — со стороны страницы: шлюз запросы сам не повторяет (RDL в
+    // протоколе нет). Новый круг — когда пришли ответы прошлого или прошло
+    // POLL_STALE_MS (прибор молчит): запросы не копятся в очереди порта.
+    startPolling() {
+        this.stopPolling();
+        this._inflight = 0;
+        this._roundAt  = 0;
+        this._pollTimer = setInterval(() => this.pollTick(), POLL_PERIOD_MS);
+        this.pollTick();
+    }
+
+    stopPolling() {
+        if (this._pollTimer) clearInterval(this._pollTimer);
+        this._pollTimer = null;
+    }
+
+    pollTick() {
+        if (this.websocket?.readyState !== WebSocket.OPEN) return;
+        if (this._inflight > 0 && (Date.now() - this._roundAt) < POLL_STALE_MS) return;
+        this._inflight = this.subscribeRegs();
+        this._roundAt  = Date.now();
+    }
+
     subscribeRegs() {
         const fid  = getMbFid();
         const addr = getMbAddr();
@@ -552,10 +579,12 @@ class InnovertISDmini {
             else { ranges.push({s, n: e - s + 1}); s = e = addrs[i]; }
         }
         ranges.push({s, n: e - s + 1});
+        let sent = 0;
         for (const {s, n} of ranges) {
-            const req = `{"FID":${JSON.stringify(fid)},"SID":${nextSid()},"ARG":{"AWT":500,"RDL":250,"FN":3,"ADR":${addr},"RA":${s},"RVC":${n}}}`;
-            if (this.websocket?.readyState === WebSocket.OPEN) this.websocket.send(req);
+            const req = `{"FID":${JSON.stringify(fid)},"SID":${nextSid()},"ARG":{"AWT":500,"FN":3,"ADR":${addr},"RA":${s},"RVC":${n}}}`;
+            if (this.websocket?.readyState === WebSocket.OPEN) { this.websocket.send(req); sent++; }
         }
+        return sent;
     }
 }
 
@@ -633,6 +662,7 @@ function sendUartConfig() {
 
 function reconnectWs() {
     if (x?.websocket) { x.websocket.onclose = null; x.websocket.close(); }
+    x?.stopPolling();
     setWsStatus(false);
     x.runExchange();
 }
@@ -640,6 +670,8 @@ function reconnectWs() {
 // ── Init ───────────────────────────────────────────────────────
 
 const WS_PORT    = (window.location.port === '8080') ? '8081' : 81; // под QEMU WS проброшен на 8081
+const POLL_PERIOD_MS = 300;   // как часто проверять, пора ли новый круг опроса
+const POLL_STALE_MS  = 2000;  // круг без ответа дольше — считаем потерянным
 const gateway    = `ws://${window.location.hostname}:${WS_PORT}/api`;
 const gauge_fb   = new Gauge('160px', 'Hz',  '—', '#3b82f6');
 const gauge_rpm  = new Gauge('160px', 'RPM', '—', '#8b5cf6');
