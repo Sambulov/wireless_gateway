@@ -1,4 +1,9 @@
 CONFIG_QEMU_BUILD=y
 CONFIG_ETH_USE_OPENETH=y
-CONFIG_ETH_OPENETH_DMA_RX_BUFFER_NUM=4
+# Приёмное кольцо эмулированного Ethernet (open_eth, только QEMU): по 1600 Б.
+# При 4 буферах кольцо переполнялось уже от двух-трёх соединений (окно TCP
+# прошивки 5760 Б = 4 сегмента): драйвер писал «RX frame dropped», терялись SYN
+# и сегменты, и клиент ждал повтора TCP 1-6 с, изредка дольше 10 с — тесты WS
+# «не дожидались рукопожатия». 16 буферов (~25 КБ кучи) таких сбросов не дают.
+CONFIG_ETH_OPENETH_DMA_RX_BUFFER_NUM=16
 CONFIG_ETH_OPENETH_DMA_TX_BUFFER_NUM=1
