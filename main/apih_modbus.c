@@ -18,8 +18,8 @@
 /* предел ожидания ответа: awt хранится в uint16 вместе с запасом +500 мс */
 #define MB_AWT_MAX_MS      60000
 
-/* токенов на разбор ARG (в куче, по потребности): ADR/FN/RA/RVC/AWT и до 127
- * значений RD; больше — отказ разбора */
+/* токенов на разбор ARG (в куче, по потребности): ADR/FN/RA/RVC/AWT и до 123
+ * значений RD (предел кадра записи) с запасом; больше — отказ разбора */
 #define MB_ARG_MAX_TOKENS  160
 
 static uint32_t mb_timer_fn(const void *ctx) {
@@ -299,7 +299,11 @@ static uint8_t mb_call_parse(mb_call_ctx_t *ctx, uint8_t *data, uint32_t len) {
         if (gw_json_arr_len(&json, "RD", &n) && n > 0) {
             int stride = (frame.ucFunc == MB_FUNC_WRITE_COILS) ? 1 : 2;
             int32_t vmax = (stride == 2) ? 0xFFFF : 0xFF;
-            if (n * stride > MB_PAYLOAD_SIZE) break;
+            /* Кадр RTU записи: адрес, функция, RA, RVC, длина, данные, CRC —
+             * 7 + данные + 2 байта, и всё в буфер линии (255): FN 16 — до 123
+             * регистров, FN 15 — до 246 байт. Сверх — ошибка аргументов здесь,
+             * а не «не стартовал» после очереди. */
+            if (7 + n * stride + 2 > MB_PAYLOAD_SIZE) break;
             /* Запись регистров: число в запросе — это число значений; не
              * указано — берётся из них (иначе в кадре ушло бы 0). */
             if (frame.ucFunc == MB_FUNC_WRITE_HOLDINGS) {

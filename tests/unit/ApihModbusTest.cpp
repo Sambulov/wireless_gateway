@@ -273,3 +273,27 @@ TEST(ApihModbus, WriteRegistersWithoutCountTakesItFromTheValues) {
     LONGS_EQUAL(sizeof(req), gw_uart_stub_last_write_len(line));
     MEMCMP_EQUAL(req, gw_uart_stub_last_write_buf(line), sizeof(req));
 }
+
+/* Предел записи — по кадру RTU (255 байт: 6 + 2n + 3 для FN 16), то есть 123
+ * регистра, как и в спецификации Modbus. Больше — ошибка аргументов (ERR 2)
+ * сразу, а не «не стартовал» (ERR 3) после очереди. */
+static void write_regs(api_t *api, ws_transport_stub_conn_t *conn, int n) {
+    char arg[1200];
+    int off = snprintf(arg, sizeof(arg), "{\"ADR\":1,\"FN\":16,\"RA\":0,\"RD\":[");
+    for (int i = 0; i < n; i++)
+        off += snprintf(arg + off, sizeof(arg) - off, "%s%d", i ? "," : "", i);
+    snprintf(arg + off, sizeof(arg) - off, "]}");
+    client_request(api, conn, 1, arg);
+}
+
+TEST(ApihModbus, WriteOf123RegistersIsTheLimit) {
+    write_regs(api, conn, 123);
+    LONGS_EQUAL(1, gw_uart_stub_write_calls(line));
+    LONGS_EQUAL(6 + 1 + 246 + 2, gw_uart_stub_last_write_len(line));
+}
+
+TEST(ApihModbus, WriteOf124RegistersIsAnArgumentError) {
+    write_regs(api, conn, 124);
+    STRCMP_CONTAINS("\"ERR\":2", ws_transport_stub_last_sent(conn));
+    LONGS_EQUAL(0, gw_uart_stub_write_calls(line));
+}
