@@ -83,7 +83,7 @@ struct mb_call_ctx {
 
 static modbus_worker_t mb_workers[2];
 
-static void send_mb_frame(void *call, modbus_frame_t *f);
+static void send_mb_frame(void *call, modbus_frame_t *f, const modbus_frame_t *req);
 static void send_mb_error(void *call, int code);
 
 
@@ -100,7 +100,7 @@ static void mb_on_complete(modbus_frame_t *frame, modbus_t *mb, void *ctx) {
         c->worker->active = NULL;
 
     if (c->call) {
-        send_mb_frame(c->call, frame);
+        send_mb_frame(c->call, frame, &c->req);
         c->done = 1;
     } else {
         /* Вызов сняли, пока транзакция шла: ответ отправлять некому, а
@@ -198,7 +198,11 @@ static void send_mb_error(void *call, int code) {
     send_mb_msg(call, tmp, len);
 }
 
-static void send_mb_frame(void *call, modbus_frame_t *f) {
+/* req — запрос этой транзакции: адрес регистра берётся из него. В ответе RTU
+ * на чтение адреса нет вовсе (функция, число байт, данные), и поле кадра
+ * ответа — не адрес, а ноль: клиент, раскладывающий значения по RA, писал бы
+ * каждый диапазон в регистры с нуля. */
+static void send_mb_frame(void *call, modbus_frame_t *f, const modbus_frame_t *req) {
     modbus_frame_t zero = {0};
     if (!f) f = &zero;                 /* драйвер не дал кадр — отвечаем пустым */
     uint8_t code = 0, amount = 0, size = 0;
@@ -218,7 +222,7 @@ static void send_mb_frame(void *call, modbus_frame_t *f) {
         f->ucAddr,
         (unsigned)(f->ucFunc & ~MODBUS_ERROR_FLAG),
         code,
-        f->usRegAddr,
+        req ? req->usRegAddr : f->usRegAddr,
         amount,
         is_err);
 

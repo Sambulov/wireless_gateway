@@ -297,3 +297,22 @@ TEST(ApihModbus, WriteOf124RegistersIsAnArgumentError) {
     STRCMP_CONTAINS("\"ERR\":2", ws_transport_stub_last_sent(conn));
     LONGS_EQUAL(0, gw_uart_stub_write_calls(line));
 }
+
+/* В ответе RTU на чтение адреса регистра нет — RA ответа клиенту обязан
+ * повторять запрос. Раньше уходило RA из кадра ответа, то есть 0: страница,
+ * раскладывающая значения по RA (innovert), писала каждый диапазон в регистры
+ * с нуля — значения «прыгали», а настоящие регистры не обновлялись. */
+TEST(ApihModbus, ReplyCarriesTheRequestedRegisterAddress) {
+    client_request(api, conn, 5, "{\"ADR\":1,\"FN\":3,\"RA\":100,\"RVC\":2}");
+    static const uint8_t req[] = { 0x01, 0x03, 0x00, 0x64, 0x00, 0x02, 0x85, 0xD4 };
+    MEMCMP_EQUAL(req, gw_uart_stub_last_write_buf(line), sizeof(req));
+
+    static const uint8_t resp[] = { 0x01, 0x03, 0x04, 0x00, 0x07, 0x00, 0x08, 0x4A, 0x34 };
+    gw_uart_stub_receive(line, resp, sizeof(resp), 1);
+    system_stub_advance_time(10);
+    api_worker(api);
+
+    STRCMP_CONTAINS("\"RA\":100", ws_transport_stub_last_sent(conn));
+    STRCMP_CONTAINS("\"RC\":2", ws_transport_stub_last_sent(conn));
+    STRCMP_CONTAINS("\"RD\":[7,8]", ws_transport_stub_last_sent(conn));
+}
