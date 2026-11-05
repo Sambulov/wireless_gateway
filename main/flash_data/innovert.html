@@ -724,14 +724,19 @@ class InnovertIDDXXX21E {
         const fid = obj.FID;              // имя FID, как его шлёт шлюз
         if (fid === 'uart1.config' || fid === 'uart2.config') { console.log('UART CNF', obj.ARG); return; }
         if (fid === getMbFid()) {
-            if (this._inflight > 0) this._inflight--;   // ответ (или отказ) на круг опроса
-            this.modbusHandler(obj.ARG);
+            // Ответ — по SID своему запросу: значения раскладываются от RA
+            // ЗАПРОСА (в ответе RTU на чтение адреса нет), место в окне
+            // освобождается и тут же уходит следующий диапазон.
+            const p = this._pending?.get(obj.SID);
+            if (!p) return;
+            this._pending.delete(obj.SID);
+            if (obj.ARG && !obj.ARG.ERR) this.modbusHandler(obj.ARG, p.s);
+            this.pollTick();
         }
     }
 
-    modbusHandler(arg) {
-        if (arg?.RA == null || !arg?.RC || !arg?.RD) return;
-        const start  = arg.RA;
+    modbusHandler(arg, start) {
+        if (start == null || !arg?.RC || !arg?.RD) return;
         const count  = arg.RC;
         const values = arg.RD.map(x => parseInt(x));
         for (let i = 0; i < count && i < values.length; i++) {
@@ -742,12 +747,15 @@ class InnovertIDDXXX21E {
     }
 
     // Опрос — со стороны страницы: шлюз запросы сам не повторяет (RDL в
-    // протоколе нет). Новый круг — когда пришли ответы прошлого или прошло
-    // POLL_STALE_MS (прибор молчит): запросы не копятся в очереди порта.
+    // протоколе нет). Диапазоны идут по кругу, в полёте — не больше
+    // POLL_WINDOW (очередь порта шлюза — 8 запросов, остальное он отвергает
+    // «занято»). Ответ освобождает место; запрос без ответа дольше
+    // POLL_STALE_MS считается потерянным.
     startPolling() {
         this.stopPolling();
-        this._inflight = 0;
-        this._roundAt  = 0;
+        this._ranges  = this.buildRanges();
+        this._next    = 0;
+        this._pending = new Map();                // SID ответа → {s, n, at}
         this._pollTimer = setInterval(() => this.pollTick(), POLL_PERIOD_MS);
         this.pollTick();
     }
@@ -758,15 +766,23 @@ class InnovertIDDXXX21E {
     }
 
     pollTick() {
-        if (this.websocket?.readyState !== WebSocket.OPEN) return;
-        if (this._inflight > 0 && (Date.now() - this._roundAt) < POLL_STALE_MS) return;
-        this._inflight = this.subscribeRegs();
-        this._roundAt  = Date.now();
+        if (this.websocket?.readyState !== WebSocket.OPEN || !this._ranges?.length) return;
+        const now = Date.now();
+        for (const [sid, p] of this._pending)
+            if (now - p.at > POLL_STALE_MS) this._pending.delete(sid);
+        while (this._pending.size < POLL_WINDOW) {
+            const r = this._ranges[this._next];
+            this._next = (this._next + 1) % this._ranges.length;
+            const sid = nextSid();
+            this._pending.set('0x' + sid.toString(16).padStart(8, '0'), { s: r.s, n: r.n, at: now });
+            this.websocket.send(JSON.stringify({ FID: getMbFid(), SID: sid,
+                ARG: { AWT: 500, FN: 3, ADR: getMbAddr(), RA: r.s, RVC: r.n } }));
+            if (this._pending.size >= this._ranges.length) break;   // все и так в полёте
+        }
     }
 
-    subscribeRegs() {
-        const fid  = getMbFid();
-        const addr = getMbAddr();
+    // Диапазоны подряд идущих регистров карты (не длиннее 100).
+    buildRanges() {
         const addrs = [...this._regMap.keys()].sort((a, b) => a - b);
         const ranges = [];
         let s = addrs[0], e = addrs[0];
@@ -776,12 +792,7 @@ class InnovertIDDXXX21E {
         }
         ranges.push({s, n: e - s + 1});
 
-        let sent = 0;
-        for (const {s, n} of ranges) {
-            const req = `{"FID":${JSON.stringify(fid)},"SID":${nextSid()},"ARG":{"AWT":500,"FN":3,"ADR":${addr},"RA":${s},"RVC":${n}}}`;
-            if (this.websocket?.readyState === WebSocket.OPEN) { this.websocket.send(req); sent++; }
-        }
-        return sent;
+        return ranges;
     }
 }
 
@@ -868,8 +879,9 @@ function reconnectWs() {
 // ── Init ──────────────────────────────────────────────────────
 
 const WS_PORT = (window.location.port === '8080') ? '8081' : 81; // под QEMU WS проброшен на 8081
-const POLL_PERIOD_MS = 300;   // как часто проверять, пора ли новый круг опроса
-const POLL_STALE_MS  = 2000;  // круг без ответа дольше — считаем потерянным
+const POLL_PERIOD_MS = 300;   // как часто проверять окно опроса
+const POLL_STALE_MS  = 2000;  // запрос без ответа дольше — считаем потерянным
+const POLL_WINDOW    = 4;     // запросов опроса в полёте (очередь порта шлюза — 8)
 const gateway = `ws://${window.location.hostname}:${WS_PORT}/api`;
 const gauge_fb  = new Gauge('160px', 'Hz',  '—', '#3b82f6');
 const gauge_rpm = new Gauge('160px', 'RPM', '—', '#8b5cf6');

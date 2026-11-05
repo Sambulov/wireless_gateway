@@ -75,10 +75,17 @@ for (const st of input.steps) {
     const w = ws();
     for (const raw of w.sent.splice(0)) {
       const req = JSON.parse(raw);
-      if (req.FID && req.FID.endsWith('.modbus'))
-        w.onmessage({ data: JSON.stringify({ FID: req.FID, SID: req.SID, ARG: { RA: req.ARG.RA, RC: 0, RD: [] } }) });
+      // Ответ как у шлюза: SID строкой "0x…"; RA — 0 (в ответе RTU на чтение
+      // адреса нет — страница обязана брать его из своего запроса); в RD —
+      // номера регистров, чтобы тест видел, куда легло значение.
+      if (req.FID && req.FID.endsWith('.modbus')) {
+        const n = req.ARG.RVC, rd = Array.from({ length: n }, (_, i) => req.ARG.RA + i);
+        w.onmessage({ data: JSON.stringify({ FID: req.FID, SID: '0x' + req.SID.toString(16).padStart(8, '0'),
+                                             ARG: { ADR: 1, FN: 3, RA: 0, RC: n, ERR: 0, RD: rd } }) });
+      }
     }
   }
+  if (st.eval) report.push({ mark: st.eval_mark || st.eval, value: vm.runInContext(st.eval, ctx) });
   if (st.mark) report.push({ mark: st.mark, sent: ws().sent.map(s => JSON.parse(s)) });
   if (st.drain) ws().sent.length = 0;
   if (st.close) { const w = ws(); w.readyState = 3; if (w.onclose) w.onclose(); }
