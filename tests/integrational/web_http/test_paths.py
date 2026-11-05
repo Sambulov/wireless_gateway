@@ -35,3 +35,24 @@ def test_uri_escaping_the_root_is_not_found():
 
 def test_query_does_not_change_the_file():
     assert status("/?v=1") == 200
+
+
+def test_large_page_downloads_completely():
+    """Большая страница приходит целиком. Регрессия: на медленном канале
+    (слабый Wi-Fi) отправка файла простаивала дольше бюджета (3 с без
+    прогресса) — прибор считал клиента нечитающим и рвал передачу на
+    середине. Сравниваем с файлом в main/flash_data байт в байт."""
+    import pathlib
+    page = "innovert.html"
+    expected = (pathlib.Path(__file__).resolve().parents[3] / "main" / "flash_data" / page).read_bytes()
+    for _ in range(int(os.environ.get("WG_DOWNLOAD_TRIES", "5"))):
+        c = http.client.HTTPConnection(HOST, PORT, timeout=60)
+        try:
+            c.request("GET", "/" + page)
+            r = c.getresponse()
+            body = r.read()
+        finally:
+            c.close()
+        assert r.status == 200
+        assert len(body) == len(expected), f"пришло {len(body)} из {len(expected)} байт"
+        assert body == expected
