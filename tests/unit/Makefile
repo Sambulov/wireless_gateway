@@ -58,6 +58,8 @@ C_SRCS := \
     api_core.c \
     apih_uart.c \
     apih_fw.c \
+    apih_files.c \
+    fs_store_stub.c \
     apih_modbus.c \
     ModBus.c \
     apih_sys_common.c \
@@ -85,6 +87,7 @@ CPP_SRCS := \
     WsServerTest.cpp \
     ApihUartTest.cpp \
     ApihFwTest.cpp \
+    ApihFilesTest.cpp \
     ApihModbusTest.cpp \
     WebIfacePolicyTest.cpp \
     FsPathTest.cpp \

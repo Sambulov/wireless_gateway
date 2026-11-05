@@ -10,10 +10,8 @@
 #include <sys/stat.h>
 #include <unistd.h>   /* unlink, rmdir: правка файлов идёт через VFS LittleFS */
 
-#include "esp_littlefs.h"
-
-#include "app.h"
 #include "fs_path.h"
+#include "fs_store.h"
 
 #include "apih_sys_internal.h"
 
@@ -28,7 +26,7 @@
 
 /* Путь целиком в смонтированной ФС: base_path + нормализованный путь */
 static uint8_t fs_full_path(const char *path, char *out, size_t out_size) {
-    int written = snprintf(out, out_size, "%s%s", conf.base_path, path);
+    int written = snprintf(out, out_size, "%s%s", fs_store_root(), path);
     return (written > 0) && (written < (int)out_size);
 }
 
@@ -58,7 +56,7 @@ static void fs_arg_path(const uint8_t *data, uint32_t len, char *out, size_t out
 
 static void handle_files(const uint8_t *data, uint32_t len) {
     size_t fs_total = 0, fs_used = 0;
-    esp_littlefs_info(conf.partition_label, &fs_total, &fs_used);
+    fs_store_usage(&fs_total, &fs_used);
 
     char requested[FS_PATH_MAX], path[FS_PATH_MAX];
     fs_arg_path(data, len, requested, sizeof(requested));
@@ -206,8 +204,12 @@ static uint8_t fs_upload_begin(const char *path) {
     return 1;
 }
 
-/* Дописать порцию base64 в открытый файл. 0 — данные не base64 или запись не
- * удалась (вызывающий убирает полуфабрикат). */
+/* Дописать порцию base64 в открытый файл. Причины отказа разные и клиенту
+ * сообщаются по-разному: кривые данные — его ошибка (ERR DATA), сбой записи —
+ * прибора (ERR FS). Полуфабрикат в обоих случаях убирает вызывающий. */
+#define FS_APPEND_OK       0
+#define FS_APPEND_BAD_DATA 1
+#define FS_APPEND_IO       2
 static uint8_t fs_upload_append(const char *b64, size_t b64_len) {
     uint8_t buf[FS_B64_BLOCK];
     size_t done = 0;
@@ -218,7 +220,7 @@ static uint8_t fs_upload_append(const char *b64, size_t b64_len) {
             n = sizeof(buf);
         n &= ~(size_t)3;                     /* блок base64 — 4 символа */
         if (n == 0)
-            return 0;
+            return FS_APPEND_BAD_DATA;
 
         const uint8_t *src = (const uint8_t *)b64 + done;
         int32_t expect  = base64_decode_buffer_required(src, (uint32_t)n);
@@ -226,14 +228,14 @@ static uint8_t fs_upload_append(const char *b64, size_t b64_len) {
         /* decoded != expect — мусор в середине строки: декодер останавливается на
          * первом '=' и молча отдал бы обрезанный файл. */
         if (expect < 0 || decoded != expect)
-            return 0;
+            return FS_APPEND_BAD_DATA;
         if (decoded > 0 && fwrite(buf, 1, (size_t)decoded, fs_up.fp) != (size_t)decoded)
-            return 0;
+            return FS_APPEND_IO;
 
         fs_up.written += (uint32_t)decoded;
         done += n;
     }
-    return 1;
+    return FS_APPEND_OK;
 }
 
 /* Запись файла порциями: {"PATH":"/a.txt","OFFSET":0,"DATA":"<base64>","LAST":0}
@@ -311,9 +313,13 @@ static void handle_file_write(const uint8_t *data, uint32_t len) {
         return;
     }
 
-    if (b64_len && !fs_upload_append(b64, b64_len)) {
+    uint8_t appended = b64_len ? fs_upload_append(b64, b64_len) : FS_APPEND_OK;
+    if (appended != FS_APPEND_OK) {
         fs_upload_close(1);                  /* цель не тронута: пишем во временный */
-        resp_error(SYS_INTERNAL, "FS", "Failed to write the file");
+        if (appended == FS_APPEND_BAD_DATA)
+            resp_error(SYS_BAD_ARG, "DATA", "DATA must be base64 without spaces or line breaks");
+        else
+            resp_error(SYS_INTERNAL, "FS", "Failed to write the file");
         return;
     }
 
@@ -631,3 +637,11 @@ esp_err_t apih_files_run(app_context_t *app) {
 
     return ok ? ESP_OK : ESP_FAIL;
 }
+
+#ifdef APIH_HOST_TEST
+/* Состояние приёма файла статическое (одно на прибор): тесту нужен сброс между
+ * случаями — недописанная передача одного теста не должна видеться другому. */
+void apih_files_test_reset(void) {
+    fs_upload_close(1);
+}
+#endif
