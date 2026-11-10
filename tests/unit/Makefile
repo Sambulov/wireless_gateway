@@ -66,6 +66,7 @@ C_SRCS := \
     web_iface_policy.c \
     fs_path.c \
     ws_msg.c \
+    uart_rx_pump.c \
     SegmentedRing.c \
     GwJson.c \
     jsmn.c \
@@ -92,7 +93,8 @@ CPP_SRCS := \
     WebIfacePolicyTest.cpp \
     FsPathTest.cpp \
     WsMsgTest.cpp \
-    SegRingTest.cpp
+    SegRingTest.cpp \
+    UartRxPumpTest.cpp
 
 C_OBJS   := $(patsubst %.c,  $(BUILD)/%.o, $(C_SRCS))
 CPP_OBJS := $(patsubst %.cpp,$(BUILD)/%.o, $(CPP_SRCS))

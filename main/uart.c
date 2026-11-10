@@ -1,4 +1,5 @@
 #include "driver/uart.h"
+#include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
@@ -6,6 +7,7 @@
 #include "esp_timer.h"
 #include "app.h"
 #include "uart.h"
+#include "uart_rx_pump.h"
 
 #define GW_LOG_MODULE GW_LOG_UART
 #include "gw_log.h"
@@ -118,46 +120,64 @@ static int uart_echo_skip(int port, int size)
     return (int)drop;
 }
 
+/* ── Выборка принятого: операции для uart_rx_pump ──────────────────────────
+ *
+ * Логика цикла — в uart_rx_pump.c (собирается на хосте), здесь только доступ к
+ * драйверу. Буфер куска — в объекте порта: задачи приёма портов идут на двух
+ * ядрах параллельно, и общий static-буфер давал кросс-ток между портами. */
+static int32_t uart_pump_read(void *ctx, uint8_t *buf, uint32_t size) {
+    gw_uart_private_t *uart = (gw_uart_private_t *)ctx;
+    return uart_read_bytes(uart->port, buf, size, 0);
+}
+
+static uint32_t uart_pump_gap(void *ctx) {
+    return uart_gap_take(((gw_uart_private_t *)ctx)->port);
+}
+
+/* Однопроводная линия: отбрасываем ровно столько байт, сколько передали. */
+static uint32_t uart_pump_echo_skip(void *ctx, uint32_t size) {
+    gw_uart_private_t *uart = (gw_uart_private_t *)ctx;
+    return uart_single_wire(uart) ? (uint32_t)uart_echo_skip(uart->port, (int)size) : 0;
+}
+
+static void uart_pump_echo_write(void *ctx, const uint8_t *buf, uint32_t size) {
+    gw_uart_private_t *uart = (gw_uart_private_t *)ctx;
+    if (uart->echo_enabled)
+        uart_write_bytes(uart->port, buf, size);
+}
+
+static void uart_pump_deliver(void *ctx, const uint8_t *buf, uint32_t size,
+                              uint8_t b_end, uint32_t gap_us) {
+    gw_uart_private_t *uart = (gw_uart_private_t *)ctx;
+    gw_uart_event_data_t ev_trig = {
+        .buf = (uint8_t *)buf, .size = size, .b_end = b_end, .gap_us = gap_us,
+    };
+    event_raise(&uart->on_receive, uart, &ev_trig);
+}
+
+static const uart_rx_pump_ops_t uart_pump_ops = {
+    .read       = uart_pump_read,
+    .gap_take   = uart_pump_gap,
+    .echo_skip  = uart_pump_echo_skip,
+    .echo_write = uart_pump_echo_write,
+    .deliver    = uart_pump_deliver,
+};
+
+static uart_rx_pump_t uart_pump[3];
+
 static void uart_event_task(void *pvParameters) {
-    static uint8_t buf[128];
     uart_event_t event;
     gw_uart_private_t *uart = (gw_uart_private_t *)pvParameters;
+    uart_rx_pump_t *pump = &uart_pump[uart->port];
 
+    uart_rx_pump_init(pump, &uart_pump_ops, uart);
     while (xQueueReceive(uart->uart_queue, (void *)&event, (TickType_t)portMAX_DELAY)) {
         switch (event.type) {
         /* данных приходит много больше прочих событий: обрабатывать быстро,
          * иначе очередь переполнится. */
         case UART_DATA: {
             if (uart->rx_locked) break;
-            gw_uart_event_data_t ev_trig;
-            ev_trig.buf = buf;
-            ev_trig.b_end = event.timeout_flag ? 1 : 0;
-            size_t size = event.size;
-            while (size) {
-                ev_trig.size = CL_MIN(size, 128);
-                int sz = uart_read_bytes(uart->port, ev_trig.buf, ev_trig.size, 0);
-                if(sz <= 0) break;
-                ev_trig.size = sz;
-                /* Простой перед куском — по нему клиент видит, где кончился
-                 * предыдущий кадр. Считаем ДО отбрасывания эха. */
-                ev_trig.gap_us = uart_gap_take(uart->port);
-                /* Однопроводная линия: начало куска — своё же переданное.
-                 * Отбрасываем ровно столько байт, сколько передали. */
-                if (uart_single_wire(uart)) {
-                    int skip = uart_echo_skip(uart->port, sz);
-                    if (skip >= sz) {
-                        size -= sz;
-                        continue;
-                    }
-                    ev_trig.buf += skip;
-                    ev_trig.size = sz - skip;
-                }
-                if(uart->echo_enabled) {
-                    uart_write_bytes(uart->port, ev_trig.buf, ev_trig.size);
-                }
-                event_raise(&uart->on_receive, uart, &ev_trig);
-                size -= sz;
-            }
+            uart_rx_pump_run(pump, event.size, event.timeout_flag ? 1 : 0);
             break;
         }
         /* Переполнение приёма: кольцо драйвера уже потеряло байты, но что в нём
@@ -376,6 +396,14 @@ uint8_t gw_uart_init(void *desc, gw_uart_port_t port, uint32_t buffer_size) {
         return 0;
     }
     result = result && (uart_set_pin(uart->port, txp, rxp, rtsp, cts) == ESP_OK);
+    /* Подтяжка RX: драйвер её не включает, и неподключённый вход висит в
+     * воздухе — ловит наводку от соседних линий (передачи другого порта) и
+     * выдаёт её как принятые байты. Покой UART — единица, подтяжка его и
+     * держит. На 34..39 подтяжки нет в железе — там нужна внешняя. */
+    if (result && rxp >= 34)
+        ESP_LOGW(TAG, "UART %d: RX=%d без внутренней подтяжки — нужна внешняя", uart->port, rxp);
+    else if (result && rxp >= 0)
+        gpio_pullup_en((gpio_num_t)rxp);
     /* Приём и передача — РАЗНЫЕ кольца: размер приёма задаёт вызывающий (наш
      * накопитель кадра), размер передачи фиксирован (см. uart.h). */
     result = result && (uart_driver_install(port, buffer_size, GW_UART_TX_RING, 10,
